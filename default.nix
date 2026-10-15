@@ -632,6 +632,46 @@ rec {
     assert !(lib.any (lib.hasPrefix hostMountPath) (hostPaths host));
     pkgs.runCommand "host-store-splits-the-node-daemonset" { } "echo ok > $out";
 
+  /*
+    `nixkube.node.enable = false` takes the node half out of the render.
+
+    The option was declared and never read, so the DaemonSet, its
+    PodMonitor and the CSIDriver all rendered with it off. A render is the
+    only thing that shows it: nothing errors, and the objects the node pods
+    read -- the ConfigMaps, the Secrets, the Role -- still render, because
+    the cache side of an instance reads them too.
+  */
+  nodeEnableTakesTheNodeObjectsOut =
+    let
+      render =
+        node:
+        (kubenixInstance {
+          module = {
+            nixkube.node.enable = node;
+            # On, so the PodMonitor is in scope for the assertion below.
+            # Off by default, because it asserts the operator's CRDs.
+            nixkube.metrics.podMonitor = true;
+          };
+        }).config;
+      on = render true;
+      off = render false;
+      nsOf = cfg: cfg.kubernetes.resources.nixkube;
+      # `or { }` because a driver object is cluster-scoped and no other
+      # module here writes one: with the node off the whole bucket is gone.
+      driversOf = cfg: cfg.kubernetes.resources.none.CSIDriver or { };
+    in
+    assert lib.attrNames (nsOf on).DaemonSet == [ "nix-node" ];
+    # By name, because `PodMonitor` itself stays: `pynixd.nix` emits one for
+    # the controller and the builders, and those are not node pods.
+    assert (nsOf on).PodMonitor ? "nixkube";
+    assert (driversOf on) ? "nixkube";
+    # The legacy name goes with the node: `cfg.node.compat` gates it.
+    assert (driversOf on) ? "nix.csi.store";
+    assert !((nsOf off) ? DaemonSet);
+    assert !(((nsOf off).PodMonitor or { }) ? "nixkube");
+    assert !((driversOf off) ? "nixkube");
+    pkgs.runCommand "node-enable-takes-the-node-objects-out" { } "echo ok > $out";
+
   assertionsNullShape =
     let
       instance = kubenixInstance {
@@ -1453,6 +1493,7 @@ rec {
       nodeDriverReadiness
       appstarterInitIsExemptFromInjection
       hostStoreSplitsTheNodeDaemonSet
+      nodeEnableTakesTheNodeObjectsOut
       composefsImageHoldsItsClosure
       nixkubeNamesComposefsTools
       pynixdPodMonitorShape

@@ -567,7 +567,7 @@ in
           };
         };
     in
-    lib.mkIf cfg.enable {
+    lib.mkIf (cfg.enable && cfg.node.enable) {
       kubernetes.resources.${cfg.namespace} = {
         # **The operator's own kind, and the checked path.** An operator
         # ignores the `prometheus.io/*` annotations on the pod template and

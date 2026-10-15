@@ -9,7 +9,9 @@ let
   cfg = config.nixkube;
 in
 {
-  config = lib.mkIf cfg.enable {
+  # The CSIDriver objects are the node DaemonSet's registration. A driver
+  # object with no node plugin behind it is a registration nothing serves.
+  config = lib.mkIf (cfg.enable && cfg.node.enable) {
     kubernetes.resources.none.CSIDriver = {
       "nixkube" = {
         metadata.labels = cfg.labels;
