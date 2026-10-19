@@ -205,12 +205,28 @@ rec {
       runtimeInputs = [
         skopeo
         pkgs.cachix
+        pkgs.jq
       ];
+      # **A content tag is pushed once, by whoever gets there first.** A dev
+      # and CI pushing one commit push one content, so the second push is a
+      # no-op. The config digest is compared rather than the manifest's:
+      # skopeo gzips each layer on the way up, so the manifest digest also
+      # depends on the compressor.
       text = # bash
         ''
           skopeo login -u="$REPO_USERNAME" -p="$REPO_TOKEN" ${server}
-          skopeo --insecure-policy copy nix:${image} docker://${imageRef system}
-          skopeo --insecure-policy copy nix:${image} docker://${repo}/nix:${contentTag system}
+          tag=${repo}/nix:${contentTag system}
+          want="$(skopeo inspect --raw nix:${image} | jq -r .config.digest)"
+          if have="$(skopeo inspect --raw "docker://$tag" 2>/dev/null | jq -r .config.digest)"; then
+            if [ "$have" != "$want" ]; then
+              echo "$tag holds config $have, and this image is $want" >&2
+              exit 1
+            fi
+            echo "present: $tag"
+          else
+            skopeo --insecure-policy copy nix:${image} "docker://$tag"
+          fi
+          skopeo --insecure-policy copy "docker://$tag" docker://${imageRef system}
           # The manifest, not a tarball. Its closure is every layer, so a
           # node can fetch what the image holds without the registry.
           cachix push nixkube ${image}
