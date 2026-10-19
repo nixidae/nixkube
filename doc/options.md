@@ -285,6 +285,65 @@ one of “Always”, “IfNotPresent”, “Never”
 
 
 
+## nixkube\.images\.nix
+
+
+
+The image of every init container: appstarter, and the environments
+it falls back to\.
+
+The default is a content tag, from the store hash of the image this
+checkout builds, so it names one content and rendering builds no
+image\. Set any ref instead, such as ` ghcr.io/nixidae/nixkube/nix:main `,
+to run an image this checkout did not build; set ` imagePullPolicy `
+to ` Always ` with a tag that moves\.
+
+
+
+*Type:*
+string
+
+
+
+*Default:*
+the content tag of this checkout’s image, for ` nixkube.systems `
+
+
+
+*Example:*
+
+```nix
+"ghcr.io/nixidae/nixkube/nix:main"
+```
+
+*Declared by:*
+ - [/kubenix/options\.nix](file:///kubenix/options.nix)
+
+
+
+## nixkube\.images\.scratch
+
+
+
+The image of the main containers\. It holds nothing but
+` PATH=/nix/var/result/bin `; ` appstarter run ` starts the program out
+of the store\. The default pins the digest of ` scratchImage.index `\.
+
+
+
+*Type:*
+string
+
+
+
+*Default:*
+the digest of ` scratchImage.index `
+
+*Declared by:*
+ - [/kubenix/options\.nix](file:///kubenix/options.nix)
+
+
+
 ## nixkube\.knownHosts
 
 

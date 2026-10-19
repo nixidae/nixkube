@@ -11,11 +11,11 @@
 # Four images, from three different shapes:
 #
 #   nix       `nix2container`, so a JSON manifest that only its own skopeo
-#             reads. Its tag also carries an `-x86_64-linux` suffix, because
-#             the thing the DaemonSet names is a manifest list built from the
-#             per-arch tags at push time. There is no manifest list here, so
-#             the suffix has to come off.
+#             reads. Its tag is the content tag of this system's image, which
+#             is what `nixkube.images.nix` names for a one-system cluster.
 #   scratch   an OCI layout directory built by umoci, tagged by architecture.
+#             The DaemonSet pins the index by digest, which no tarball can
+#             carry, so ./manifest.nix names this tag instead.
 #   sidecars  ordinary `dockerTools.buildImage` output, already a
 #             docker-archive with the tag the DaemonSet asks for.
 #
@@ -61,16 +61,12 @@ let
           nix:${nixImage.images.${system}} \
           "docker-archive:$out:${nixImage.imageRef system}"
       '';
-
-  # The same place niximage.nix reads it from, so the two cannot drift.
-  nixkubeVersion =
-    (builtins.fromTOML (builtins.readFile ../../pkgs/nixkube/pyproject.toml)).project.version;
 in
 rec {
-  # What the DaemonSet asks for. Written out rather than derived, so that a
-  # bump on either side fails the tag check below rather than at ImagePull.
+  # What the DaemonSet asks for. The check below compares both with the
+  # manifest, so a change on either side fails there rather than at ImagePull.
   tags = {
-    nix = "ghcr.io/nixidae/nixkube/nix:${nixkubeVersion}-${pkgs.nix.version}";
+    nix = nixImage.refFor [ system ];
     scratch = "ghcr.io/nixidae/nixkube/scratch:1.0.1";
   };
 

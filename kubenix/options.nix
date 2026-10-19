@@ -88,6 +88,40 @@ in
       ];
       default = "Always";
     };
+    images = {
+      nix = lib.mkOption {
+        description = ''
+          The image of every init container: appstarter, and the environments
+          it falls back to.
+
+          The default is a content tag, from the store hash of the image this
+          checkout builds, so it names one content and rendering builds no
+          image. Set any ref instead, such as `ghcr.io/nixidae/nixkube/nix:main`,
+          to run an image this checkout did not build; set `imagePullPolicy`
+          to `Always` with a tag that moves.
+        '';
+        type = lib.types.str;
+        default =
+          (import ../niximage.nix {
+            pkgs = curPkgs;
+            inherit lib sources;
+            inherit (cfg) dinix;
+          }).refFor
+            (lib.attrNames (lib.filterAttrs (_: enabled: enabled) cfg.systems));
+        defaultText = lib.literalMD "the content tag of this checkout's image, for `nixkube.systems`";
+        example = "ghcr.io/nixidae/nixkube/nix:main";
+      };
+      scratch = lib.mkOption {
+        description = ''
+          The image of the main containers. It holds nothing but
+          `PATH=/nix/var/result/bin`; `appstarter run` starts the program out
+          of the store. The default pins the digest of `scratchImage.index`.
+        '';
+        type = lib.types.str;
+        default = "ghcr.io/nixidae/nixkube/scratch@${(import ../nix/scratch-digest.nix).digest}";
+        defaultText = lib.literalMD "the digest of `scratchImage.index`";
+      };
+    };
     nix = {
       package = lib.mkOption {
         description = "Nix package to use for nix.conf generation and daemon";

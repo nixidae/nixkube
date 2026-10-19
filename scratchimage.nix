@@ -4,6 +4,10 @@
 let
   version = "1.0.1";
 
+  # The digest of the index below. A manifest pins it as a literal, so
+  # rendering one builds no image; `index` fails when it builds anything else.
+  inherit (import ./nix/scratch-digest.nix) digest;
+
   mkEmptyImage =
     GOARCH:
     pkgs.runCommand "scratch-${GOARCH}-${version}"
@@ -46,6 +50,10 @@ let
         printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[%s,%s]}' \
           "$(entry ${x86Image} amd64)" "$(entry ${armImage} arm64)" > $out/index.json
         printf 'sha256:%s' "$(sha256sum < $out/index.json | cut -d' ' -f1)" > $out/digest
+        if [ "$(cat $out/digest)" != ${digest} ]; then
+          echo "the scratch index is $(cat $out/digest), and nix/scratch-digest.nix pins ${digest}" >&2
+          exit 1
+        fi
       '';
 
   push =
@@ -89,6 +97,7 @@ let
 in
 {
   inherit
+    digest
     index
     push
     x86Image

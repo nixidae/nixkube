@@ -93,7 +93,7 @@ in
                 serviceAccountName = "nixkube";
                 containers = lib.mkNamedList {
                   init = {
-                    image = "ghcr.io/nixidae/nixkube/nix:${cfg.version}-${curPkgs.nix.version}";
+                    image = cfg.images.nix;
                     inherit (cfg) imagePullPolicy;
                     command = [ "init-secrets" ];
                     volumeMounts = lib.mkNamedList {

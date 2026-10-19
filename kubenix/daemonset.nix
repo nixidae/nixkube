@@ -86,7 +86,7 @@ in
       # the node to the other DaemonSet by its label, and waits to be deleted.
       hostCheck = store: {
         name = "host-check";
-        image = "ghcr.io/nixidae/nixkube/nix:${cfg.version}-${curPkgs.nix.version}";
+        image = cfg.images.nix;
         inherit (cfg) imagePullPolicy;
         command = [
           "nixkube-host-check"
@@ -180,7 +180,7 @@ in
                     // {
                       "1" = {
                         name = "appstarter-init";
-                        image = "ghcr.io/nixidae/nixkube/nix:${cfg.version}-${curPkgs.nix.version}";
+                        image = cfg.images.nix;
                         inherit (cfg) imagePullPolicy;
                         securityContext.privileged = true; # chroot store
                         command = [
@@ -226,7 +226,7 @@ in
                   );
                   containers = lib.mkNamedList {
                     nix-node = {
-                      image = "ghcr.io/nixidae/nixkube/scratch:1.0.1";
+                      image = cfg.images.scratch;
                       # `appstarter run` execs nixkube, so tini's child stays
                       # the application and signals and reaping keep working.
                       # It also puts the two store paths in nixkube's

@@ -163,6 +163,35 @@ rec {
 
   imageRef = system: "${images.${system}.imageName}:${images.${system}.imageTag}";
 
+  /**
+    The tag of one system's image, from its store hash.
+
+    **The image is input-addressed, so this tag names one content.** It is
+    known at evaluation, and the context is discarded, so a manifest that
+    names it builds no image: the aarch64 one would need an aarch64 machine.
+  */
+  contentTag =
+    system:
+    builtins.substring 0 32 (
+      builtins.baseNameOf (builtins.unsafeDiscardStringContext images.${system}.outPath)
+    );
+
+  /**
+    What a cluster of `systems` names: the one image of a single system, or
+    the index over several, tagged from the tags it lists.
+  */
+  refFor =
+    systems:
+    let
+      tags = map contentTag (lib.sort lib.lessThan systems);
+    in
+    "${repo}/nix:${
+      if lib.length tags == 1 then
+        lib.head tags
+      else
+        builtins.substring 0 32 (builtins.hashString "sha256" (lib.concatStringsSep "-" tags))
+    }";
+
   # skopeo, with nix2container's `nix:` transport. It reads the image's JSON
   # manifest and sends the store paths it names straight out of the store,
   # instead of piping a tarball through gzip.
@@ -181,6 +210,7 @@ rec {
         ''
           skopeo login -u="$REPO_USERNAME" -p="$REPO_TOKEN" ${server}
           skopeo --insecure-policy copy nix:${image} docker://${imageRef system}
+          skopeo --insecure-policy copy nix:${image} docker://${repo}/nix:${contentTag system}
           # The manifest, not a tarball. Its closure is every layer, so a
           # node can fetch what the image holds without the registry.
           cachix push nixkube ${image}
@@ -216,6 +246,14 @@ rec {
         regctl index create ${repo}/nix:latest \
           --ref ${imageRef "aarch64-linux"} \
           --ref ${imageRef "x86_64-linux"}
+        regctl index create ${
+          refFor [
+            "aarch64-linux"
+            "x86_64-linux"
+          ]
+        } \
+          --ref ${repo}/nix:${contentTag "aarch64-linux"} \
+          --ref ${repo}/nix:${contentTag "x86_64-linux"}
       '';
   };
 }

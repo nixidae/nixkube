@@ -15,7 +15,7 @@ let
   nsRes = config.kubernetes.resources.${cfg.namespace};
 
   # Shared across pynixd central and builders
-  image = "ghcr.io/nixidae/nixkube/scratch:1.0.1";
+  image = cfg.images.scratch;
 
   # What a builder mounts through the node's CSI driver. The central pod
   # fills its own PVC from an initContainer instead -- a builder is created
@@ -500,7 +500,7 @@ in
               initContainers = lib.mkNumberedList {
                 "1" = {
                   name = "appstarter-init";
-                  image = "ghcr.io/nixidae/nixkube/nix:${cfg.version}-${curPkgs.nix.version}";
+                  image = cfg.images.nix;
                   inherit (cfg) imagePullPolicy;
                   securityContext.privileged = true; # chroot store
                   command = [
