@@ -357,7 +357,7 @@ in
         http_host = "";
         # pynixd admits only the keys these files list, and reads them at
         # each authentication, so a ConfigMap update applies with no restart.
-        # Lillecarl/pynixd#94.
+        # nixidae/nixidae#769.
         ssh_user_keys = [
           "/etc/ssh/authorized_keys"
         ]

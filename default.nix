@@ -906,7 +906,7 @@ rec {
   # twice on one cluster while pushing 186 MiB: `exitCode: 143`,
   # `restartCount: 2`. The push reports `Nix daemon disconnected
   # unexpectedly`, never a probe failure, so nothing points at the probe.
-  # Issue Lillecarl/nixkube#37.
+  # Issue nixidae/nixidae#432.
   #
   # Asserted on the rendered pod spec, because the defect was a field nobody
   # wrote: an option-level check would have passed while the kubelet applied

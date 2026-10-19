@@ -9,7 +9,7 @@ to `fetch_packages` realising a closure into the node's store.
 The case that forced it: `appstarter-init` mounts its store at `/nix-volume`,
 so the `/nix` check above it never matches, and its `APPSTARTER_WANTED`
 environment named the closure of the very pynixd that would have had to serve
-it. nixkube#55, nixkube#27.
+it. nixidae/nixidae#493, nixidae/nixidae#363.
 """
 
 from __future__ import annotations
