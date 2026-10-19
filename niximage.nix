@@ -226,7 +226,6 @@ rec {
           else
             skopeo --insecure-policy copy nix:${image} "docker://$tag"
           fi
-          skopeo --insecure-policy copy "docker://$tag" docker://${imageRef system}
           # The manifest, not a tarball. Its closure is every layer, so a
           # node can fetch what the image holds without the registry.
           cachix push nixkube ${image}
@@ -247,7 +246,7 @@ rec {
         # The two tags come from two jobs on two runners. Say which one is
         # missing, rather than letting `index create` fail against a name
         # that reads like a typo.
-        for ref in ${imageRef "aarch64-linux"} ${imageRef "x86_64-linux"}; do
+        for ref in ${repo}/nix:${contentTag "aarch64-linux"} ${repo}/nix:${contentTag "x86_64-linux"}; do
           if ! regctl manifest head "$ref" >/dev/null 2>&1; then
             echo "missing: $ref" >&2
             echo "Its build job did not publish. An index over it would be wrong." >&2
@@ -256,20 +255,49 @@ rec {
           echo "present: $ref"
         done
 
-        regctl index create ${repo}/nix:${nixkubeVersion}-${pkgs.nix.version} \
-          --ref ${imageRef "aarch64-linux"} \
-          --ref ${imageRef "x86_64-linux"}
-        regctl index create ${repo}/nix:latest \
-          --ref ${imageRef "aarch64-linux"} \
-          --ref ${imageRef "x86_64-linux"}
-        regctl index create ${
-          refFor [
-            "aarch64-linux"
-            "x86_64-linux"
-          ]
-        } \
+        regctl index create ${bothRef} \
           --ref ${repo}/nix:${contentTag "aarch64-linux"} \
           --ref ${repo}/nix:${contentTag "x86_64-linux"}
+        # The one moving tag, for a dev cluster that sets
+        # `nixkube.images.nix` to it. No manifest names it by default.
+        regctl index create ${repo}/nix:main \
+          --ref ${repo}/nix:${contentTag "aarch64-linux"} \
+          --ref ${repo}/nix:${contentTag "x86_64-linux"}
+      '';
+  };
+
+  # What a two-system cluster names, and what a release pins by digest.
+  bothRef = refFor [
+    "aarch64-linux"
+    "x86_64-linux"
+  ];
+
+  /**
+    Give the release its version tags, and print the digest it pins.
+
+    **A version tag is written once.** One that exists with another digest
+    fails the release by name: it is the #29 shape, a released manifest whose
+    image changed under it.
+  */
+  tagRelease = pkgs.writeShellApplication {
+    name = "tag-nix-release";
+    runtimeInputs = [ pkgs.regctl ];
+    text = # bash
+      ''
+        regctl registry login -u="$REPO_USERNAME" -p="$REPO_TOKEN" ${server} >&2
+        digest="$(regctl image digest ${bothRef})"
+        version=${repo}/nix:${nixkubeVersion}-${pkgs.nix.version}
+        if have="$(regctl image digest "$version" 2>/dev/null)"; then
+          if [ "$have" != "$digest" ]; then
+            echo "$version is $have, and this release is $digest." >&2
+            echo "A released version tag is written once: bump version in pkgs/nixkube/pyproject.toml." >&2
+            exit 1
+          fi
+        else
+          regctl image copy ${bothRef} "$version" >&2
+        fi
+        regctl image copy ${bothRef} ${repo}/nix:latest >&2
+        echo "$digest"
       '';
   };
 }

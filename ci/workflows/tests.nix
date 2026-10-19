@@ -42,6 +42,7 @@ let
     "kubenixCITest.deploymentScript"
     "nixImage.pushArch.x86_64-linux"
     "nixImage.pushManifest"
+    "nixImage.tagRelease"
     "scratchImage.push"
   ];
 
@@ -394,6 +395,55 @@ ghalib.evalWorkflow {
       what = "with the pynixd cache";
     };
 
+    /*
+      Move `tested` in nixidae/nixkube to this commit's export, once every
+      test passed on main. It is what a user targets: its images are
+      published, because `build-manifests` ran first, and its manifest
+      deployed. main can name a content tag that no job has pushed yet.
+
+      The API rather than `git push`: the checkout persists the run's own
+      token, which wins over one in a push URL. Without `force` the update
+      only fast-forwards. It fails when the export of this commit has not
+      reached nixidae/nixkube yet; the tests take longer than the export.
+    */
+    tested = {
+      needs = [
+        "check"
+        "build-manifests"
+        "test-qemu"
+        "test-qemu-ci"
+        "test-qemu-ci-cache"
+      ];
+      runs-on = "ubuntu-latest";
+      "if" = "github.ref == 'refs/heads/main'";
+      timeout-minutes = 30;
+      ghanix = lib.mkMerge [
+        bootstrap
+        { checkout.fetchDepth = 0; }
+      ];
+      steps = [
+        {
+          id = "exported";
+          name = "Find nixkube's own commit";
+          run = ''echo "commit=$(nix shell --file .. josh --command josh-filter :/nixkube "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"'';
+        }
+        {
+          name = "Advance tested, fast-forward only";
+          env = {
+            GH_TOKEN = "\${{ secrets.JOSH_EXPORT_TOKEN }}";
+            COMMIT = "\${{ steps.exported.outputs.commit }}";
+          };
+          run = ''
+            if gh api repos/nixidae/nixkube/git/ref/heads/tested >/dev/null 2>&1; then
+              gh api --method PATCH repos/nixidae/nixkube/git/refs/heads/tested -f sha="$COMMIT" -F force=false
+            else
+              gh api --method POST repos/nixidae/nixkube/git/refs -f ref=refs/heads/tested -f sha="$COMMIT"
+            fi
+          '';
+        }
+      ];
+    };
+
     release = {
       needs = [
         "check"
@@ -410,13 +460,22 @@ ghalib.evalWorkflow {
         { checkout.fetchDepth = 0; }
       ];
       steps = [
+        # `build-manifests` published this commit's content tags. The
+        # release names the index by digest, so the image under a released
+        # manifest cannot change (#825); the version tags are for people.
+        {
+          id = "digest";
+          name = "Tag the release's image, and find its digest";
+          run = ''echo "digest=$(nix run --file . nixImage.tagRelease)" >> "$GITHUB_OUTPUT"'';
+        }
         # A release YAML nobody has checked is deployable is how #3 and #4
         # reached users. Every path it names has to be fetchable, because a
         # node can only substitute them.
         {
           name = "Render deployment manifest";
+          env.DIGEST = "\${{ steps.digest.outputs.digest }}";
           run = ''
-            nix build --show-trace --file . kubenixApply.manifestYAMLFile
+            nix build --show-trace --file . --argstr releaseDigest "$DIGEST" kubenixRelease.manifestYAMLFile
             cp result nix-csi-deployment.yaml
           '';
         }

@@ -5,6 +5,9 @@
   # this repository finds the umbrella that owns them.
   sources ? import ./nix/sources.nix,
   system ? builtins.currentSystem,
+  # The digest `nixImage.tagRelease` printed, for `kubenixRelease`. Only the
+  # release job passes it, with `--argstr`.
+  releaseDigest ? null,
 }:
 rec {
   pkgs = import sources.nixpkgs {
@@ -28,6 +31,16 @@ rec {
   easykubenix = import sources.easykubenix;
 
   kubenixApply = kubenixInstance { };
+
+  # The manifest a release publishes: `kubenixApply`, with the init image
+  # pinned by the digest of its index rather than named by a tag (#825).
+  kubenixRelease =
+    assert lib.assertMsg (
+      releaseDigest != null
+    ) "kubenixRelease needs --argstr releaseDigest sha256:...";
+    kubenixInstance {
+      module.nixkube.images.nix = "${nixImage.repo}/nix@${releaseDigest}";
+    };
 
   # The two CI deployments as module lists, because each one is deployed
   # twice: once as itself, and once by a guest test that adds a single

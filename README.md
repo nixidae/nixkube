@@ -21,6 +21,20 @@ nix build --file . easykubenix.manifestYAMLFile
 ```
 and stuff the result into Kustomize, a blender or your Kubernetes cluster
 
+### Which commit to deploy
+
+Deploy the `tested` branch, or a release. CI moves `tested` to a commit of
+`main` once every test of it passed, and by then its images are on ghcr.io.
+`main` itself can name an image that CI has not pushed yet.
+
+The manifest names each image by content: the init image by a tag from its
+store hash, and `scratch` by digest. A release pins the init image by
+digest too. To run an image this checkout did not build, set
+`nixkube.images.nix` (for example to `ghcr.io/nixidae/nixkube/nix:main`)
+and `nixkube.imagePullPolicy = "Always"`. To publish your own build of the
+init image, run `nix run --file . nixImage.pushArch.x86_64-linux`; it skips
+a tag that already holds the same image.
+
 ## Deploying workloads
 
 nixkube supports two methods for injecting Nix stores into pods:
