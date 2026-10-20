@@ -20,7 +20,10 @@ stdenvNoCC.mkDerivation {
   pname = "nixkube-docs";
   version = "0";
 
-  src = lib.cleanSource ../.;
+  src = lib.fileset.toSource {
+    root = ../.;
+    fileset = ../docs;
+  };
 
   nativeBuildInputs = [
     pythonEnv
