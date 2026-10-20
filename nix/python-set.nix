@@ -69,15 +69,19 @@ let
         ] projects
       );
 
-  # **A filtered source, not the project directory.** `renderers.mkDerivation`
-  # takes `src = projectRoot` whole, and these directories hold `tests/`,
-  # `__pycache__/` and whatever a local `pytest` writes. Without this every
-  # local test run changes the package's hash and rebuilds `nodeEnv` and the
-  # image behind it.
-  #
-  # `projectRoot` still points at the checkout, because that is where the
-  # `pyproject.toml` that Nix reads at evaluation time lives.
-  sourceOf = name: root: generatedSources.${name} or (lib.cleanPythonSource root);
+  # **The files `pyproject.toml` names, not the project directory.**
+  # `renderers.mkDerivation` takes `src = projectRoot` whole, and these
+  # directories hold `tests/`, a README nothing installs and whatever a local
+  # `pytest` writes. Each of those would change the package's hash and rebuild
+  # `cacheEnv` and the init image behind it. A project without
+  # `tool.hatch.build.targets.wheel.packages` builds from its
+  # `pyproject.toml` alone.
+  sourceOf =
+    name: root:
+    generatedSources.${name} or (ps.projectSource {
+      src = root;
+      name = "${name}-source";
+    });
 
   project =
     name: root:

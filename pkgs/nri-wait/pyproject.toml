@@ -19,5 +19,8 @@ test = ["pytest"]
 [project.scripts]
 wait = "nri_wait.__main__:main"
 
+[tool.hatch.build.targets.wheel]
+packages = ["nri_wait"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

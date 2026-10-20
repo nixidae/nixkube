@@ -25,3 +25,6 @@ test = ["pytest", "pytest-asyncio"]
 pynixd-nixkube = "pynixd_nixkube.__main__:main"
 pynixd-nixkube-central = "pynixd_nixkube.central_main:main"
 pynixd-nixkube-builder = "pynixd_nixkube.builder_main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pynixd_nixkube"]

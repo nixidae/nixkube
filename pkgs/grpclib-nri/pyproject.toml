@@ -25,6 +25,9 @@ test = [
   "pytest-asyncio>=0.24",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/grpclib_nri"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
