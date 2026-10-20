@@ -64,9 +64,11 @@ runCommand "${package}-proto-source"
     protoDir="$NIX_BUILD_TOP/proto"
     mkdir -p "$protoDir" "$out/src/${package}"
 
-    cp ${projectRoot}/pyproject.toml "$out/pyproject.toml"
+    # `projectRoot + "/..."` and not `''${projectRoot}/...`: the second copies
+    # the whole directory, `generated.nix` included, into the build's inputs.
+    cp ${projectRoot + "/pyproject.toml"} "$out/pyproject.toml"
     ${lib.optionalString (builtins.pathExists (projectRoot + "/README.md")) ''
-      cp ${projectRoot}/README.md "$out/README.md"
+      cp ${projectRoot + "/README.md"} "$out/README.md"
     ''}
 
     # protoc writes neither of these, and both are part of the package:
