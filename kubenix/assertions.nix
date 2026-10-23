@@ -140,9 +140,9 @@ let
   /*
     Whose object is this.
 
-    `config.kubernetes.resources` is every object of the whole instance, not
-    nixkube's. A consumer deploys nixkube beside its own charts, so an
-    assertion that walks the lot lets a nixkube module veto a neighbour.
+    `kubernetes.objectChecks` sees every object of the whole instance, not
+    nixkube's. A consumer deploys nixkube beside its own charts, so a check
+    that refuses on any object lets a nixkube module veto a neighbour.
 
     That happened. The empty-string check refused to render a 448-object tree
     over two env vars in Rook's ceph-csi controller, where `WATCH_NAMESPACE:
@@ -150,7 +150,7 @@ let
     wrong. The subPath check has the same reach and escaped notice only
     because pairing hostPath with subPath is rare.
 
-    So the assertion covers our objects, and a neighbour's gets a warning. A
+    So the check refuses our objects, and a neighbour's gets a warning. A
     finding in someone else's chart is worth saying and is not ours to refuse.
 
     Every nixkube object carries this label -- measured over kubenixApply, 21
@@ -159,63 +159,53 @@ let
   */
   isOurs = resource: (resource.metadata.labels."app.kubernetes.io/part-of" or null) == "nixkube";
 
-  # Walk every rendered resource with one of the checks above, keeping ours
-  # and a neighbour's apart.
-  walk =
-    check: mine:
-    lib.pipe config.kubernetes.resources [
-      (lib.mapAttrsToList (
-        _namespace: kinds:
-        lib.mapAttrsToList (
-          kind: named:
-          lib.mapAttrsToList (
-            name: resource: if isOurs resource == mine then check kind name resource else [ ]
-          ) named
-        ) kinds
-      ))
-      lib.flatten
-    ];
+  subPathMessage =
+    offenders:
+    "A hostPath volume is mounted with subPath. The kubelet resolves a "
+    + "subPath bind in its own mount namespace, so this silently mounts an "
+    + "empty directory wherever the kubelet runs in a container, such as on "
+    + "Talos. Give the subdirectory its own hostPath volume and mount it "
+    + "plainly. See issue #16.\n  "
+    + lib.concatStringsSep "\n  " offenders;
 
-  offenders = walk offendersIn true;
-  emptyEnvOffenders = walk emptyEnvIn true;
+  emptyEnvMessage =
+    offenders:
+    "An env var is set to an empty string. EnvVar.Value is "
+    + "`json:\"value,omitempty\"`, so the apiserver drops it and the live "
+    + "object never matches what was rendered, so the manifest states a "
+    + "value no object ever holds. Carry it somewhere the apiserver does "
+    + "not rewrite, such as a ConfigMap, or give it a value that is not "
+    + "empty.\n  "
+    + lib.concatStringsSep "\n  " offenders;
 
-  # A neighbour's objects, reported and not refused.
-  theirs = (walk offendersIn false) ++ (walk emptyEnvIn false);
-  note =
-    if theirs == [ ] then
-      lib.id
+  # An object check, not an assertion: an assertion walks every object for
+  # any output, and the env values it reads force every derivation they name.
+  check =
+    object:
+    let
+      kind = object.kind or "?";
+      name = object.metadata.name or "?";
+      subPath = offendersIn kind name object;
+      emptyEnv = emptyEnvIn kind name object;
+    in
+    if isOurs object then
+      {
+        errors =
+          lib.optional (subPath != [ ]) (subPathMessage subPath)
+          ++ lib.optional (emptyEnv != [ ]) (emptyEnvMessage emptyEnv);
+      }
     else
-      lib.warn (
-        "nixkube: these objects are not nixkube's, and carry a shape that does "
-        + "not survive the apiserver or a containerised kubelet. Reported, not "
-        + "refused.\n  "
-        + lib.concatStringsSep "\n  " theirs
-      );
+      {
+        warnings = lib.optional (subPath ++ emptyEnv != [ ]) (
+          "nixkube: this object is not nixkube's, and carries a shape that does "
+          + "not survive the apiserver or a containerised kubelet. Reported, not "
+          + "refused.\n  "
+          + lib.concatStringsSep "\n  " (subPath ++ emptyEnv)
+        );
+      };
 in
 {
   config = lib.mkIf cfg.enable {
-    assertions = [
-      {
-        assertion = offenders == [ ];
-        message =
-          "A hostPath volume is mounted with subPath. The kubelet resolves a "
-          + "subPath bind in its own mount namespace, so this silently mounts an "
-          + "empty directory wherever the kubelet runs in a container, such as on "
-          + "Talos. Give the subdirectory its own hostPath volume and mount it "
-          + "plainly. See issue #16.\n  "
-          + lib.concatStringsSep "\n  " offenders;
-      }
-      {
-        assertion = note (emptyEnvOffenders == [ ]);
-        message =
-          "An env var is set to an empty string. EnvVar.Value is "
-          + "`json:\"value,omitempty\"`, so the apiserver drops it and the live "
-          + "object never matches what was rendered, so the manifest states a "
-          + "value no object ever holds. Carry it somewhere the apiserver does "
-          + "not rewrite, such as a ConfigMap, or give it a value that is not "
-          + "empty.\n  "
-          + lib.concatStringsSep "\n  " emptyEnvOffenders;
-      }
-    ];
+    kubernetes.objectChecks = [ check ];
   };
 }

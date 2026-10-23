@@ -171,6 +171,11 @@ rec {
       };
     };
   };
+  # One rendered object by name, so a test forces only its object checks.
+  renderedObject =
+    instance: name:
+    lib.findFirst (object: object.metadata.name == name) (throw "no rendered object ${name}")
+      instance.config.kubernetes.generated;
   kubenixInstance =
     {
       module ? { },
@@ -359,7 +364,7 @@ rec {
         cp --no-preserve=mode ${optionsDocs.optionsCommonMark} "$root/doc/options.md"
       '';
 
-  # Evaluate the hostPath+subPath assertion against a container that has no
+  # Evaluate the hostPath+subPath check against a container that has no
   # volumeMounts at all.
   #
   # easykubenix renders through typed submodules whose optional fields default
@@ -687,21 +692,43 @@ rec {
           )
         ];
       };
-      # Evaluate the assertions, and do not build the manifest.
+      # Evaluate the probe, and do not build the manifest.
       #
-      # This read `test -s ${"$"}{instance.manifestYAMLFile}`, which realises the
-      # whole closure. That failed the check job on a runner with a cold store,
-      # for a test whose entire subject is an evaluation. Reading
-      # config.assertions forces every condition, including the walk over
-      # kubernetes.resources that this attribute exists to exercise, and
-      # nothing is built.
-      #
-      # The output closure of this derivation was empty either way, which is
-      # what I measured and why I got it wrong. The cost was in the inputs.
-      failed = lib.filter (entry: !entry.assertion) instance.config.assertions;
+      # `test -s ${"$"}{instance.manifestYAMLFile}` realises the whole closure,
+      # and failed the check job on a runner with a cold store, for a test
+      # whose entire subject is an evaluation. Forcing the one rendered
+      # object runs the object check on it, and nothing is built.
+      rendered = renderedObject instance "nullprobe";
     in
-    assert failed == [ ];
-    pkgs.runCommand "assertions-null-shape" { } "echo ok > $out";
+    builtins.deepSeq rendered (pkgs.runCommand "assertions-null-shape" { } "echo ok > $out");
+
+  # Our own object with an empty env var is refused. The neighbour test
+  # below proves the opposite half; this one proves the check fires at all.
+  assertionsOwnRefused =
+    let
+      instance = kubenixInstance {
+        module.imports = [
+          (
+            { lib, ... }:
+            {
+              kubernetes.resources.nixkube.Deployment.ours = {
+                metadata.labels."app.kubernetes.io/part-of" = "nixkube";
+                spec.template.spec.containers = lib.mkNamedList {
+                  backend = {
+                    image = "example/backend";
+                    env = lib.mkNamedList {
+                      EMPTY.value = "";
+                    };
+                  };
+                };
+              };
+            }
+          )
+        ];
+      };
+    in
+    assert !(builtins.tryEval (builtins.deepSeq (renderedObject instance "ours") true)).success;
+    pkgs.runCommand "assertions-own-refused" { } "echo ok > $out";
 
   # A neighbour's object is reported and not refused.
   #
@@ -735,10 +762,10 @@ rec {
           )
         ];
       };
-      failed = lib.filter (entry: !entry.assertion) instance.config.assertions;
     in
-    assert failed == [ ];
-    pkgs.runCommand "assertions-neighbour-scope" { } "echo ok > $out";
+    builtins.deepSeq (renderedObject instance "neighbour") (
+      pkgs.runCommand "assertions-neighbour-scope" { } "echo ok > $out"
+    );
 
   # An operator can cap or disable builders through nixkube.pynixd.settings.
   #
@@ -1476,6 +1503,7 @@ rec {
     inherit
       assertionsNullShape
       assertionsNeighbourScope
+      assertionsOwnRefused
       builderSettingsOverride
       callerSourcesReachPynixd
       metricsPodMonitorShape
