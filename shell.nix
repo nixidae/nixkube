@@ -14,8 +14,8 @@ let
   # rather than falling back to a store copy.
   #
   # This is what `pyright` reads. `ci.nix` runs it as `nix develop --file
-  # shell.nix --command pyright pkgs/nixkube/src`, and it resolves imports
-  # from the `PYTHONPATH` the hook below sets.
+  # shell.nix --command pyright pkgs/nixkube/src`, and pyright resolves
+  # imports through the first `python` on PATH, which is this venv's.
   python = pkgs.pythonSet.mkVirtualEnv "nixkube-dev-env" {
     nixkube = [ "test" ];
     pynixd-nixkube = [ "test" ];
@@ -27,11 +27,15 @@ let
   # Sphinx and what it imports, as their own environment. They are a tool this
   # shell runs, not something any project here declares, so they have no place
   # in the venv above.
-  docsPython = pkgs.python3.withPackages (pp: [
-    pp.sphinx
-    pp.myst-parser
-    pp.furo
-  ]);
+  docsPython = default.nixvenv {
+    python = pkgs.python3;
+    packages = pp: [
+      pp.sphinx
+      pp.myst-parser
+      pp.furo
+    ];
+    executables = [ "sphinx-build" ];
+  };
 
   # `pylsp-mypy` fails its own test suite on python3.14 in the pinned
   # nixpkgs, so the whole shell refused to build -- and with it `check`,
@@ -55,6 +59,19 @@ let
     doCheck = false;
     doInstallCheck = false;
   });
+
+  # A venv of its own: a Python package in `packages` makes nixpkgs' setup
+  # hook put it on PYTHONPATH, for every Python in the shell.
+  pylsp = default.nixvenv {
+    python = pkgs.python3;
+    packages = pp: [
+      pp.python-lsp-server
+      pylsp-mypy
+      pp.pylsp-rope
+      pp.python-lsp-ruff
+    ];
+    executables = [ "pylsp" ];
+  };
 in
 pkgs.mkShell {
   packages = [
@@ -68,10 +85,7 @@ pkgs.mkShell {
     pkgs.kluctl
     pkgs.kubectx
     pkgs.pyright
-    pylsp-mypy
-    pkgs.python3Packages.pylsp-rope
-    pkgs.python3Packages.python-lsp-ruff
-    pkgs.python3Packages.python-lsp-server
+    pylsp
     pkgs.regctl
     pkgs.ruff
     pkgs.rustc
@@ -80,9 +94,9 @@ pkgs.mkShell {
     pkgs.dive
     default.treefmt
   ];
-  shellHook = # bash
-    ''
-      # Make LSPs that are too stupid to run python to check environment happy
-      export PYTHONPATH="${python}/${pkgs.python3.sitePackages}:$PYTHONPATH"
-    '';
+  # What `activate` sets. pylsp runs on its own venv, and jedi finds the
+  # project's packages through this.
+  shellHook = ''
+    export VIRTUAL_ENV=${python}
+  '';
 }

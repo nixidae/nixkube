@@ -8,13 +8,18 @@
   myst-parser,
   furo,
   graphviz,
+  nixvenv,
 }:
 let
-  pythonEnv = python.withPackages (_: [
-    sphinx
-    myst-parser
-    furo
-  ]);
+  pythonEnv = nixvenv {
+    inherit python;
+    packages = _: [
+      sphinx
+      myst-parser
+      furo
+    ];
+    executables = [ "sphinx-build" ];
+  };
 in
 stdenvNoCC.mkDerivation {
   pname = "nixkube-docs";

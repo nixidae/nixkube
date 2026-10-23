@@ -1178,7 +1178,11 @@ rec {
 
   # `graphviz` by name, or python3Packages' library of that name arrives
   # and Sphinx finds no `dot`.
-  nixkube-docs = pkgs.python3Packages.callPackage ./nix/docs.nix { inherit (pkgs) graphviz; };
+  inherit (import sources.nixvenv { inherit pkgs; }) nixvenv;
+  nixkube-docs = pkgs.python3Packages.callPackage ./nix/docs.nix {
+    inherit (pkgs) graphviz;
+    inherit nixvenv;
+  };
 
   nixImage = pkgs.callPackage ./niximage.nix {
     inherit sources;
@@ -1558,7 +1562,11 @@ rec {
     pkgs.runCommand "${name}.yaml"
       {
         nativeBuildInputs = [
-          (pkgs.python3.withPackages (ps: [ ps.pyyaml ]))
+          (nixvenv {
+            python = pkgs.python3;
+            packages = ps: [ ps.pyyaml ];
+            executables = [ "python3" ];
+          })
           pkgs.yamlfmt
         ];
         value = builtins.toJSON wf.value;
