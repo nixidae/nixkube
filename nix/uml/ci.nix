@@ -52,7 +52,7 @@
   foreignHost ? false,
 }:
 let
-  vivarium = import (sources.vivarium + "/lib.nix") { inherit pkgs; };
+  vivarium = import (sources.vivarium + "/lib.nix") { inherit pkgs sources; };
 
   # Whether this deployment brings the pynixd cache with it, which is the
   # difference between the two kind jobs.  Asked of the instance rather

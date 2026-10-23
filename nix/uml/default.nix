@@ -38,7 +38,7 @@
   matrixCell ? null,
 }:
 let
-  vivarium = import (sources.vivarium + "/lib.nix") { inherit pkgs; };
+  vivarium = import (sources.vivarium + "/lib.nix") { inherit pkgs sources; };
 
   # The rendered manifest, and the root of everything the node needs.
   #
