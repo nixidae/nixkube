@@ -24,7 +24,7 @@
 # is a plain script with a shebang into the venv, so it exports nothing and
 # reads one prefix.
 #
-# **The machinery is nanopynix', and this repository only wires it.**
+# **The machinery is nixvenv's, and this repository only wires it.**
 # `ps.mkPythonSet` and not `nanopynix.pythonSetWith`: nothing here imports a
 # nanopynix project, and `pythonSetWith` composes all of them into the set.
 {
@@ -35,7 +35,7 @@
 }:
 
 let
-  inherit (import sources.nanopynix { inherit pkgs sources; }) ps;
+  inherit (import sources.nixvenv { inherit pkgs sources; }) ps;
 
   protoGenerated = pkgs.callPackage ../pkgs/proto-generated.nix { python3 = python; };
 
