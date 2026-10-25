@@ -174,8 +174,9 @@ rec {
   # One rendered object by name, so a test forces only its object checks.
   renderedObject =
     instance: name:
-    lib.findFirst (object: object.metadata.name == name) (throw "no rendered object ${name}")
-      instance.config.kubernetes.generated;
+    lib.findFirst (
+      object: object.metadata.name == name
+    ) (throw "no rendered object ${name}") instance.config.kubernetes.generated;
   kubenixInstance =
     {
       module ? { },
