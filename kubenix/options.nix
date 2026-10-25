@@ -181,14 +181,25 @@ in
 
     nixosHost.enable = lib.mkOption {
       description = ''
-        Let each node switch its NixOS host to the system its Node object
-        names in the `nixkube/toplevel` annotation. Issue #24.
+        Render the `nixkube-nixos-host` PodTemplate. A Job made from it
+        switches a NixOS host to a system, arms a revert, disarms it or runs
+        it (#359).
 
-        Whoever can annotate a Node can then choose what that machine runs,
-        as root. A node that is not NixOS logs so and does nothing.
+        Whoever can create a Job from it chooses what a machine runs, as
+        root.
       '';
       type = lib.types.bool;
       default = false;
+    };
+
+    nixosHost.revertDelay = lib.mkOption {
+      description = ''
+        Seconds after a switch starts before the host reverts on its own,
+        unless a `disarm` Job ran first. It must outlast the switch and its
+        confirmation: it is the recovery when no pod can run on the node.
+      '';
+      type = lib.types.ints.positive;
+      default = 1200;
     };
 
     nri.composefs = lib.mkOption {

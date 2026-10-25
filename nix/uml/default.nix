@@ -223,9 +223,13 @@ let
       backend,
       cri,
       kata,
+      extra ? { },
     }:
     (vivarium.mkNode {
-      imports = [ (cpFor { inherit cri kata; }) ];
+      imports = [
+        (cpFor { inherit cri kata; })
+        extra
+      ];
       networking.hostName = "cp";
       vivarium = {
         inherit backend;
@@ -234,6 +238,20 @@ let
       };
       environment.etc."nixkube-host-generation".text = "next\n";
     }).config.system.build.toplevel;
+
+  # A kubelet that starts and never renews its Lease. switch-to-configuration
+  # succeeds, no pod runs afterwards, and only the host's timer reverts. A
+  # kubelet that fails to start would take the switch Job's own revert
+  # instead, and leave the timer untested.
+  hostBroken =
+    args:
+    hostNext (
+      args
+      // {
+        extra.systemd.services.kubelet.serviceConfig.ExecStart =
+          lib.mkForce "${lib.getExe' pkgs.coreutils "sleep"} infinity";
+      }
+    );
 
   # The RuntimeClasses besides runc a pod here can ask for. gVisor runs only
   # under QEMU and containerd; see `services.vivarium-k8s.runtimes`.
@@ -493,6 +511,7 @@ vivarium.mkTest (
       inherit hostStore;
       nodeDaemonSet = if hostStore then "nix-node-host" else "nix-node";
       hostNext = "${hostNext { inherit backend cri kata; }}";
+      hostBroken = "${hostBroken { inherit backend cri kata; }}";
     };
   }
 )

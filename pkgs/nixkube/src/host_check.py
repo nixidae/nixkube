@@ -5,7 +5,7 @@ when `nixkube.hostStore.enable` is on. Issue #25.
 
 A DaemonSet selects nodes by label, and whether a host runs NixOS is not a
 label. This sets one: `nixkube/host=nixos` on a node whose host has
-/etc/NIXOS, the file NixOS activation writes and `nixos_host` also reads.
+/etc/NIXOS, the file NixOS activation writes.
 
 - `--mode separate`, the DaemonSet with its own store: on a NixOS host,
   label the Node and wait. The DaemonSet excludes the label, so its

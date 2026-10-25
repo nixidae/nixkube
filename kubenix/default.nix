@@ -15,6 +15,7 @@
     ./csidriver.nix
     ./config.nix
     ./pynixd.nix
+    ./nixos-host.nix
 
     ./rbac.nix
     ./undeploy.nix

@@ -21,7 +21,6 @@ from .constants import (
     METRICS_PORT,
     NAMESPACE,
     NIX_BUILD_TIMEOUT,
-    NIXOS_HOST_ENABLED,
     NRI_ENABLED,
     NRI_PLUGIN_IDX,
     NRI_PLUGIN_NAME,
@@ -31,7 +30,6 @@ from .constants import (
 from .csi.server import csi_serve
 from .gc_task import gc_loop
 from .nix_daemon import supervise_nix_daemon
-from .nixos_host import nixos_host_loop
 from .nri.server import nri_serve
 from .retire import retire_loop
 from .startup import run_setup
@@ -136,7 +134,6 @@ def log_effective_app_config() -> None:
         f"  {PYNIXD_ENABLED=}\n"
         f"  {BUILDERS_ENABLED=}\n"
         f"  {VERIFY_STORE_PATHS=}\n"
-        f"  {NIXOS_HOST_ENABLED=}\n"
         f"  {HOST_MOUNT_PATH=}\n"
         f"  {NRI_PLUGIN_NAME=}\n"
         f"  {NRI_PLUGIN_IDX=}\n"
@@ -246,8 +243,6 @@ async def async_main():
             )
         if NRI_ENABLED:
             tg.start_soon(supervised, nri_serve, "nri", name="nri")
-        if NIXOS_HOST_ENABLED:
-            tg.start_soon(supervised, nixos_host_loop, "nixos-host", name="nixos-host")
 
 
 def main():

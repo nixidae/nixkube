@@ -100,9 +100,6 @@ METRICS_ADDR = os.environ.get("METRICS_ADDR", "::")
 # Set via VERIFY_STORE_PATHS environment variable
 VERIFY_STORE_PATHS = os.environ.get("VERIFY_STORE_PATHS", "false") == "true"
 
-# Switch a NixOS host to the system its Node names. `nixos_host.py`, issue #24.
-NIXOS_HOST_ENABLED = os.environ.get("NIXOS_HOST_ENABLED", "false") == "true"
-
 # Share of `fs.mount-max` past which a volume falls back to a hardlink tree.
 #
 # Within 10% of the limit, a bind farm stops being the cheap option and starts

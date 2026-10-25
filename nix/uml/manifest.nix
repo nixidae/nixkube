@@ -40,6 +40,9 @@ let
     in
     if object ? spec && object.spec ? template && object.spec.template ? spec then
       lib.recursiveUpdate object { spec.template.spec = fix object.spec.template.spec; }
+    # A PodTemplate holds its pod spec one level up.
+    else if object ? template && object.template ? spec then
+      lib.recursiveUpdate object { template.spec = fix object.template.spec; }
     else
       object;
 in
