@@ -275,6 +275,24 @@ let
         lib.filter (s: lib.trim s != "") (lib.splitString "," text)
       ))
     ];
+
+  # "cluster,deploy,host" keeps those phases and the `always` ones, and drops
+  # edges to the rest. "boot" is vivarium's own and always there.
+  phaseFilter =
+    text: phases:
+    let
+      wanted = map lib.trim (lib.filter (s: lib.trim s != "") (lib.splitString "," text));
+      unknown = lib.filter (name: !phases ? ${name}) wanted;
+      kept = lib.filterAttrs (name: phase: lib.elem name wanted || phase.always or false) phases;
+    in
+    if text == "" then
+      phases
+    else if unknown != [ ] then
+      throw "NIXKUBE_UML_PHASES names unknown phases: ${lib.concatStringsSep ", " unknown}; known: ${lib.concatStringsSep ", " (lib.attrNames phases)}"
+    else
+      lib.mapAttrs (
+        _: phase: phase // { after = lib.filter (a: a == "boot" || kept ? ${a}) phase.after; }
+      ) kept;
 in
 vivarium.mkTest (
   { config, ... }:
@@ -313,6 +331,18 @@ vivarium.mkTest (
         env = "NIXKUBE_UML_SCENARIOS";
         default = "";
         description = "chaos scenarios to run, by name; empty is all";
+      };
+      /*
+        Which phases to run, by name, comma separated; `report` always runs.
+        Empty runs all, which is the gate before landing. The `after` edges
+        only order the phases, so name what a phase needs as well:
+
+            NIXKUBE_UML_PHASES=cluster,deploy,host nix build --file . umlTest
+      */
+      phases = {
+        env = "NIXKUBE_UML_PHASES";
+        default = "";
+        description = "phases to run, by name; empty is all";
       };
     }
     // lib.optionalAttrs (matrixCell == null) {
@@ -365,49 +395,51 @@ vivarium.mkTest (
 
     inherit backend;
 
-    phases = {
-      cluster = {
-        script = ./phases/cluster.py;
-        after = [ "boot" ];
-      };
-      deploy = {
-        script = ./phases/deploy.py;
-        after = [ "cluster" ];
-      };
-      workloads = {
-        script = ./phases/workloads.py;
-        after = [ "deploy" ];
-      };
-      # After chaos, so a scheduler that picks chaos first cannot leave
-      # these waiting behind a breakpoint on it.
-      runtimes = {
-        script = ./phases/runtimes.py;
-        after = [ "chaos" ];
-      };
-      host = {
-        script = ./phases/host.py;
-        after = [ "runtimes" ];
-      };
-      chaos = {
-        pytest = {
-          tests = ./chaos;
-          args = scenarioFilter config.resolved.scenarios.value;
+    phases = phaseFilter config.resolved.phases.value (
+      {
+        cluster = {
+          script = ./phases/cluster.py;
+          after = [ "boot" ];
         };
-        after = [ "workloads" ] ++ lib.optional hostStore "hoststore";
-      };
-      report = {
-        script = ./phases/report.py;
-        after = [ "host" ];
-        always = true;
-      };
-    }
-    // lib.optionalAttrs hostStore {
-      # The node shares the guest's own /nix: a NixOS host. Issue #25.
-      hoststore = {
-        script = ./phases/hoststore.py;
-        after = [ "workloads" ];
-      };
-    };
+        deploy = {
+          script = ./phases/deploy.py;
+          after = [ "cluster" ];
+        };
+        workloads = {
+          script = ./phases/workloads.py;
+          after = [ "deploy" ];
+        };
+        # After chaos, so a scheduler that picks chaos first cannot leave
+        # these waiting behind a breakpoint on it.
+        runtimes = {
+          script = ./phases/runtimes.py;
+          after = [ "chaos" ];
+        };
+        host = {
+          script = ./phases/host.py;
+          after = [ "runtimes" ];
+        };
+        chaos = {
+          pytest = {
+            tests = ./chaos;
+            args = scenarioFilter config.resolved.scenarios.value;
+          };
+          after = [ "workloads" ] ++ lib.optional hostStore "hoststore";
+        };
+        report = {
+          script = ./phases/report.py;
+          after = [ "host" ];
+          always = true;
+        };
+      }
+      // lib.optionalAttrs hostStore {
+        # The node shares the guest's own /nix: a NixOS host. Issue #25.
+        hoststore = {
+          script = ./phases/hoststore.py;
+          after = [ "workloads" ];
+        };
+      }
+    );
 
     nodes.cp = {
       imports = [
