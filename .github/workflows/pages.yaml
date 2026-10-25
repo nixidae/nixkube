@@ -12,6 +12,7 @@ jobs:
         name: Make room on the runner
         run: df -h /; sudo rm -rf /usr/lib/jvm /usr/share/dotnet /usr/share/swift /usr/local/.ghcup /usr/local/julia* /usr/local/lib/android /opt/az /usr/local/share/powershell /usr/local/share/chromium /opt/microsoft /opt/google /usr/lib/firefox; docker system prune --all --force; docker builder prune --all --force; df -h /
         timeout-minutes: 10
+        working-directory: /
       - timeout-minutes: 15
         uses: cachix/install-nix-action@master
         with:
@@ -58,6 +59,7 @@ jobs:
         name: Make room on the runner
         run: df -h /; sudo rm -rf /usr/lib/jvm /usr/share/dotnet /usr/share/swift /usr/local/.ghcup /usr/local/julia* /usr/local/lib/android /opt/az /usr/local/share/powershell /usr/local/share/chromium /opt/microsoft /opt/google /usr/lib/firefox; docker system prune --all --force; docker builder prune --all --force; df -h /
         timeout-minutes: 10
+        working-directory: /
       - id: deployment
         name: Deploy to GitHub Pages
         timeout-minutes: 10
