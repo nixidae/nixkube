@@ -866,6 +866,16 @@ async def report(cp: Machine) -> None:
     )
     print(f"[nixkube] the node's /nix (rc={rc}):\n{out}", flush=True)
 
+    # What the NRI sweep did, and why a volume outlived its container: a
+    # sweep that skipped it, failed on it, or never ran.
+    rc, out = await cp.execute(
+        f"kubectl logs --namespace {NAMESPACE} --selector app.kubernetes.io/component=node"
+        " --container nix-node --tail 5000 --timestamps"
+        " | grep --text -E '\"(gc_[a-z_]+|synchronize)\"|REMOVE_CONTAINER' | tail -n 80",
+        timeout=120,
+    )
+    print(f"[nixkube] the NRI sweep (rc={rc}):\n{out}", flush=True)
+
     # What the nri-wait hook said before it gave up.
     #
     # The hook runs at createRuntime, so its stderr goes into runc's error,
