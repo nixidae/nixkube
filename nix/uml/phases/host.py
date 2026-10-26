@@ -13,6 +13,10 @@ evaluates and pynixd builds systems no cache holds: `hostBuilt`.
 can confirm or disarm, and only the host's armed timer brings it back. The
 controller must then halt the rollout before it starts on `worker`, mark cp
 Reverted and cordon it.
+
+`hostReboot` gives cp a plain change and worker another initrd. cp switches
+in place; worker is cordoned, drained of a pod and rebooted into its new
+system, then uncordoned. Last, because a switch back would reboot again.
 """
 
 import base64
@@ -29,11 +33,22 @@ REVERT_UNIT = "nixkube-revert"
 MARKER = "/etc/nixkube-host-generation"
 # Less than `nixosHost.revertDelay` in ../manifest.nix.
 CONFIRM_TIMEOUT = 8
-IN_FLIGHT = {"Switching", "Confirming", "Disarming"}
+IN_FLIGHT = {
+    "Switching",
+    "Confirming",
+    "Draining",
+    "Booting",
+    "Rebooting",
+    "Disarming",
+}
 SOURCE_SECRET = "host-source"
 # Two evaluations of 13 s each on the host, and a builder that substitutes
 # both systems' inputs.
 BUILD_TIMEOUT = 30 * 60
+# A boot is about 70 s, and the image import before kubelet more.
+REBOOT_TIMEOUT = 15 * 60
+VICTIM = "reboot-victim"
+BOOT_ID = "cat /proc/sys/kernel/random/boot_id"
 
 
 async def running(vm: Machine) -> str:
@@ -57,7 +72,10 @@ async def apply(cp: Machine, obj: dict) -> None:
 
 
 async def roll_to(
-    cp: Machine, systems: dict[str, str], source: dict | None = None
+    cp: Machine,
+    systems: dict[str, str],
+    source: dict | None = None,
+    timeout: int | None = None,
 ) -> tuple[dict, list[str]]:
     """Point the rollout at `systems`, or at `source`, and wait until it settles.
 
@@ -112,15 +130,18 @@ async def roll_to(
         )
         return done, json.dumps(status)
 
-    timeout = BUILD_TIMEOUT if source else READY_TIMEOUT
+    timeout = timeout or (BUILD_TIMEOUT if source else READY_TIMEOUT)
     await until(f"rollout to {systems}", settled, timeout, cp)
     return (await get_json(cp, f"get nixosrollout {ROLLOUT}"))["status"], started
 
 
 async def switch_to(
-    vms: dict[str, Machine], systems: dict[str, str], source: dict | None = None
+    vms: dict[str, Machine],
+    systems: dict[str, str],
+    source: dict | None = None,
+    timeout: int | None = None,
 ) -> None:
-    status, started = await roll_to(vms["cp"], systems, source)
+    status, started = await roll_to(vms["cp"], systems, source, timeout)
     if status["phase"] != "Complete":
         raise MachineError(f"[cp] the rollout to {systems} ended {status}")
     for name, toplevel in systems.items():
@@ -172,7 +193,60 @@ async def test(vms: Machines) -> None:
 
     await broken_halts(hosts, first, settings["hostBroken"], after["worker"])
     await kubectl(cp, "uncordon cp")
+    await reboots(hosts, settings)
     await kubectl(cp, f"delete nixosrollout {ROLLOUT}")
+
+
+async def reboots(hosts: dict[str, Machine], settings: dict) -> None:
+    """worker's initrd changes: drained, rebooted, uncordoned. cp switches in place."""
+    cp, worker = hosts["cp"], hosts["worker"]
+    target: dict[str, str] = settings["hostReboot"]
+    await apply(
+        cp,
+        {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {"name": VICTIM, "namespace": "default"},
+            "spec": {
+                "nodeSelector": {"kubernetes.io/hostname": "worker"},
+                "tolerations": [{"operator": "Exists"}],
+                "terminationGracePeriodSeconds": 1,
+                "containers": [
+                    {
+                        "name": "sleep",
+                        "image": settings["workloadImage"],
+                        "imagePullPolicy": "Never",
+                        "command": ["sleep", "3600"],
+                    }
+                ],
+            },
+        },
+    )
+    await kubectl(
+        cp, f"wait --for=condition=Ready pod/{VICTIM} --timeout={READY_TIMEOUT}s"
+    )
+    boots = {name: (await vm.succeed(BOOT_ID)).strip() for name, vm in hosts.items()}
+
+    await switch_to(hosts, target, timeout=REBOOT_TIMEOUT)
+
+    if (await worker.succeed(BOOT_ID)).strip() == boots["worker"]:
+        raise MachineError("[worker] the rollout to a new initrd did not reboot it")
+    if (await cp.succeed(BOOT_ID)).strip() != boots["cp"]:
+        raise MachineError("[cp] a plain change rebooted the host")
+    booted = (await worker.succeed("readlink /run/booted-system")).strip()
+    if booted != target["worker"]:
+        raise MachineError(f"[worker] booted {booted}, not {target['worker']}")
+    pods = await get_json(cp, "get pods --namespace default")
+    if any(p["metadata"]["name"] == VICTIM for p in pods["items"]):
+        raise MachineError(f"[worker] the drain left pod {VICTIM}")
+    spec = (await get_json(cp, "get node worker"))["spec"]
+    if spec.get("unschedulable"):
+        raise MachineError("[worker] the rebooted node is still cordoned")
+    print(
+        "[nixkube] the rollout drained and rebooted worker into its new initrd, "
+        "and switched cp in place",
+        flush=True,
+    )
 
 
 async def from_source(

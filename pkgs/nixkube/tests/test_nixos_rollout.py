@@ -6,12 +6,17 @@ from pathlib import Path
 import pytest
 
 from src.nixos_rollout import (
+    GROUP,
+    MIRROR,
+    REBOOT_NEEDED,
     Action,
     Build,
     NodePhase,
     Phase,
     build_argv,
     build_entries,
+    evictable,
+    exit_code,
     git_env,
     job_name,
     plan,
@@ -174,3 +179,43 @@ def test_a_new_generation_builds_and_a_failed_build_halts():
     failed = build_entries({}, old, {"a": Build(error="boom")}, 2)
     assert failed["a"]["phase"] == NodePhase.BUILD_FAILED
     assert rollout_phase(failed) == Phase.HALTED
+
+
+def test_a_drain_evicts_what_kubectl_drain_would():
+    def pod(**meta):
+        phase = meta.pop("phase", "Running")
+        return {"metadata": meta, "status": {"phase": phase}}
+
+    assert evictable(pod(name="app"))
+    assert not evictable(pod(name="done", phase="Succeeded"))
+    assert not evictable(pod(annotations={MIRROR: "x"}))
+    assert not evictable(pod(ownerReferences=[{"kind": "DaemonSet"}]))
+    assert evictable(pod(ownerReferences=[{"kind": "ReplicaSet"}]))
+    assert not evictable(pod(labels={f"{GROUP}/rollout": "host"}))
+
+
+def test_exit_code_reads_the_terminated_container():
+    terminated = {"state": {"terminated": {"exitCode": REBOOT_NEEDED}}}
+    assert exit_code({"status": {"containerStatuses": [terminated]}}) == REBOOT_NEEDED
+    running = {"state": {"running": {}}}
+    assert exit_code({"status": {"containerStatuses": [running]}}) is None
+    assert exit_code({}) is None
+
+
+def test_a_failed_drain_halts_until_the_spec_changes():
+    failed = {
+        "phase": NodePhase.DRAIN_FAILED,
+        "target": A,
+        "generation": 2,
+        "drained": True,
+    }
+    assert rollout_phase({"a": failed}) == Phase.HALTED
+    assert plan({"a": failed}, {"a": A}, ["a"], set(), 2)["a"] == failed
+    again = plan({"a": failed}, {"a": B}, ["a"], set(), 3)["a"]
+    assert again == {"phase": NodePhase.PENDING, "target": B, "drained": True}
+
+
+def test_reboot_steps_are_in_flight():
+    for phase in (NodePhase.DRAINING, NodePhase.BOOTING, NodePhase.REBOOTING):
+        entry = {"phase": phase, "target": A, "generation": 1}
+        assert plan({"a": entry}, {"a": B}, ["a"], set(), 2)["a"] == entry

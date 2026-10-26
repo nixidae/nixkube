@@ -29,6 +29,8 @@ let
 
   revertUnit = "nixkube-revert";
   profile = "/nix/var/nix/profiles/system";
+  # `REBOOT_NEEDED` in pkgs/nixkube/src/nixos_rollout.py.
+  rebootNeeded = 100;
 
   # The revert is armed before the profile moves, so a failure after this
   # point always has a way back. A switch that fails starts it at once; one
@@ -49,6 +51,15 @@ let
         exit 1
       fi
       nix-store --realise "$TOPLEVEL" >/dev/null
+      # Only a boot picks these up. Nothing has changed yet: the controller
+      # drains the node and runs `boot` instead.
+      booted=$(readlink /run/booted-system)
+      for part in kernel initrd kernel-modules; do
+        if [ "$(readlink "$booted/$part")" != "$(readlink "$TOPLEVEL/$part")" ]; then
+          echo "$part differs from the booted system's: a reboot is needed"
+          exit ${toString rebootNeeded}
+        fi
+      done
       systemd-run --unit=${revertUnit} --on-active="$REVERT_DELAY" \
         --timer-property=AccuracySec=1s --service-type=oneshot \
         --property=KillMode=process --collect --quiet \
@@ -65,6 +76,21 @@ let
         systemctl stop ${revertUnit}.timer
         exit 1
       fi
+      ;;
+    boot)
+      # No revert is armed: a timer does not live through the reboot.
+      if [ "$(readlink /run/booted-system)" = "$TOPLEVEL" ]; then
+        echo "already booted $TOPLEVEL"
+        exit 0
+      fi
+      nix-store --realise "$TOPLEVEL" >/dev/null
+      nix-env --profile ${profile} --set "$TOPLEVEL"
+      "$TOPLEVEL/bin/switch-to-configuration" boot
+      # Later, so this Job completes first; the controller then waits for
+      # a new boot ID.
+      systemd-run --unit=nixkube-reboot --on-active=10 \
+        --timer-property=AccuracySec=1s --collect --quiet systemctl reboot
+      echo "rebooting into $TOPLEVEL in 10s"
       ;;
     disarm)
       # The timer first: stopping it does not stop a revert it already

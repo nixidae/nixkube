@@ -190,6 +190,15 @@ let
       ];
     }).config.system.build.toplevel;
 
+  # Another initrd, which only a boot picks up: the controller drains the
+  # node and reboots it. The cache serves the closure, and QEMU loads the
+  # kernel and initrd from the host's store, so both are in the run's.
+  hostReboot =
+    node:
+    hostNext node {
+      boot.initrd.systemd.contents."/etc/nixkube-reboot".text = "reboot\n";
+    };
+
   # The system the source rollout builds: no cache has it.
   hostBuilt =
     node: (node.extendModules { modules = [ ./host-built.nix ]; }).config.system.build.toplevel;
@@ -301,6 +310,7 @@ vivarium.mkTest (
           (hostNext systems.cp { })
           (hostNext systems.worker { })
           (hostBroken systems.cp)
+          (hostReboot systems.worker)
           hostSource.repository
           # Every input of the toplevel, and not the toplevel.
           (hostBuilt systems.cp).inputDerivation
@@ -526,6 +536,10 @@ vivarium.mkTest (
         inherit (systems) cp worker;
       };
       hostBroken = builtins.unsafeDiscardStringContext "${hostBroken systems.cp}";
+      hostReboot = {
+        cp = builtins.unsafeDiscardStringContext "${hostNext systems.cp { }}";
+        worker = builtins.unsafeDiscardStringContext "${hostReboot systems.worker}";
+      };
       hostBuilt = lib.mapAttrs (_: node: builtins.unsafeDiscardStringContext "${hostBuilt node}") {
         inherit (systems) cp worker;
       };

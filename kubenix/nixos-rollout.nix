@@ -11,6 +11,9 @@
   source once per node and builds it through pynixd, and the switch Job
   copies the result from pynixd into the host's store.
 
+  A node whose kernel, initrd or kernel modules change is cordoned and
+  drained, boots the new system and reboots, then is uncordoned.
+
   The controller has a ServiceAccount of its own: it may create privileged
   pods in this namespace, and the node DaemonSet must not.
 */
@@ -80,6 +83,10 @@ let
     "Conflict"
     "Switching"
     "Confirming"
+    "Draining"
+    "DrainFailed"
+    "Booting"
+    "Rebooting"
     "Disarming"
     "Done"
     "Reverted"
@@ -175,6 +182,18 @@ let
                     minimum = 1;
                     default = 300;
                   };
+                  drainTimeout = {
+                    description = "Seconds a node that must reboot has to drain. On a timeout the rollout halts before the reboot.";
+                    type = "integer";
+                    minimum = 1;
+                    default = 300;
+                  };
+                  rebootTimeout = {
+                    description = "Seconds a rebooting node has to come back Ready with a new boot ID.";
+                    type = "integer";
+                    minimum = 1;
+                    default = 900;
+                  };
                   paused = {
                     type = "boolean";
                     default = false;
@@ -212,6 +231,8 @@ let
                           format = "date-time";
                         };
                         leaseRenewTime = str;
+                        bootID = str;
+                        drained.type = "boolean";
                         generation.type = "integer";
                         message = str;
                       };
@@ -248,7 +269,19 @@ in
             resources = [ "nixosrollouts/status" ];
             verbs = [ "patch" ];
           }
-          # Patch for the cordon after a revert.
+          # A drain: the pods on a node, in every namespace, and their
+          # eviction, which honours PodDisruptionBudgets.
+          {
+            apiGroups = [ "" ];
+            resources = [ "pods" ];
+            verbs = [ "list" ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "pods/eviction" ];
+            verbs = [ "create" ];
+          }
+          # Patch for a cordon and an uncordon.
           {
             apiGroups = [ "" ];
             resources = [ "nodes" ];

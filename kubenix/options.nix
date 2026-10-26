@@ -186,6 +186,12 @@ in
         a system, arms a revert, disarms it or runs it. The controller makes
         those Jobs for each NixOSRollout (#359).
 
+        A change to the kernel, the initrd or the kernel modules takes a
+        reboot. The controller cordons and drains the node through the
+        eviction API, makes the system the boot default, reboots the host
+        and uncordons it once it is Ready again. No revert is armed on that
+        path: a bad kernel needs boot counting, which this does not have.
+
         Whoever can create a Job from it chooses what a machine runs, as
         root.
       '';
