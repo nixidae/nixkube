@@ -67,17 +67,25 @@ let
       fi
       ;;
     disarm)
+      # The timer first: stopping it does not stop a revert it already
+      # started, so a check before the stop can pass while the host reverts.
+      # A switch to the running system arms nothing, and stop on a unit
+      # that is not loaded fails.
+      if systemctl is-active --quiet ${revertUnit}.timer; then
+        systemctl stop ${revertUnit}.timer
+      fi
+      case "$(systemctl show --property=ActiveState --value ${revertUnit}.service)" in
+      activating | active | deactivating)
+        echo "the revert is running: the switch was not confirmed in time" >&2
+        exit 1
+        ;;
+      esac
       # The timer may have reverted the host before the switch Job could
       # report, and then a confirmed kubelet runs the old system.
       running=$(readlink /run/current-system)
       if [ "$running" != "$TOPLEVEL" ]; then
         echo "running $running, not $TOPLEVEL: the switch was reverted" >&2
         exit 1
-      fi
-      # A switch to the running system arms nothing, and stop on a unit
-      # that is not loaded fails.
-      if systemctl is-active --quiet ${revertUnit}.timer; then
-        systemctl stop ${revertUnit}.timer
       fi
       ;;
     revert)

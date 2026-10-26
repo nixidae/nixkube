@@ -112,8 +112,9 @@ in
     # The host phase switches the guest's own system. Issue #24.
     nixosHost.enable = true;
     # The broken switch waits this out. A good switch needs it to cover the
-    # switch and its confirmation: 7.5 and 9.7 s measured, plus 20 %.
-    nixosHost.revertDelay = 12;
+    # switch, its confirmation and the disarm Job: 7.5 and 9.7 s measured on
+    # a quiet host, and 12 s at a load of 13, when 12 lost the race.
+    nixosHost.revertDelay = 30;
     nixosHost.resyncSeconds = 1;
 
     # The chaos phase waits for the node's state to settle after a runtime

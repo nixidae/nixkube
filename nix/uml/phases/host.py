@@ -214,7 +214,7 @@ async def broken_halts(
 ) -> None:
     """cp's switch fails, so the rollout halts and never starts on worker."""
     cp, worker = hosts["cp"], hosts["worker"]
-    # The host's timer fires `nixosHost.revertDelay` (12 s) after the switch.
+    # The host's timer fires `nixosHost.revertDelay` (30 s) after the switch.
     status, started = await roll_to(cp, {"cp": broken, "worker": worker_next})
     node = status["nodes"]["cp"]
     if status["phase"] != "Halted" or node.get("phase") != "Reverted":
