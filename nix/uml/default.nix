@@ -8,11 +8,10 @@
 # no root, no tap device -- so the whole thing is a derivation that passes or
 # fails, and CI needs nothing but a builder.
 #
-# What makes that possible is that a guest's /nix/store is the *sandbox's*
-# store, over hostfs. So a store path this file names is a path the guest
-# already has, with nothing fetched -- `mkTest` registers everything in
-# `settings` so Nix in the guest agrees, and `nixkube-seed-store` below copies
-# it one directory across into the node's own store, where nixkube looks.
+# What makes that possible is `vivarium.recipes.cache`: a second guest
+# serves every store path the run needs, and the node, pynixd and the host
+# itself substitute from it and from nothing else, as a real cluster does
+# from its binary cache.
 #
 # The phases are cluster, deploy, workloads, chaos (a pytest phase, one test
 # per scenario), runtimes, host and report. By hand, with the guest held open on a failure:
@@ -56,15 +55,11 @@ let
   # to look for them.
   hostMountPath = "/nixkube";
 
-  # Everything the node has to have without a network: the manifest, whose
-  # closure carries the node environment; the probes, whose closures carry
-  # what they run; and what a workload asks the driver to mount.
-  #
-  # Every one of these is also in `settings` below, which is what registers
-  # it with the guest and what puts it in the build sandbox. This list is
-  # what `nixkube-seed-store` copies into the node's own store, where nixkube
-  # looks for it.
-  seedRoots = [
+  # What the cache guest serves: the manifest, whose closure carries the
+  # node environment; the probes, whose closures carry what they run; and
+  # what a workload asks the driver to mount. The host systems join them
+  # below, where the booted guest is known.
+  cacheRoots = [
     manifestFile
     probes.ro
     probes.rw
@@ -142,10 +137,8 @@ let
         more.
 
         No `nixDatabase` here. `mkTest` registers the closure of everything
-        in `settings`, which is every path in `seedRoots`: the manifest,
-        whose own closure carries the node environment because
-        `nixkube.discardStringContext = false` keeps the context on it;
-        both probes; and what a workload asks the driver to mount.
+        in `settings`, which the phases read on the node: the manifest and
+        both probes. What the node runs it fetches from the cache guest.
       */
       memory = "2200M";
       cpus = 4;
@@ -172,75 +165,22 @@ let
     # The chaos scenarios compare what the driver left on the node against
     # what the node says is still alive, and both answers are JSON.
     environment.systemPackages = [ pkgs.jq ];
-
-    /*
-      Fill the node's store before kubelet can want it.
-
-      The DaemonSet's init container fills `nixkube.hostMountPath` by
-      substituting into it, and a build sandbox has no binary cache to
-      substitute from. There does not have to be one: this guest's own
-      /nix/store *is* the sandbox's, over hostfs, and holds every path the
-      manifest names. It only has to be copied one directory across.
-
-      A store-to-store copy on the same disk, so no HTTP, no signatures and
-      no resolver. Serving it over nix-serve was tried first and is what a
-      real node does; here it answered HTTP 500 to every narinfo, and
-      debugging a cache server is not what this test is for.
-
-      The other rejected option was to hand containers the node's whole
-      /nix through containerd's base runtime spec. That works and is
-      wrong: vivarium already mounts /nix/store into every
-      container, and mounting /nix as well would leave this test unable to
-      tell nixkube's own /nix from the harness's -- it would pass with the
-      driver switched off.
-
-      Before kubelet, so the init container finds the paths already valid
-      and copies nothing. It overlaps `kubeadm init`, which takes longer.
-    */
-    systemd.services.nixkube-seed-store = {
-      description = "Copy what nixkube needs into the node's own store";
-      wantedBy = [ "multi-user.target" ];
-      before = [ "kubelet.service" ];
-      # Nothing to order against for the Nix database. It is built with
-      # the guest's root image and mounted with /nix/var, so it is there
-      # before this unit can start.
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-      };
-      script = ''
-        mkdir -p ${hostMountPath}
-        ${lib.getExe' pkgs.nix "nix"} copy \
-          --no-check-sigs --to ${hostMountPath} ${lib.escapeShellArgs seedRoots}
-      '';
-    };
   };
 
   /*
-    The same guest plus one file, for the host phase to switch to and back
-    from. The switch then changes that file, and no unit the cluster runs
-    on. The hostname and `vivarium` values are the ones `mkTest` gives
-    the booted guest.
+    The booted guest plus one file, for the host phase to switch to and
+    back from. The switch then changes that file, and no unit the cluster
+    runs on. `extendModules` on the guest `mkTest` booted, so it carries
+    everything that guest does -- the cache recipe's interface and
+    substituter included.
   */
   hostNext =
-    {
-      backend,
-      cri,
-      kata,
-      extra ? { },
-    }:
-    (vivarium.mkNode {
-      imports = [
-        (cpFor { inherit cri kata; })
+    cp: extra:
+    (cp.extendModules {
+      modules = [
+        { environment.etc."nixkube-host-generation".text = "next\n"; }
         extra
       ];
-      networking.hostName = "cp";
-      vivarium = {
-        inherit backend;
-        index = 0;
-        sshPort = 4325;
-      };
-      environment.etc."nixkube-host-generation".text = "next\n";
     }).config.system.build.toplevel;
 
   # A kubelet that starts and never renews its Lease. switch-to-configuration
@@ -248,14 +188,11 @@ let
   # kubelet that fails to start would take the switch Job's own revert
   # instead, and leave the timer untested.
   hostBroken =
-    args:
-    hostNext (
-      args
-      // {
-        extra.systemd.services.kubelet.serviceConfig.ExecStart =
-          lib.mkForce "${lib.getExe' pkgs.coreutils "sleep"} infinity";
-      }
-    );
+    cp:
+    hostNext cp {
+      systemd.services.kubelet.serviceConfig.ExecStart =
+        lib.mkForce "${lib.getExe' pkgs.coreutils "sleep"} infinity";
+    };
 
   # The RuntimeClasses besides runc a pod here can ask for. gVisor runs only
   # under QEMU and containerd; see `services.vivarium-k8s.runtimes`.
@@ -317,7 +254,7 @@ let
       ) kept;
 in
 vivarium.mkTest (
-  { config, ... }:
+  { config, systems, ... }:
   let
     backend = if matrixCell != null then matrixCell.backend else config.resolved.backend.value;
     cri = if matrixCell != null then matrixCell.cri else config.resolved.cri.value;
@@ -331,6 +268,17 @@ vivarium.mkTest (
         "nixkube-${backend}-${cri}${lib.optionalString kata "-kata"}"
       else
         "nixkube";
+
+    vivarium.recipes.cache = {
+      enable = true;
+      roots = map toString (
+        cacheRoots
+        ++ [
+          (hostNext systems.cp { })
+          (hostBroken systems.cp)
+        ]
+      );
+    };
 
     # What every phase and the chaos tests import: waits, probes, checks.
     # Not `lib/`, which .gitignore takes for a Python build directory.
@@ -514,8 +462,11 @@ vivarium.mkTest (
       # DaemonSet serves it. Issue #25.
       inherit hostStore;
       nodeDaemonSet = if hostStore then "nix-node-host" else "nix-node";
-      hostNext = "${hostNext { inherit backend cri kata; }}";
-      hostBroken = "${hostBroken { inherit backend cri kata; }}";
+      # Strings, not store paths: `settings` registers what it names on
+      # `cp`, and the host phase has to fetch these from the cache guest,
+      # as a real host would.
+      hostNext = builtins.unsafeDiscardStringContext "${hostNext systems.cp { }}";
+      hostBroken = builtins.unsafeDiscardStringContext "${hostBroken systems.cp}";
     };
   }
 )

@@ -5,6 +5,14 @@
 # ../../default.nix adds this to the module list `kubenixCI1` and
 # `kubenixCI2` are built from, so the guest deploys the same thing CI does
 # plus what is here. Each setting names the guest fact that forces it.
+{ lib, sources, ... }:
+let
+  cache = import (sources.vivarium + "/modules/recipes/cache-facts.nix");
+  fromCache = {
+    substituters = lib.mkForce [ cache.url ];
+    trusted-public-keys = [ cache.trustedPublicKey ];
+  };
+in
 {
   /*
     Run the image this checkout built, not the one published last.
@@ -43,4 +51,17 @@
     volume's size -- so it buys nothing to ask for more.
   */
   nixkube.pynixd.storageSize = "1Gi";
+
+  /*
+    The run's cache guest and nothing else, for every role
+    (`vivarium.recipes.cache` in ./ci.nix), as in ./manifest.nix.
+
+    Keeping string context on the DaemonSet's store paths makes the node
+    and cache environments part of the manifest's closure, which is what
+    the cache guest serves.
+  */
+  nixkube.discardStringContext = false;
+  nixkube.node.nixConfig.settings = fromCache;
+  nixkube.pynixd.controller.nixConfig.settings = fromCache;
+  nixkube.pynixd.builder.nixConfig.settings = fromCache;
 }

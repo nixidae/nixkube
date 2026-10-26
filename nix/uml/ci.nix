@@ -23,12 +23,11 @@
 #
 # kluctl runs on the *host*, against the guest's API server through a passt
 # forward, which is where kind runs it too -- on the runner, not inside a
-# node.  It also keeps `cachix push` in `kubenixCI1`'s pre-deploy step
-# working, which needs a token the guest does not have.
+# node.
 #
-# **Outside the build sandbox only.** The node pulls from registry.k8s.io
-# and the images this deploys come from ghcr.io, so there is nothing to
-# run here without a network.
+# **Outside the build sandbox only.** The node pulls its images from
+# registry.k8s.io, so there is nothing to run here without a network. Store
+# paths are the exception: the run's cache guest serves them.
 {
   pkgs,
   lib,
@@ -62,6 +61,37 @@ let
 in
 vivarium.mkTest {
   inherit name;
+
+  /*
+    Every store path the node is asked for, from a guest of the run and
+    from nowhere else: what was pushed to cachix before this test could
+    run, and what a fork could never push.
+
+    Two manifests, and each closure carries what its pods name. The CI
+    deployment's, because ./ci-guest.nix keeps the string context on it.
+    The workloads', because `kubenixCITest` sets `nixkube.enable = false`,
+    so the discard transformer never runs on it -- `env-ssl`'s `printer`,
+    built on whatever machine runs this, is in there.
+  */
+  vivarium.recipes.cache = {
+    enable = true;
+    roots =
+      let
+        pin = import ../../kubenix/ci/nixpkgs-pin.nix;
+        pinned = pin.import' { system = pkgs.stdenv.hostPlatform.system; };
+        unfree = pin.import' {
+          system = pkgs.stdenv.hostPlatform.system;
+          config.allowUnfree = true;
+        };
+      in
+      map toString [
+        instance.config.internal.manifestJSONFile
+        workloads.config.internal.manifestJSONFile
+        # What `flake-hello` substitutes, and what `expr-hello` builds from.
+        pinned.hello
+        unfree.hello-unfree.inputDerivation
+      ];
+  };
   phases.test = {
     script = ./ci.py;
     after = [ "boot" ];

@@ -33,8 +33,6 @@ let
   # make `build-manifests` need an aarch64 machine.
   archAudited = [
     "push"
-    "push-ci2"
-    "push-citest"
     "kubenixApply.manifestJSONFile"
     "kubenixApply.manifestYAMLFile"
     "kubenixCI1.deploymentScript"
@@ -315,28 +313,6 @@ ghalib.evalWorkflow {
           name = "Push scratch image";
           "if" = publishRef;
           run = "./nix-scratches/bin/push";
-        }
-        # Let this fail the job. The cache is load-bearing, not an
-        # optimisation: a node cannot bring itself up without nodeEnv, and a
-        # node with no local store cannot build one. A push that silently does
-        # nothing shows up days later as a pod stuck in ContainerCreating,
-        # nowhere near this line.
-        #
-        # A fork has no token and cannot push. That case is skipped by name
-        # here, rather than by discarding every error including the real ones.
-        {
-          name = "Push nocache variant store paths";
-          "if" = "env.CACHIX_AUTH_TOKEN != ''";
-          run = "nix run --file . push-ci2";
-        }
-        # The test workloads, for the same reason and with the same exception.
-        # `env-ssl` runs a derivation built on this runner, and a node cannot
-        # fetch what nothing published: it failed with "don't know how to
-        # build these paths: ...-printer" on every kind run. See issue #30.
-        {
-          name = "Push test workload store paths";
-          "if" = "env.CACHIX_AUTH_TOKEN != ''";
-          run = "nix run --file . push-citest";
         }
       ];
     };

@@ -17,14 +17,13 @@
 #            that is already there.
 #
 #   store    The node's Nix store is a directory of its own that the init
-#            container fills by *substituting* into it, and there is no
-#            binary cache to substitute from. So the guest fills it first:
-#            its own /nix/store is the sandbox's, over hostfs, and
-#            `nixkube-seed-store` copies what nixkube needs one directory
-#            across before kubelet starts. The init container then finds
-#            the paths already valid and copies nothing.
-{ lib, ... }:
+#            container fills by *substituting* into it. The one binary
+#            cache is the run's cache guest, and every role names it and
+#            nothing else.
+{ lib, sources, ... }:
 let
+  cache = import (sources.vivarium + "/modules/recipes/cache-facts.nix");
+
   # Every container in an object, whether it runs first or not.
   pullNever =
     object:
@@ -163,38 +162,38 @@ in
       has an ordinary directory here and never meets this, so the test was
       the only thing that did -- and it was hiding half of NRI.
 
-      The cost is a copy: this directory is not the guest's store, so
-      something has to fill it. `nixkube-seed-store` in ./default.nix does,
-      before kubelet starts, from the guest's own store on the same disk.
-      Measured at about 40 seconds, against `kubeadm init` taking longer --
-      so it costs nothing in wall clock, and nothing is fetched.
+      This directory is not the guest's store, so the init container fills
+      it from the cache guest, as on a real node.
     */
     hostMountPath = "/nixkube";
 
     /*
-      No substituters at all, for every role. Each role's list has its own
-      default of cache.nixos.org and a list concatenates, so the top-level
-      `nixkube.nixConfig` cannot empty it; only `mkForce` on the role does.
+      The run's cache guest and nothing else, for every role
+      (`vivarium.recipes.cache` in ./default.nix). Each role's list has its
+      own default of cache.nixos.org and a list concatenates, so the
+      top-level `nixkube.nixConfig` cannot replace it; only `mkForce` on the
+      role does.
 
-      Nothing needs one: `nixkube-seed-store` in ./default.nix copies
-      everything this node will be asked for into its store before kubelet
-      starts, so the init container finds the paths already valid.
-
-      An unreachable substituter is worse than none. kubenix/ci lists
-      cachix and cache.nixos.org, and each miss against those costs four
-      HTTP retries and a DNS timeout against a resolver a build sandbox
-      cannot reach -- which reads as a hang. Empty means a genuine miss
-      fails at once and says which path:
+      An unreachable substituter is worse than none: each miss against
+      cachix or cache.nixos.org costs four HTTP retries and a DNS timeout
+      against a resolver a build sandbox cannot reach, which reads as a
+      hang. Measured, pynixd-0 spent 90s in Init that way. With the cache
+      guest alone, a path the run did not list fails at once and names it:
 
           error: path '...-nodeEnv' is required, but there is no
           substituter that can build it
-
-      The node alone was not enough. pynixd's appstarter-init reads the
-      controller's nix.conf, and each unreachable cache there cost five
-      retries and a DNS failure: measured, pynixd-0 spent 90s in Init.
     */
-    node.nixConfig.settings.substituters = lib.mkForce [ ];
-    pynixd.controller.nixConfig.settings.substituters = lib.mkForce [ ];
-    pynixd.builder.nixConfig.settings.substituters = lib.mkForce [ ];
+    node.nixConfig.settings = {
+      substituters = lib.mkForce [ cache.url ];
+      trusted-public-keys = [ cache.trustedPublicKey ];
+    };
+    pynixd.controller.nixConfig.settings = {
+      substituters = lib.mkForce [ cache.url ];
+      trusted-public-keys = [ cache.trustedPublicKey ];
+    };
+    pynixd.builder.nixConfig.settings = {
+      substituters = lib.mkForce [ cache.url ];
+      trusted-public-keys = [ cache.trustedPublicKey ];
+    };
   };
 }

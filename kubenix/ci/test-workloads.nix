@@ -8,6 +8,7 @@
 }:
 let
   system = pkgs.stdenv.hostPlatform.system;
+  pin = import ./nixpkgs-pin.nix;
   namespace = "nixkube";
   labels = {
     "app.kubernetes.io/managed-by" = "nix";
@@ -47,7 +48,7 @@ in
         volumes = lib.mkNamedList {
           nixkube.csi = {
             driver = "nixkube";
-            volumeAttributes.flakeRef = "github:nixos/nixpkgs/nixos-unstable#hello";
+            volumeAttributes.flakeRef = "${pin.flakeRef}#hello";
           };
         };
       };
@@ -75,23 +76,17 @@ in
           nixkube.csi = {
             driver = "nixkube";
             readOnly = true;
-            # Pinned by `rev`, not floating on `nixos-unstable`.
-            #
-            # The node evaluates this string and builds the result, so without
-            # a rev the test asks for whatever nixos-unstable is that morning.
-            # It then fails for reasons that have nothing to do with nixkube,
-            # and it cannot fail the same way twice.
-            #
-            # This is the revision the umbrella pins, so a node that has built
-            # anything else of ours already holds most of the closure.
+            # The revision of ./nixpkgs-pin.nix. The guest test's cache guest
+            # holds what building this needs, and not the result, so the node
+            # still builds it.
             volumeAttributes.nixExpr = # nix
               ''
                 let
                   nixpkgs = builtins.fetchTree {
                     type = "github";
-                    owner = "nixos";
-                    repo = "nixpkgs";
-                    rev = "07e1d92cdc0ed416cfa11ff3ca40d17e61cfba7a";
+                    owner = "${pin.owner}";
+                    repo = "${pin.repo}";
+                    rev = "${pin.rev}";
                   };
                   pkgs = import nixpkgs { config = { allowUnfree = true; }; };
                 in

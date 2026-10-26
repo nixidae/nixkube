@@ -58,35 +58,13 @@ rec {
     ];
     two = [
       ./kubenix/ci
-      (
-        { config, pkgs, ... }:
-        {
-          kluctl.preDeployScript = # bash
-            ''
-              export PATH=${lib.makeBinPath [ pkgs.cachix ]}:$PATH
-              cachix push nixkube ${config.internal.manifestJSONFile}
-            '';
-          nixkube.pynixd.enable = false;
-          # Keeping string context on the DaemonSet's store paths makes them
-          # part of the manifest's closure. The NixOS test VM then has every
-          # path in /nix/store, where nix-serve makes them available as a
-          # substituter for nixkube's separate /var/lib/nix-csi store.
-          nixkube.discardStringContext = false;
-          nixkube.systems = {
-            x86_64-linux = true;
-            aarch64-linux = false;
-          };
-          # 10.113.37.1 is the PTP CNI gateway — the host-side veth IP
-          # reachable from all pods. nix-serve runs there during the NixOS
-          # test, and only there, which is why this is here rather than in
-          # ./kubenix/ci beside the substituters every variant shares.
-          nixkube.node.nixConfig.settings.substituters = [
-            "https://nixkube.cachix.org"
-            "https://cache.nixos.org"
-            "http://10.113.37.1:5000?trusted=1"
-          ];
-        }
-      )
+      {
+        nixkube.pynixd.enable = false;
+        nixkube.systems = {
+          x86_64-linux = true;
+          aarch64-linux = false;
+        };
+      }
     ];
   };
 
@@ -236,50 +214,6 @@ rec {
         # its build-time outputs went to cachix over months of runs and were
         # skipped. See issue #21.
         nix-store -qR ${kubenixPush.deploymentScript} | cachix push nixkube
-      '';
-
-  # Push kubenixCI2 (nocache variant) store paths to cachix.
-  # Run separately since CI2 is x86_64-only (cannot be in the main push script
-  # which also runs on ARM runners).
-  push-ci2 =
-    pkgs.writeScriptBin "push-ci2" # bash
-      ''
-        #! ${pkgs.runtimeShell}
-        export PATH=${lib.makeBinPath [ pkgs.cachix ]}:$PATH
-        set -euo pipefail
-        # No 2>/dev/null on either command. Both wrote the reason a push failed
-        # to stderr, and both threw it away. See issue #12.
-        # The runtime closure, for the reason given on `push` above.
-        OUT=$(nix build --no-link --print-out-paths --file ${builtins.toString ./.} kubenixCI2.deploymentScript)
-        nix-store -qR "$OUT" | cachix push nixkube
-      '';
-
-  # Push the test workloads' store paths to cachix.
-  #
-  # The workloads are not all substitutable by accident. `env-ssl` runs a
-  # `writeShellApplication` built on the runner, and the node discovers it
-  # from the container's `command` because that volume carries no
-  # `volumeAttributes`. Nothing published it, so the node asked for a path
-  # that existed in one store on earth:
-  #
-  #   don't know how to build these paths:
-  #     /nix/store/2imfy8cd7s3cxv4swmh3xx3izwchglbf-printer
-  #
-  # The manifest and not the deployment script, and it has to be the
-  # manifest: `kubenixCITest` sets `nixkube.enable = false`, so the discard
-  # transformer never runs and the manifest keeps the string context that
-  # makes these paths part of its closure. 29 paths, `printer` among them.
-  #
-  # See issue #30.
-  push-citest =
-    pkgs.writeScriptBin "push-citest" # bash
-      ''
-        #! ${pkgs.runtimeShell}
-        export PATH=${lib.makeBinPath [ pkgs.cachix ]}:$PATH
-        set -euo pipefail
-        # No 2>/dev/null, for the reason given on `push-ci2`.
-        OUT=$(nix build --no-link --print-out-paths --file ${builtins.toString ./.} kubenixCITest.config.internal.manifestJSONFile)
-        nix-store -qR "$OUT" | cachix push nixkube
       '';
 
   # Push environments for both x86_64-linux and aarch64-linux to cachix.
