@@ -5,6 +5,12 @@
   selected NixOS node runs, and the controller that switches the nodes one at
   a time through Jobs made from the `nixkube-nixos-host` PodTemplate.
 
+  A rollout names either `systems`, prebuilt toplevels by node, or a
+  `source`: a git URL, a rev and an attribute, a function
+  `{ name, labels, system }: <NixOS system>`. The controller evaluates a
+  source once per node and builds it through pynixd, and the switch Job
+  copies the result from pynixd into the host's store.
+
   The controller has a ServiceAccount of its own: it may create privileged
   pods in this namespace, and the node DaemonSet must not.
 */
@@ -68,6 +74,8 @@ let
     };
   };
   nodePhases = [
+    "Building"
+    "BuildFailed"
     "Pending"
     "Conflict"
     "Switching"
@@ -118,9 +126,10 @@ let
             properties = {
               spec = {
                 type = "object";
-                required = [
-                  "nodeSelector"
-                  "systems"
+                required = [ "nodeSelector" ];
+                oneOf = [
+                  { required = [ "systems" ]; }
+                  { required = [ "source" ]; }
                 ];
                 properties = {
                   nodeSelector = labelSelector;
@@ -128,6 +137,32 @@ let
                     description = "The toplevel each selected node runs, by node name.";
                     type = "object";
                     additionalProperties = storePath;
+                  };
+                  source = {
+                    description = "A git repository whose attribute is a function `{ name, labels, system }: <NixOS system>`, evaluated once per selected node.";
+                    type = "object";
+                    required = [
+                      "url"
+                      "rev"
+                    ];
+                    properties = {
+                      url = str;
+                      rev = {
+                        type = "string";
+                        pattern = "^[0-9a-f]{40}$";
+                      };
+                      attribute = {
+                        description = "A dot-separated attribute path in the repository's default.nix; empty is the file itself.";
+                        type = "string";
+                        default = "";
+                      };
+                      secretRef = {
+                        description = "A Secret in the controller's namespace for the fetch: kubernetes.io/ssh-auth (ssh-privatekey, known_hosts) or kubernetes.io/basic-auth.";
+                        type = "object";
+                        required = [ "name" ];
+                        properties.name = str;
+                      };
+                    };
                   };
                   maxUnavailable = {
                     type = "integer";
@@ -288,6 +323,16 @@ in
               "list"
             ];
           }
+          # The fetch credentials a rollout's `source.secretRef` names. kr8s
+          # gets by name with a list, as above.
+          {
+            apiGroups = [ "" ];
+            resources = [ "secrets" ];
+            verbs = [
+              "get"
+              "list"
+            ];
+          }
           # A failed Job's log goes into the node's status message.
           {
             apiGroups = [ "" ];
@@ -329,16 +374,41 @@ in
                 controller = {
                   image = cfg.images.nix;
                   inherit (cfg) imagePullPolicy;
-                  command = [ "nixkube-nixos-rollout" ];
+                  command = [ "nixkube-rollout-controller" ];
                   env = lib.mkNamedList {
                     NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
                     REVERT_DELAY.value = toString cfg.nixosHost.revertDelay;
                     RESYNC_SECONDS.value = toString cfg.nixosHost.resyncSeconds;
+                    JOB_TTL_SECONDS.value = toString cfg.nixosHost.jobTTLSeconds;
+                    PYNIXD_STORE.value = "ssh-ng://nix@pynixd";
                   };
                   resources.requests = {
                     memory = "64Mi";
                     cpu = "10m";
                   };
+                  # A source rollout evaluates here and builds through
+                  # pynixd, as a node does.
+                  volumeMounts = lib.mkNamedList {
+                    nix-config.mountPath = "/etc/nix";
+                    ssh-config.mountPath = "/etc/ssh";
+                    ssh-dynauth.mountPath = "/etc/ssh-dynauth";
+                    ssh-key.mountPath = "/etc/ssh-key";
+                  };
+                };
+              };
+              volumes = lib.mkNamedList {
+                nix-config.configMap.name = "nix-node";
+                ssh-config.configMap = {
+                  name = "ssh-config";
+                  defaultMode = 292; # 444
+                };
+                ssh-dynauth.configMap = {
+                  name = "ssh-dynauth";
+                  defaultMode = 292; # 444
+                };
+                ssh-key.secret = {
+                  secretName = "ssh-key";
+                  defaultMode = 256; # 400
                 };
               };
             };

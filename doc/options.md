@@ -931,6 +931,31 @@ false
 
 
 
+## nixkube\.nixosHost\.jobTTLSeconds
+
+
+
+Seconds a finished switch, disarm or revert Job stays, with its pod
+and log, before Kubernetes deletes it\.
+
+
+
+*Type:*
+positive integer, meaning >0
+
+
+
+*Default:*
+
+```nix
+86400
+```
+
+*Declared by:*
+ - [/kubenix/options\.nix](file:///kubenix/options.nix)
+
+
+
 ## nixkube\.nixosHost\.resyncSeconds
 
 

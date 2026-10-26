@@ -11,32 +11,45 @@ A node goes Pending, Switching (the switch Job runs), Confirming (wait for a
 kubelet Lease renewal and Ready), Disarming (the disarm Job runs), Done. A
 switch that fails or is not confirmed in time is Reverted: the node is
 cordoned and the rollout halts until its spec changes.
+
+A rollout with a `source` first builds each node's system (Building). No
+node switches until every build is done, so a bad source halts the rollout
+(BuildFailed) before it touches a host. Builds live in memory, keyed by
+generation: a restarted controller builds again, and pynixd answers from
+its store.
 """
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import copy
 import hashlib
+import json
 import os
+import shlex
+import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 import anyio
 import structlog
 from kr8s import NotFoundError, ServerError
-from kr8s.asyncio.objects import Job, Node, Pod, PodTemplate, new_class
+from kr8s.asyncio.objects import Job, Node, Pod, PodTemplate, Secret, new_class
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from anyio.abc import TaskGroup
 
 logger = structlog.get_logger("nixkube.nixos_rollout")
 
 GROUP: Final = "nixkube.nixidae.org"
 VERSION: Final = f"{GROUP}/v1alpha1"
 TEMPLATE: Final = "nixkube-nixos-host"
-JOB_TTL_SECONDS: Final = 86400
 
 NixOSRollout = new_class(
     "NixOSRollout", version=VERSION, namespaced=False, plural="nixosrollouts"
@@ -52,6 +65,8 @@ class Phase(StrEnum):
 
 
 class NodePhase(StrEnum):
+    BUILDING = "Building"
+    BUILD_FAILED = "BuildFailed"
     PENDING = "Pending"
     CONFLICT = "Conflict"
     SWITCHING = "Switching"
@@ -152,11 +167,137 @@ def plan(
 
 def rollout_phase(entries: Mapping[str, Mapping[str, Any]]) -> Phase:
     phases = {e.get("phase") for e in entries.values()}
-    if NodePhase.REVERTED in phases:
+    if phases & {NodePhase.REVERTED, NodePhase.BUILD_FAILED}:
         return Phase.HALTED
     if phases <= {NodePhase.DONE}:
         return Phase.COMPLETE
     return Phase.PROGRESSING
+
+
+ARCH_SYSTEMS: Final = {"amd64": "x86_64-linux", "arm64": "aarch64-linux"}
+
+# Every value arrives with --argstr, so nothing from the CR is spliced into
+# Nix source. `allRefs`: a rev on any branch, not only the default one.
+BUILD_EXPR: Final = r"""
+{ url, rev, attribute, name, labels, system }:
+let
+  src = builtins.fetchGit { inherit url rev; allRefs = true; };
+  path = builtins.filter builtins.isString (builtins.split "\\." attribute);
+  f = builtins.foldl' (v: k: v.${k}) (import src) (if attribute == "" then [ ] else path);
+in
+(f { inherit name system; labels = builtins.fromJSON labels; }).config.system.build.toplevel
+"""
+
+
+def node_system(labels: Mapping[str, str]) -> str:
+    arch = labels.get("kubernetes.io/arch", "amd64")
+    return ARCH_SYSTEMS.get(arch, f"{arch}-linux")
+
+
+def build_argv(
+    source: Mapping[str, Any], node: str, labels: Mapping[str, str], store: str
+) -> list[str]:
+    """Evaluate in the pod's own store, build in pynixd's."""
+    args = {
+        "url": source["url"],
+        "rev": source["rev"],
+        "attribute": source.get("attribute", ""),
+        "name": node,
+        "labels": json.dumps(dict(labels), sort_keys=True),
+        "system": node_system(labels),
+    }
+    argv = [
+        "nix",
+        "build",
+        "--extra-experimental-features",
+        "nix-command",
+        "--no-link",
+        "--print-out-paths",
+        # `--expr` evaluates in pure mode, where a source cannot name a
+        # store path or read `builtins.currentSystem`.
+        "--impure",
+        "--eval-store",
+        "auto",
+        "--store",
+        store,
+        "--expr",
+        BUILD_EXPR,
+    ]
+    for key, value in args.items():
+        argv += ["--argstr", key, value]
+    return argv
+
+
+def git_env(kind: str, data: Mapping[str, bytes], directory: Path) -> dict[str, str]:
+    """The environment that makes git, run by Nix's fetcher, use a Secret."""
+    match kind:
+        case "kubernetes.io/ssh-auth":
+            if "known_hosts" not in data:
+                raise ValueError("an ssh-auth Secret needs a known_hosts key")
+            key, known = directory / "key", directory / "known_hosts"
+            key.write_bytes(data["ssh-privatekey"])
+            key.chmod(0o600)
+            known.write_bytes(data["known_hosts"])
+            ssh = [
+                "ssh",
+                "-i",
+                str(key),
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                f"UserKnownHostsFile={known}",
+                "-o",
+                "StrictHostKeyChecking=yes",
+            ]
+            return {"GIT_SSH_COMMAND": shlex.join(ssh)}
+        case "kubernetes.io/basic-auth":
+            token = base64.b64encode(data["username"] + b":" + data["password"])
+            return {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "http.extraHeader",
+                "GIT_CONFIG_VALUE_0": f"Authorization: Basic {token.decode()}",
+            }
+        case _:
+            raise ValueError(f"unsupported Secret type {kind!r}")
+
+
+@dataclass
+class Build:
+    """One evaluation and build. Neither field is set while it runs."""
+
+    toplevel: str | None = None
+    error: str | None = None
+
+
+def build_entries(
+    entries: Mapping[str, Any],
+    old_nodes: Mapping[str, Mapping[str, Any]],
+    open_builds: Mapping[str, Build],
+    generation: int,
+) -> dict[str, dict[str, Any]]:
+    """The entries of nodes whose build is running or failed, beside `plan`'s."""
+    out: dict[str, dict[str, Any]] = {}
+    for node, build in open_builds.items():
+        if node in entries:
+            continue
+        old = old_nodes.get(node) or {}
+        # A restarted controller builds again, and until the build returns, a
+        # node settled at this generation must stay as it was: a Reverted node
+        # that turned Building would be switched again, cordoned or not.
+        if (
+            old.get("phase") in (NodePhase.DONE, NodePhase.REVERTED)
+            and old.get("generation", 0) >= generation
+        ):
+            out[node] = dict(old)
+            continue
+        out[node] = {
+            k: v for k, v in old.items() if k in ("current", "failedSystem")
+        } | (
+            {"phase": NodePhase.BUILD_FAILED, "message": build.error}
+            if build.error
+            else {"phase": NodePhase.BUILDING}
+        )
+    return out
 
 
 def now() -> datetime:
@@ -186,19 +327,106 @@ def node_ready(node: Any) -> bool:
 
 
 class Controller:
-    def __init__(self, namespace: str, revert_delay: int, resync: float) -> None:
+    def __init__(
+        self,
+        namespace: str,
+        revert_delay: int,
+        resync: float,
+        store: str,
+        job_ttl: int,
+    ) -> None:
         self.namespace = namespace
+        self.job_ttl = job_ttl
         self.revert_delay = revert_delay
         self.resync = resync
+        self.store = store
+        self.builds: dict[tuple[str, int, str], Build] = {}
+        # One at a time: evaluating a NixOS system takes about 850 MB.
+        self.build_limit = anyio.CapacityLimiter(1)
+        self.tasks: TaskGroup | None = None
 
     async def run(self) -> None:
         logger.info("started", namespace=self.namespace, revert_delay=self.revert_delay)
-        while True:
+        async with anyio.create_task_group() as tasks:
+            self.tasks = tasks
+            while True:
+                try:
+                    await self.reconcile_all()
+                except Exception:
+                    logger.warning("reconcile_failed", exc_info=True)
+                await anyio.sleep(self.resync)
+
+    def systems_from_source(
+        self,
+        rollout: Any,
+        generation: int,
+        selected: list[str],
+        nodes: Mapping[str, Any],
+    ) -> tuple[dict[str, str], dict[str, Build]]:
+        """The toplevels built so far, and the builds still running or failed."""
+        uid = rollout.raw["metadata"]["uid"]
+        for key in [k for k in self.builds if k[0] == uid and k[1] < generation]:
+            del self.builds[key]
+        built: dict[str, str] = {}
+        open_: dict[str, Build] = {}
+        for node in selected:
+            key = (uid, generation, node)
+            build = self.builds.get(key)
+            if build is None:
+                build = self.builds[key] = Build()
+                assert self.tasks is not None
+                self.tasks.start_soon(
+                    self.build,
+                    build,
+                    rollout.name,
+                    rollout.raw["spec"]["source"],
+                    node,
+                    dict(nodes[node].labels),
+                )
+            if build.toplevel:
+                built[node] = build.toplevel
+            else:
+                open_[node] = build
+        return built, open_
+
+    async def build(
+        self,
+        build: Build,
+        rollout: str,
+        source: Mapping[str, Any],
+        node: str,
+        labels: Mapping[str, str],
+    ) -> None:
+        log = logger.bind(rollout=rollout, node=node, rev=source["rev"])
+        async with self.build_limit:
+            log.info("build_started")
             try:
-                await self.reconcile_all()
-            except Exception:
-                logger.warning("reconcile_failed", exc_info=True)
-            await anyio.sleep(self.resync)
+                with tempfile.TemporaryDirectory() as tmp:
+                    env = dict(os.environ)
+                    if ref := source.get("secretRef"):
+                        secret = await Secret.get(ref["name"], namespace=self.namespace)
+                        data = {
+                            k: base64.b64decode(v)
+                            for k, v in (secret.raw.get("data") or {}).items()
+                        }
+                        env |= git_env(secret.raw.get("type", ""), data, Path(tmp))
+                    result = await anyio.run_process(
+                        build_argv(source, node, labels, self.store),
+                        env=env,
+                        check=False,
+                    )
+                out = result.stdout.decode().split()
+                if result.returncode != 0 or not out:
+                    build.error = result.stderr.decode()[-1000:] or "no output"
+                    log.warning("build_failed", returncode=result.returncode)
+                    return
+                build.toplevel = out[-1]
+                log.info("build_done", toplevel=build.toplevel)
+            # This runs in the controller's task group: an exception that
+            # escaped would cancel the reconcile loop.
+            except Exception as e:
+                build.error = f"{type(e).__name__}: {e}"
+                log.warning("build_failed", exc_info=True)
 
     async def reconcile_all(self) -> None:
         rollouts = [r async for r in NixOSRollout.list() if isinstance(r, NixOSRollout)]
@@ -233,12 +461,21 @@ class Controller:
         spec = rollout.raw["spec"]
         status = rollout.raw.get("status") or {}
         generation = rollout.raw["metadata"]["generation"]
-        systems = spec.get("systems") or {}
         confirm_timeout = spec.get("confirmTimeout", 300)
         max_unavailable = spec.get("maxUnavailable", 1)
+        open_builds: dict[str, Build] = {}
+        if "source" in spec:
+            systems, open_builds = self.systems_from_source(
+                rollout, generation, selected, nodes
+            )
+        else:
+            systems = spec.get("systems") or {}
 
         entries = plan(
             status.get("nodes") or {}, systems, selected, conflicts, generation
+        )
+        entries |= build_entries(
+            entries, status.get("nodes") or {}, open_builds, generation
         )
         for node, entry in entries.items():
             if entry["phase"] in IN_FLIGHT:
@@ -247,7 +484,7 @@ class Controller:
         message = ""
         if confirm_timeout >= self.revert_delay:
             message = f"confirmTimeout {confirm_timeout} must be less than the revert delay {self.revert_delay}"
-        unmanaged = sorted(set(selected) - set(systems))
+        unmanaged = sorted(set(selected) - set(systems) - set(open_builds))
         if unmanaged:
             message = (
                 (message + "; " if message else "")
@@ -260,13 +497,15 @@ class Controller:
             not halted
             and not spec.get("paused")
             and confirm_timeout < self.revert_delay
+            and not open_builds
         )
+        fetch_from = self.store if "source" in spec else ""
         in_flight = sum(e["phase"] in IN_FLIGHT for e in entries.values())
         for node, entry in sorted(entries.items()):
             if not startable or in_flight >= max_unavailable:
                 break
             if entry["phase"] == NodePhase.PENDING:
-                await self.start_switch(rollout, node, entry, generation)
+                await self.start_switch(rollout, node, entry, generation, fetch_from)
                 in_flight += 1
 
         phase = rollout_phase(entries)
@@ -289,10 +528,17 @@ class Controller:
                 logger.info("rollout_phase", rollout=rollout.name, phase=phase)
 
     async def start_switch(
-        self, rollout: Any, node: str, entry: dict[str, Any], generation: int
+        self,
+        rollout: Any,
+        node: str,
+        entry: dict[str, Any],
+        generation: int,
+        fetch_from: str,
     ) -> None:
         name = job_name(rollout.name, node, Action.SWITCH, entry["target"], generation)
-        await self.create_job(rollout, node, Action.SWITCH, name, entry["target"])
+        await self.create_job(
+            rollout, node, Action.SWITCH, name, entry["target"], fetch_from=fetch_from
+        )
         entry.update(
             phase=NodePhase.SWITCHING,
             job=name,
@@ -408,16 +654,18 @@ class Controller:
         name: str,
         target: str,
         deadline: int | None = None,
+        fetch_from: str = "",
     ) -> None:
         template = await PodTemplate.get(TEMPLATE, namespace=self.namespace)
         pod = copy.deepcopy(template.raw["template"])
         pod["spec"]["nodeName"] = node
-        for container in pod["spec"]["containers"]:
+        values = {"ACTION": str(action), "TOPLEVEL": target, "FETCH_FROM": fetch_from}
+        for container in (
+            pod["spec"].get("initContainers", []) + pod["spec"]["containers"]
+        ):
             for env in container.get("env") or []:
-                if env["name"] == "ACTION":
-                    env["value"] = str(action)
-                elif env["name"] == "TOPLEVEL":
-                    env["value"] = target
+                if env["name"] in values:
+                    env["value"] = values[env["name"]]
         labels = {
             f"{GROUP}/rollout": rollout.name,
             f"{GROUP}/node": node,
@@ -443,8 +691,9 @@ class Controller:
                     ],
                 },
                 "spec": {
+                    # A retry would switch the host a second time.
                     "backoffLimit": 0,
-                    "ttlSecondsAfterFinished": JOB_TTL_SECONDS,
+                    "ttlSecondsAfterFinished": self.job_ttl,
                     "template": pod,
                 }
                 | ({"activeDeadlineSeconds": deadline} if deadline else {}),
@@ -502,5 +751,7 @@ def main() -> None:
         namespace=os.environ["NAMESPACE"],
         revert_delay=int(os.environ["REVERT_DELAY"]),
         resync=float(os.environ["RESYNC_SECONDS"]),
+        store=os.environ.get("PYNIXD_STORE", "ssh-ng://nix@pynixd"),
+        job_ttl=int(os.environ["JOB_TTL_SECONDS"]),
     )
     anyio.run(controller.run, backend="asyncio")

@@ -1,9 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+from pathlib import Path
+
+import pytest
+
 from src.nixos_rollout import (
     Action,
+    Build,
     NodePhase,
     Phase,
+    build_argv,
+    build_entries,
+    git_env,
     job_name,
     plan,
     rollout_phase,
@@ -86,3 +95,82 @@ def test_rollout_phase():
         rollout_phase({"a": {"phase": "Reverted"}, "b": {"phase": "Switching"}})
         == Phase.HALTED
     )
+
+
+def test_build_failure_halts():
+    assert rollout_phase({"a": {"phase": NodePhase.BUILD_FAILED}}) == Phase.HALTED
+    assert rollout_phase({"a": {"phase": NodePhase.BUILDING}}) == Phase.PROGRESSING
+
+
+def test_build_argv_passes_every_value_as_a_string():
+    labels = {"kubernetes.io/arch": "arm64", "role": "worker"}
+    argv = build_argv(
+        {"url": "https://x/y.git", "rev": "a" * 40, "attribute": "hosts.all"},
+        "n1",
+        labels,
+        "ssh-ng://nix@pynixd",
+    )
+    args = {argv[i + 1]: argv[i + 2] for i, a in enumerate(argv) if a == "--argstr"}
+    assert args == {
+        "url": "https://x/y.git",
+        "rev": "a" * 40,
+        "attribute": "hosts.all",
+        "name": "n1",
+        "labels": json.dumps(labels, sort_keys=True),
+        "system": "aarch64-linux",
+    }
+    assert argv[argv.index("--store") + 1] == "ssh-ng://nix@pynixd"
+    assert argv[argv.index("--eval-store") + 1] == "auto"
+    assert "--impure" in argv
+
+
+def test_git_env_basic_auth():
+    env = git_env(
+        "kubernetes.io/basic-auth", {"username": b"u", "password": b"p"}, Path("/x")
+    )
+    assert env["GIT_CONFIG_KEY_0"] == "http.extraHeader"
+    assert env["GIT_CONFIG_VALUE_0"] == "Authorization: Basic dTpw"
+
+
+def test_git_env_ssh_needs_known_hosts(tmp_path):
+    with pytest.raises(ValueError, match="known_hosts"):
+        git_env("kubernetes.io/ssh-auth", {"ssh-privatekey": b"k"}, tmp_path)
+    env = git_env(
+        "kubernetes.io/ssh-auth",
+        {"ssh-privatekey": b"k", "known_hosts": b"h"},
+        tmp_path,
+    )
+    assert (tmp_path / "key").stat().st_mode & 0o777 == 0o600
+    assert "StrictHostKeyChecking=yes" in env["GIT_SSH_COMMAND"]
+
+
+def test_git_env_refuses_other_types(tmp_path):
+    with pytest.raises(ValueError, match="unsupported"):
+        git_env("Opaque", {}, tmp_path)
+
+
+def test_a_restart_keeps_a_reverted_node_while_it_builds():
+    reverted = {"phase": NodePhase.REVERTED, "target": A, "generation": 2}
+    old = {"a": reverted}
+    entries = plan(old, {}, ["a"], set(), 2)
+    entries |= build_entries(entries, old, {"a": Build()}, 2)
+    assert entries["a"] == reverted
+    # The build returns the system that failed: still Reverted.
+    assert plan(entries, {"a": A}, ["a"], set(), 2)["a"] == reverted
+
+
+def test_a_restart_keeps_a_done_node_while_it_builds():
+    done = {"phase": NodePhase.DONE, "target": A, "current": A, "generation": 2}
+    assert build_entries({}, {"a": done}, {"a": Build()}, 2)["a"] == done
+
+
+def test_a_new_generation_builds_and_a_failed_build_halts():
+    old = {"a": {"phase": NodePhase.REVERTED, "target": A, "generation": 1}}
+    building = build_entries({}, old, {"a": Build()}, 2)
+    assert building["a"]["phase"] == NodePhase.BUILDING
+    done = {"a": {"phase": NodePhase.DONE, "target": A, "current": A, "generation": 1}}
+    building = build_entries({}, done, {"a": Build()}, 2)
+    assert building["a"] == {"phase": NodePhase.BUILDING, "current": A}
+    failed = build_entries({}, old, {"a": Build(error="boom")}, 2)
+    assert failed["a"]["phase"] == NodePhase.BUILD_FAILED
+    assert rollout_phase(failed) == Phase.HALTED

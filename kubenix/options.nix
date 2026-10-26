@@ -212,6 +212,15 @@ in
       default = 5;
     };
 
+    nixosHost.jobTTLSeconds = lib.mkOption {
+      description = ''
+        Seconds a finished switch, disarm or revert Job stays, with its pod
+        and log, before Kubernetes deletes it.
+      '';
+      type = lib.types.ints.positive;
+      default = 86400;
+    };
+
     nri.composefs = lib.mkOption {
       description = ''
         Give an NRI container its /nix as one composefs mount where the node's
