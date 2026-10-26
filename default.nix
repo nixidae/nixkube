@@ -1196,11 +1196,18 @@ rec {
     let
       cell =
         backend: cri: kata:
-        lib.nameValuePair "${backend}-${cri}${lib.optionalString kata "-kata"}" (
+        let
+          name = "${backend}-${cri}${lib.optionalString kata "-kata"}";
+        in
+        lib.nameValuePair name (
           pkgs.callPackage ./nix/uml {
             inherit sources umlImages;
             manifest = umlManifest;
             matrixCell = { inherit backend cri kata; };
+            attrPath = [
+              "umlMatrix"
+              name
+            ];
           }
         );
     in
@@ -1232,6 +1239,10 @@ rec {
             inherit cri;
             kata = false;
           };
+          attrPath = [
+            "umlMatrix"
+            "uml-${cri}-hoststore"
+          ];
         }
       )
     )
@@ -1247,6 +1258,10 @@ rec {
           kata = false;
           erofs = false;
         };
+        attrPath = [
+          "umlMatrix"
+          "qemu-containerd-noerofs"
+        ];
       };
 
       # CSI volumes as hardlink trees, which every node whose kernel fails
@@ -1266,6 +1281,10 @@ rec {
           cri = "containerd";
           kata = false;
         };
+        attrPath = [
+          "umlMatrix"
+          "uml-containerd-hardlinks"
+        ];
       };
     };
 

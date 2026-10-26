@@ -35,6 +35,9 @@
     kernel builds EROFS in.
   */
   matrixCell ? null,
+  # Where ../../default.nix keeps this run. The source rollout's repository
+  # evaluates the same run, from there.
+  attrPath ? [ "umlTest" ],
 }:
 let
   vivarium = import (sources.vivarium + "/lib.nix") { inherit pkgs sources; };
@@ -93,7 +96,7 @@ let
 
     vivarium = {
       cpus = 4;
-      diskSize = 4096;
+      diskSize = lib.mkDefault 4096;
       lan = {
         network = "nixkube";
         address = "10.103.0.${toString index}/24";
@@ -146,15 +149,17 @@ let
         The same for both backends. vivarium issue #19 is swap, which
         would let this sit nearer the working set.
 
-        The disk stays at 4096. A runner has 14 GB of it for the store,
-        the qcow2 and everything else, and this workload has never needed
-        more.
+        The host phase's source rollout needs more, on this node: the
+        controller evaluates both systems, and pynixd and a builder each
+        hold the inputs of their toplevels. The builder mounts its store
+        through the node DaemonSet, which runs here only.
 
         No `nixDatabase` here. `mkTest` registers the closure of everything
         in `settings`, which the phases read on the node: the manifest and
         both probes. What the node runs it fetches from the cache guest.
       */
-      memory = "2200M";
+      memory = "4096M";
+      diskSize = 10240;
     };
   };
 
@@ -184,6 +189,10 @@ let
         extra
       ];
     }).config.system.build.toplevel;
+
+  # The system the source rollout builds: no cache has it.
+  hostBuilt =
+    node: (node.extendModules { modules = [ ./host-built.nix ]; }).config.system.build.toplevel;
 
   # A kubelet that starts and never renews its Lease. switch-to-configuration
   # succeeds, no pod runs afterwards, and only the host's timer reverts. A
@@ -267,6 +276,15 @@ vivarium.mkTest (
     kata = if matrixCell != null then matrixCell.kata else config.resolved.kata.value == "1";
     hostStore = manifest.config.nixkube.hostStore.enable;
     erofs = if matrixCell != null then matrixCell.erofs or true else true;
+    hostSource = import ./host-source.nix {
+      inherit
+        pkgs
+        lib
+        sources
+        attrPath
+        ;
+      knobs = lib.mapAttrs (_: knob: knob.value) config.resolved;
+    };
   in
   {
     name =
@@ -283,7 +301,12 @@ vivarium.mkTest (
           (hostNext systems.cp { })
           (hostNext systems.worker { })
           (hostBroken systems.cp)
+          hostSource.repository
+          # Every input of the toplevel, and not the toplevel.
+          (hostBuilt systems.cp).inputDerivation
+          (hostBuilt systems.worker).inputDerivation
         ]
+        ++ hostSource.roots
       );
     };
 
@@ -432,6 +455,29 @@ vivarium.mkTest (
       imports = [ workerNode ];
       services.vivarium-k8s = { inherit cri; };
     };
+    # The source rollout's git repository, over dumb HTTP.
+    nodes.cache = {
+      # pynixd substitutes the inputs of two systems, 16 NARs at a time.
+      # harmonia then holds about 250 MB, and the kernel killed it at 512M.
+      vivarium.memory = "1024M";
+      services.nginx = {
+        enable = true;
+        virtualHosts.git = {
+          listen = [
+            {
+              addr = "0.0.0.0";
+              inherit (hostSource) port;
+            }
+          ];
+          root = "${hostSource.repository}";
+          extraConfig = ''
+            auth_basic git;
+            auth_basic_user_file ${hostSource.htpasswd};
+          '';
+        };
+      };
+      networking.firewall.allowedTCPPorts = [ hostSource.port ];
+    };
 
     settings = {
       manifest = "${manifestFile}";
@@ -480,6 +526,13 @@ vivarium.mkTest (
         inherit (systems) cp worker;
       };
       hostBroken = builtins.unsafeDiscardStringContext "${hostBroken systems.cp}";
+      hostBuilt = lib.mapAttrs (_: node: builtins.unsafeDiscardStringContext "${hostBuilt node}") {
+        inherit (systems) cp worker;
+      };
+      hostSource = {
+        inherit (hostSource) url user password;
+        rev = builtins.unsafeDiscardStringContext "${hostSource.repository}/rev";
+      };
     };
   }
 )

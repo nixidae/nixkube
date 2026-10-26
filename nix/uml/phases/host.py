@@ -5,6 +5,10 @@ changes that file and nothing the cluster runs on. With `maxUnavailable: 1`
 the controller switches one node at a time, in name order: `cp`, then
 `worker`.
 
+`hostSource` is a git repository on the cache guest, behind basic auth. Its
+one file evaluates both guests plus ../host-built.nix, so the controller
+evaluates and pynixd builds systems no cache holds: `hostBuilt`.
+
 `hostBroken` also stops cp's kubelet: the switch Job cannot report, nothing
 can confirm or disarm, and only the host's armed timer brings it back. The
 controller must then halt the rollout before it starts on `worker`, mark cp
@@ -26,6 +30,10 @@ MARKER = "/etc/nixkube-host-generation"
 # Less than `nixosHost.revertDelay` in ../manifest.nix.
 CONFIRM_TIMEOUT = 8
 IN_FLIGHT = {"Switching", "Confirming", "Disarming"}
+SOURCE_SECRET = "host-source"
+# Two evaluations of 13 s each on the host, and a builder that substitutes
+# both systems' inputs.
+BUILD_TIMEOUT = 30 * 60
 
 
 async def running(vm: Machine) -> str:
@@ -48,11 +56,14 @@ async def apply(cp: Machine, obj: dict) -> None:
     await cp.succeed(f"echo {encoded} | base64 --decode | kubectl apply --filename -")
 
 
-async def roll_to(cp: Machine, systems: dict[str, str]) -> tuple[dict, list[str]]:
-    """Point the rollout at `systems` and wait until it settles.
+async def roll_to(
+    cp: Machine, systems: dict[str, str], source: dict | None = None
+) -> tuple[dict, list[str]]:
+    """Point the rollout at `systems`, or at `source`, and wait until it settles.
 
-    Returns the status and the order in which the nodes left Pending. Fails
-    as soon as two nodes are in flight at once.
+    `systems` are the targets either way. Returns the status and the order in
+    which the nodes left Pending. Fails as soon as two nodes are in flight at
+    once, or one is in flight while another builds.
     """
     await apply(
         cp,
@@ -70,7 +81,7 @@ async def roll_to(cp: Machine, systems: dict[str, str]) -> tuple[dict, list[str]
                         }
                     ]
                 },
-                "systems": systems,
+                **({"source": source} if source else {"systems": systems}),
                 "maxUnavailable": 1,
                 "confirmTimeout": CONFIRM_TIMEOUT,
             },
@@ -89,6 +100,9 @@ async def roll_to(cp: Machine, systems: dict[str, str]) -> tuple[dict, list[str]
         flying = sorted(n for n, e in nodes.items() if e.get("phase") in IN_FLIGHT)
         if len(flying) > 1:
             raise MachineError(f"[cp] {flying} are in flight at once: {status}")
+        building = [n for n, e in nodes.items() if e.get("phase") == "Building"]
+        if flying and building:
+            raise MachineError(f"[cp] {flying} switch while {building} build: {status}")
         for node in flying:
             if node not in started:
                 started.append(node)
@@ -98,12 +112,15 @@ async def roll_to(cp: Machine, systems: dict[str, str]) -> tuple[dict, list[str]
         )
         return done, json.dumps(status)
 
-    await until(f"rollout to {systems}", settled, READY_TIMEOUT, cp)
+    timeout = BUILD_TIMEOUT if source else READY_TIMEOUT
+    await until(f"rollout to {systems}", settled, timeout, cp)
     return (await get_json(cp, f"get nixosrollout {ROLLOUT}"))["status"], started
 
 
-async def switch_to(vms: dict[str, Machine], systems: dict[str, str]) -> None:
-    status, started = await roll_to(vms["cp"], systems)
+async def switch_to(
+    vms: dict[str, Machine], systems: dict[str, str], source: dict | None = None
+) -> None:
+    status, started = await roll_to(vms["cp"], systems, source)
     if status["phase"] != "Complete":
         raise MachineError(f"[cp] the rollout to {systems} ended {status}")
     for name, toplevel in systems.items():
@@ -150,9 +167,46 @@ async def test(vms: Machines) -> None:
             raise MachineError(f"[{name}] {MARKER} survived the switch back")
     print(f"[nixkube] the rollout switched both hosts back: {first}", flush=True)
 
+    await from_source(hosts, vms.cache, settings)
+    await switch_to(hosts, first)
+
     await broken_halts(hosts, first, settings["hostBroken"], after["worker"])
     await kubectl(cp, "uncordon cp")
     await kubectl(cp, f"delete nixosrollout {ROLLOUT}")
+
+
+async def from_source(
+    hosts: dict[str, Machine], cache: Machine, settings: dict
+) -> None:
+    """The controller evaluates the git source, pynixd builds, the hosts fetch."""
+    cp = hosts["cp"]
+    built: dict[str, str] = settings["hostBuilt"]
+    source = settings["hostSource"]
+    # Built here or nowhere: no guest has these, and no cache.
+    for name, vm in {**hosts, "cache": cache}.items():
+        for toplevel in built.values():
+            rc, _ = await vm.execute(f"nix-store --check-validity {toplevel}")
+            if rc == 0:
+                raise MachineError(f"[{name}] holds {toplevel} before the build")
+
+    await kubectl(
+        cp,
+        f"create secret generic {SOURCE_SECRET} --namespace {NAMESPACE}"
+        " --type kubernetes.io/basic-auth"
+        f" --from-literal username={source['user']}"
+        f" --from-literal password={source['password']}",
+    )
+    rev = (await cache.succeed(f"cat {source['rev']}")).strip()
+    await switch_to(
+        hosts,
+        built,
+        {"url": source["url"], "rev": rev, "secretRef": {"name": SOURCE_SECRET}},
+    )
+    for name, vm in hosts.items():
+        marker = (await vm.succeed(f"cat {MARKER}")).strip()
+        if marker != "built":
+            raise MachineError(f"[{name}] {MARKER} says {marker!r} after the switch")
+    print(f"[nixkube] the rollout built and switched both hosts: {built}", flush=True)
 
 
 async def broken_halts(
