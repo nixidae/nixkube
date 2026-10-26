@@ -4,10 +4,17 @@
   The pod a NixOS host switch runs in (#359). The controller makes a Job from
   this template per action and sets `nodeName`, `ACTION` and `TOPLEVEL`.
 
-  The pod brings no tools. It mounts the host's /nix and runs the host's own
-  nsenter, then the host's own nix, systemd-run and switch-to-configuration
-  in PID 1's namespaces. So the image is `scratch`, and a switch does not
-  depend on the CSI driver or the node DaemonSet.
+  The switch container brings no tools. It mounts the host's /nix and runs
+  the host's own nsenter, then the host's own nix, systemd-run and
+  switch-to-configuration in PID 1's namespaces. So its image is `scratch`,
+  and a switch does not depend on the CSI driver or the node DaemonSet.
+
+  When the controller built the toplevel, it sets `FETCH_FROM` to pynixd's
+  store. The `fetch` init container, on the nix image, then copies the
+  toplevel from pynixd into the host's store through the host's nix-daemon
+  socket, with the pod's ssh key and nix configuration. The host's nix.conf
+  need not name pynixd. Root on that socket is a trusted user, so the copy
+  needs no signature the host trusts.
 */
 {
   config,
@@ -94,6 +101,10 @@ in
       metadata.labels = labels;
       template = {
         metadata.labels = labels;
+        # `TOPLEVEL` is a store path in fetch's environment, and nixkube's NRI
+        # plugin would realise it on the node before the container starts:
+        # the path fetch exists to bring.
+        metadata.annotations."nixkube/fetch-exclude" = "true";
         spec = {
           restartPolicy = "Never";
           hostPID = true;
@@ -101,6 +112,29 @@ in
           # `nodeName` skips the scheduler, so a cordon does not stop the
           # pod; a NoExecute taint still would.
           tolerations = [ { operator = "Exists"; } ];
+          initContainers = lib.mkNamedList {
+            fetch = {
+              image = cfg.images.nix;
+              inherit (cfg) imagePullPolicy;
+              command = [ "nixkube-host-fetch" ];
+              env = lib.mkNamedList {
+                ACTION.value = "switch";
+                TOPLEVEL.value = "";
+                FETCH_FROM.value = "";
+              };
+              volumeMounts = lib.mkNamedList {
+                # Read-only: the host's daemon writes the paths.
+                host-nix = {
+                  mountPath = "/host/nix";
+                  readOnly = true;
+                };
+                nix-config.mountPath = "/etc/nix";
+                ssh-config.mountPath = "/etc/ssh";
+                ssh-dynauth.mountPath = "/etc/ssh-dynauth";
+                ssh-key.mountPath = "/etc/ssh-key";
+              };
+            };
+          };
           containers = lib.mkNamedList {
             switch = {
               image = cfg.images.scratch;
@@ -136,6 +170,19 @@ in
             host-nix.hostPath = {
               path = "/nix";
               type = "Directory";
+            };
+            nix-config.configMap.name = "nix-node";
+            ssh-config.configMap = {
+              name = "ssh-config";
+              defaultMode = 292; # 444
+            };
+            ssh-dynauth.configMap = {
+              name = "ssh-dynauth";
+              defaultMode = 292; # 444
+            };
+            ssh-key.secret = {
+              secretName = "ssh-key";
+              defaultMode = 256; # 400
             };
           };
         };
