@@ -64,6 +64,42 @@ rec {
           '';
       };
 
+      # The image's PATH has no nix: the node and pynixd get theirs from the
+      # environment appstarter starts. These two run without appstarter and
+      # bring nix, git and ssh along. ssh exits when its user has no passwd
+      # entry, so each installs the fake NSS files first.
+
+      # The NixOSRollout controller, which evaluates and builds sources.
+      rollout-controller = sysPkgs.writeShellApplication {
+        name = "nixkube-rollout-controller";
+        inherit runtimeInputs;
+        text = ''
+          mkdir -p /tmp
+          rsync --archive ${fakeNss}/ /
+          exec ${sysPkgs.nixkube}/bin/nixkube-nixos-rollout "$@"
+        '';
+      };
+
+      # The switch Job's `fetch` init container: the toplevel the controller
+      # built, from pynixd into the host's store through the host's daemon.
+      # The host's /nix is mounted at /host/nix, and `root` says so, for the
+      # reads a unix:// store makes from the local filesystem.
+      host-fetch = sysPkgs.writeShellApplication {
+        name = "nixkube-host-fetch";
+        inherit runtimeInputs;
+        text = ''
+          if [ "''${ACTION:-}" != switch ] || [ -z "''${FETCH_FROM:-}" ]; then
+            exit 0
+          fi
+          mkdir -p /tmp
+          rsync --archive ${fakeNss}/ /
+          exec nix --extra-experimental-features nix-command copy --no-check-sigs \
+            --from "$FETCH_FROM" \
+            --to "unix:///host/nix/var/nix/daemon-socket/socket?root=/host" \
+            "$TOPLEVEL"
+        '';
+      };
+
       n2c = (import sources.nix2container { pkgs = sysPkgs; }).nix2container;
 
       policy = import ./nix/image-layers.nix {
@@ -149,6 +185,8 @@ rec {
             lib.makeBinPath [
               sysPkgs.appstarter
               init-secrets
+              rollout-controller
+              host-fetch
               # `nixkube-host-check`, the first init container when
               # `nixkube.hostStore.enable` is on.
               sysPkgs.nixkube
