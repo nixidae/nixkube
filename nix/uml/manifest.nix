@@ -45,9 +45,42 @@ let
       lib.recursiveUpdate object { template.spec = fix object.template.spec; }
     else
       object;
+
+  # The chaos phase waits for a restart after it deletes the CSI socket:
+  # 30 s initial delay plus 5 x 10 s by default. 3 x 2 s here.
+  fastProbes =
+    object:
+    let
+      fast =
+        container:
+        container
+        // lib.optionalAttrs (container ? livenessProbe) {
+          livenessProbe = container.livenessProbe // {
+            periodSeconds = 2;
+            timeoutSeconds = 2;
+            failureThreshold = 3;
+          };
+        }
+        // lib.optionalAttrs (container ? readinessProbe) {
+          readinessProbe = container.readinessProbe // {
+            initialDelaySeconds = 2;
+            periodSeconds = 2;
+            timeoutSeconds = 2;
+          };
+        };
+    in
+    if (object.kind or "") == "DaemonSet" then
+      lib.recursiveUpdate object {
+        spec.template.spec.containers = map fast object.spec.template.spec.containers;
+      }
+    else
+      object;
 in
 {
-  kubernetes.transformers = [ pullNever ];
+  kubernetes.transformers = [
+    pullNever
+    fastProbes
+  ];
 
   nixkube = {
     # One architecture. Nothing here cross-compiles, and the sandbox has no
@@ -79,8 +112,14 @@ in
 
     # The host phase switches the guest's own system. Issue #24.
     nixosHost.enable = true;
-    # Short, so the broken switch reverts within the phase.
-    nixosHost.revertDelay = 120;
+    # The broken switch waits this out. A good switch needs it to cover the
+    # switch and its confirmation: 7.5 and 9.7 s measured, plus 20 %.
+    nixosHost.revertDelay = 12;
+    nixosHost.resyncSeconds = 1;
+
+    # The chaos phase waits for the node's state to settle after a runtime
+    # restart, and only this sweep sees the containers from before it go.
+    nri.sweepInterval = 1;
 
     # The guest's whole disk is 4 GiB (`vivarium.diskSize`), and the node's
     # own store is already on it. `cacheEnv` is about 512 MiB, so this is what

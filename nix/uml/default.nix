@@ -79,6 +79,10 @@ let
       enable = true;
       role = "control-plane";
 
+      # A Lease renewal every 1.25 s, not 10 s: the host phase confirms a
+      # switch by one.
+      kubeletSettings.nodeLeaseDurationSeconds = 5;
+
       # There is no registry. Every image the DaemonSet names is imported
       # into containerd before kubelet starts; ./images.nix checks that the
       # tags match what the manifest asks for.

@@ -19,7 +19,7 @@ ROLLOUT = "host"
 REVERT_UNIT = "nixkube-revert"
 MARKER = "/etc/nixkube-host-generation"
 # Less than `nixosHost.revertDelay` in ../manifest.nix.
-CONFIRM_TIMEOUT = 90
+CONFIRM_TIMEOUT = 8
 
 
 async def running(cp: Machine) -> str:
@@ -117,8 +117,8 @@ async def test(vms: Machines) -> None:
 
 
 async def broken_is_reverted(cp: Machine, first: str, broken: str) -> None:
-    # The host's timer fires `nixosHost.revertDelay` (120 s) after the switch.
-    status = await roll_to(cp, broken, READY_TIMEOUT + 120)
+    # The host's timer fires `nixosHost.revertDelay` (12 s) after the switch.
+    status = await roll_to(cp, broken)
     node = status["nodes"]["cp"]
     if status["phase"] != "Halted" or node.get("phase") != "Reverted":
         raise MachineError(f"[cp] the rollout to {broken} ended {status}")

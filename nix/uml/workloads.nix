@@ -112,6 +112,9 @@ in
         template = {
           metadata.labels = residentLabels;
           spec = {
+            # `sleep` as PID 1 ignores SIGTERM, so a delete waited out the
+            # whole default grace period: 31 s of the chaos phase.
+            terminationGracePeriodSeconds = 1;
             containers = lib.mkNamedList {
               resident = {
                 image = "ghcr.io/nixidae/nixkube/scratch:1.0.1";
