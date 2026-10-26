@@ -237,23 +237,27 @@ let
       ))
     ];
 
-  # "cluster,deploy,host" keeps those phases and the `always` ones, and drops
-  # edges to the rest. "boot" is vivarium's own and always there.
+  # "cluster,deploy,host" keeps those phases and the `always` ones. An edge to
+  # a dropped phase becomes edges to what that phase was after, so `host`,
+  # after `runtimes`, still runs after `deploy`. Dropping the edge leaves
+  # `host` with none, and `--break host` then pauses before `cluster`. "boot"
+  # is vivarium's own and always there.
   phaseFilter =
     text: phases:
     let
       wanted = map lib.trim (lib.filter (s: lib.trim s != "") (lib.splitString "," text));
       unknown = lib.filter (name: !phases ? ${name}) wanted;
       kept = lib.filterAttrs (name: phase: lib.elem name wanted || phase.always or false) phases;
+      through =
+        name:
+        lib.concatMap (a: if a == "boot" || kept ? ${a} then [ a ] else through a) phases.${name}.after;
     in
     if text == "" then
       phases
     else if unknown != [ ] then
       throw "NIXKUBE_UML_PHASES names unknown phases: ${lib.concatStringsSep ", " unknown}; known: ${lib.concatStringsSep ", " (lib.attrNames phases)}"
     else
-      lib.mapAttrs (
-        _: phase: phase // { after = lib.filter (a: a == "boot" || kept ? ${a}) phase.after; }
-      ) kept;
+      lib.mapAttrs (name: phase: phase // { after = lib.unique (through name); }) kept;
 in
 vivarium.mkTest (
   { config, systems, ... }:
