@@ -103,8 +103,9 @@ let
     # What the sidecar images point into the store, named where Nix can see
     # it. Their layers are gzipped, so nothing else says these paths are
     # needed, and a container whose entrypoint is missing fails in runc
-    # rather than anywhere informative. See ./images.nix.
-    system.extraDependencies = umlImages.runtimeInputs;
+    # rather than anywhere informative. See ./images.nix. Registered, not in
+    # the system: a system the host phase switches to carries its closure.
+    vivarium.nixDatabase.extraRoots = map (path: "${path}") umlImages.runtimeInputs;
 
     # For looking around by hand when something fails. The pods get their own
     # configuration from the ConfigMap the manifest carries, not from this.
