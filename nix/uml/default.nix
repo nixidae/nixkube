@@ -84,25 +84,6 @@ let
       # tags match what the manifest asks for.
       extraImages = umlImages.tarballs;
 
-      /*
-        No CoreDNS. kube-proxy stays.
-
-        Nothing here resolves a name: an in-cluster client reads
-        KUBERNETES_SERVICE_HOST, which is an address. So CoreDNS is two pods
-        on a one-CPU guest doing nothing but timing out against an upstream
-        resolver a build sandbox cannot reach, several lines a second.
-
-        kube-proxy looked equally unnecessary, because the manifest declares
-        no Service. It is not: the *cluster* declares one.
-        `kubernetes.default` is how anything in a pod reaches the API
-        server, and DNAT'ing its ClusterIP is exactly what kube-proxy does.
-        Measured by taking it away -- nixkube's init Job runs
-        `kubectl get secret` and exited non-zero.
-
-        `phases/cluster.py` waits for `KUBE_PROXY` alone, to match.
-      */
-      skipAddons = [ "coredns" ];
-
       # nixkube's other mount path. The node DaemonSet asks containerd for
       # an NRI connection whether or not containerd is listening, and gets
       # no error when it is not -- so without this the plugin waits, the
