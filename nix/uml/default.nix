@@ -66,13 +66,14 @@ let
     pkgs.hello
   ];
 
-  # A module of its own, so `hostNext` can extend it.
-  cpNode = {
+  # What both nodes share. kubeadm hands the worker the control plane's
+  # KubeletConfiguration, so `kubeletSettings` reaches both from here.
+  nodeBase = index: role: {
     imports = [ (sources.vivarium + "/modules/k8s.nix") ];
 
     services.vivarium-k8s = {
       enable = true;
-      role = "control-plane";
+      inherit role;
 
       # A Lease renewal every 1.25 s, not 10 s: the host phase confirms a
       # switch by one.
@@ -107,13 +108,44 @@ let
       # no error when it is not -- so without this the plugin waits, the
       # pods that need it start without a /nix, and nothing says why.
       nri = true;
-
-      # One, for pynixd's `nix-store` claim. The StorageClass it creates is
-      # `standard`, annotated as the cluster default, which is what
-      # `nixkube.pynixd.storageClassName = null` asks for. `bring_up`
-      # applies it. Issue #49.
-      persistentVolumes = 1;
     };
+
+    vivarium = {
+      cpus = 4;
+      diskSize = 4096;
+      lan = {
+        network = "nixkube";
+        address = "10.103.0.${toString index}/24";
+      };
+    };
+
+    # What the sidecar images point into the store, named where Nix can see
+    # it. Their layers are gzipped, so nothing else says these paths are
+    # needed, and a container whose entrypoint is missing fails in runc
+    # rather than anywhere informative. See ./images.nix.
+    system.extraDependencies = umlImages.runtimeInputs;
+
+    # For looking around by hand when something fails. The pods get their own
+    # configuration from the ConfigMap the manifest carries, not from this.
+    nix.settings.experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
+
+    # The chaos scenarios compare what the driver left on the node against
+    # what the node says is still alive, and both answers are JSON.
+    environment.systemPackages = [ pkgs.jq ];
+  };
+
+  cpNode = {
+    imports = [ (nodeBase 1 "control-plane") ];
+
+    # One, for pynixd's `nix-store` claim. The StorageClass it creates is
+    # `standard`, annotated as the cluster default, which is what
+    # `nixkube.pynixd.storageClassName = null` asks for. `bring_up`
+    # applies it. Issue #49. Only here: a volume on the worker could bind
+    # the claim and hold pynixd on a node it cannot schedule on.
+    services.vivarium-k8s.persistentVolumes = 1;
 
     vivarium = {
       /*
@@ -141,42 +173,30 @@ let
         both probes. What the node runs it fetches from the cache guest.
       */
       memory = "2200M";
-      cpus = 4;
-      diskSize = 4096;
-      lan = {
-        network = "nixkube";
-        address = "10.103.0.1/24";
-      };
     };
-
-    # What the sidecar images point into the store, named where Nix can see
-    # it. Their layers are gzipped, so nothing else says these paths are
-    # needed, and a container whose entrypoint is missing fails in runc
-    # rather than anywhere informative. See ./images.nix.
-    system.extraDependencies = umlImages.runtimeInputs;
-
-    # For looking around by hand when something fails. The pods get their own
-    # configuration from the ConfigMap the manifest carries, not from this.
-    nix.settings.experimental-features = [
-      "nix-command"
-      "flakes"
-    ];
-
-    # The chaos scenarios compare what the driver left on the node against
-    # what the node says is still alive, and both answers are JSON.
-    environment.systemPackages = [ pkgs.jq ];
   };
 
   /*
-    The booted guest plus one file, for the host phase to switch to and
+    A second NixOS node, for the host phase to roll out across two nodes.
+    `phases/cluster.py` taints it, so every other phase runs on `cp` alone;
+    the switch Jobs name their node and tolerate every taint. It runs
+    kubelet, the CRI and those Jobs, so vivarium's worker size fits.
+  */
+  workerNode = {
+    imports = [ (nodeBase 2 "worker") ];
+    vivarium.memory = "1280M";
+  };
+
+  /*
+    A booted guest plus one file, for the host phase to switch to and
     back from. The switch then changes that file, and no unit the cluster
     runs on. `extendModules` on the guest `mkTest` booted, so it carries
     everything that guest does -- the cache recipe's interface and
     substituter included.
   */
   hostNext =
-    cp: extra:
-    (cp.extendModules {
+    node: extra:
+    (node.extendModules {
       modules = [
         { environment.etc."nixkube-host-generation".text = "next\n"; }
         extra
@@ -275,6 +295,7 @@ vivarium.mkTest (
         cacheRoots
         ++ [
           (hostNext systems.cp { })
+          (hostNext systems.worker { })
           (hostBroken systems.cp)
         ]
       );
@@ -421,6 +442,10 @@ vivarium.mkTest (
         boot.extraModprobeConfig = "install erofs ${pkgs.coreutils}/bin/false";
       };
     };
+    nodes.worker = {
+      imports = [ workerNode ];
+      services.vivarium-k8s = { inherit cri; };
+    };
 
     settings = {
       manifest = "${manifestFile}";
@@ -463,9 +488,11 @@ vivarium.mkTest (
       inherit hostStore;
       nodeDaemonSet = if hostStore then "nix-node-host" else "nix-node";
       # Strings, not store paths: `settings` registers what it names on
-      # `cp`, and the host phase has to fetch these from the cache guest,
-      # as a real host would.
-      hostNext = builtins.unsafeDiscardStringContext "${hostNext systems.cp { }}";
+      # every guest, and the host phase has to fetch these from the cache
+      # guest, as a real host would.
+      hostNext = lib.mapAttrs (_: node: builtins.unsafeDiscardStringContext "${hostNext node { }}") {
+        inherit (systems) cp worker;
+      };
       hostBroken = builtins.unsafeDiscardStringContext "${hostBroken systems.cp}";
     };
   }
