@@ -101,6 +101,7 @@ in
           host-root = {
             mountPath = "/host";
             readOnly = true;
+            mountPropagation = "HostToContainer";
           };
         };
         resources.requests = {
@@ -353,8 +354,16 @@ in
                         nix-config.mountPath = "/etc/nix";
                         nri-socket.mountPath = "/var/run/nri";
                         registration.mountPath = "/registration";
+                        /*
+                          HostToContainer, not the default None: a private copy
+                          of / keeps every netns mount that exists when the
+                          container starts, and the host cannot unlink one
+                          ("device or resource busy"), so each pod older than
+                          this container sticks in Terminating.
+                        */
                         host-root = {
                           mountPath = "/host";
+                          mountPropagation = "HostToContainer";
                         };
                         kubelet = {
                           mountPath = "/var/lib/kubelet";
