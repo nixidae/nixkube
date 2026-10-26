@@ -220,6 +220,14 @@ MNT_DETACH = 2
 GC_KEEP_SECONDS: int = _parse_int_env("GC_KEEP_SECONDS", "3600")
 GC_INTERVAL_SECONDS: int = _parse_int_env("GC_INTERVAL_SECONDS", "3600")
 
+# How often the NRI plugin sweeps volumes whose container the CRI no longer
+# lists, besides on each REMOVE_CONTAINER and each reconnect. Not every
+# removal sends an event: after a containerd restart, containerd removed
+# containers from before it with no REMOVE_CONTAINER, and their volumes
+# stayed until some other container's removal, 60 s later. Set via
+# NRI_SWEEP_INTERVAL_SECONDS.
+NRI_SWEEP_INTERVAL_SECONDS: float = _parse_float_env("NRI_SWEEP_INTERVAL_SECONDS", "30")
+
 # Every nix call in the GC loop needs a deadline. The loop awaits one cycle at
 # a time, so a call that never returns ends collection on that node until the
 # pod restarts, and a restart re-enters the same call. Measured on a four-node

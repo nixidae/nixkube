@@ -28,6 +28,7 @@ from ..constants import (
     NRI_PLUGIN_IDX,
     NRI_PLUGIN_NAME,
     NRI_RUNTIME_SOCKET,
+    NRI_SWEEP_INTERVAL_SECONDS,
     NRI_VM_BUSYBOX,
     NRI_VM_RUNTIME_HANDLERS,
 )
@@ -51,7 +52,8 @@ from .annotations import (
     parse_nix_rw,
     parse_store_mounts,
 )
-from .cleanup import schedule_garbage_collection
+from .builds import BuildRegistry
+from .cleanup import garbage_collect_stale_volumes, schedule_garbage_collection
 from .mount import kernel_supports_ro, kernel_supports_rw, mount_in_container, rootfs_of
 from .vm import (
     ALIVE,
@@ -197,6 +199,9 @@ from .zmq import ZeroMQServer
 #      crashed containers or abrupt shutdowns. In the background because
 #      containerd deadlines every NRI request, and a sweep is slower than an
 #      acknowledgement may be.
+#
+# 3. On every (re)connection (Synchronize), the same sweep: a container that
+#    went away while the runtime was down sends no REMOVE_CONTAINER.
 #
 # VM RUNTIMES (NRI_VM_RUNTIME_HANDLERS, e.g. Kata)
 # ─────────────────────────────────────────────────
@@ -478,6 +483,26 @@ class NriPlugin(NriPluginBase):
             )
 
         await stream.send_message(nri_pb2.Empty())
+
+    @nri_error_handler
+    async def Synchronize(self, stream) -> None:
+        """Sweep after every (re)connection to the runtime.
+
+        A container that went away while the runtime was down sends no
+        REMOVE_CONTAINER, so its volume stayed until the next removal of any
+        container. Measured after a containerd restart: 59 s, the period of
+        kubelet's container GC.
+        """
+        logger = structlog.get_logger("nixkube.nri.synchronize")
+        req: nri_pb2.SynchronizeRequest | None = await stream.recv_message()
+        logger.info("synchronize", containers=len(req.containers) if req else 0)
+        await stream.send_message(nri_pb2.SynchronizeResponse())
+        # A long list comes in parts; `more` marks every part but the last.
+        if req is not None and req.more:
+            return
+        schedule_garbage_collection(
+            self.tasks, self.cri_socket, building=self.zmq_server.pending_builds
+        )
 
     async def _pump_build_progress(self, container_id: str, vm: bool) -> None:
         """Periodically publish build progress heartbeats to reset nri-wait timeout.
@@ -791,6 +816,13 @@ def failure_reason(error: BaseException) -> str:
     return str(error)
 
 
+async def sweep_loop(cri_socket: Path, building: BuildRegistry) -> None:
+    """The backstop for a removal that sends no REMOVE_CONTAINER."""
+    while True:
+        await anyio.sleep(NRI_SWEEP_INTERVAL_SECONDS)
+        await garbage_collect_stale_volumes(cri_socket, building=building)
+
+
 async def nri_serve() -> None:
     """Run the NRI plugin server with automatic reconnection and kernel checks."""
     logger = structlog.get_logger("nixkube.nri.serve")
@@ -844,6 +876,9 @@ async def nri_serve() -> None:
         )
 
         tasks.start_soon(zmq_server.start_request_handler, name="zmq-rep")
+        tasks.start_soon(
+            sweep_loop, cri_socket, zmq_server.pending_builds, name="nri-sweep"
+        )
 
         try:
             # Start server (handles reconnection with exponential backoff internally)

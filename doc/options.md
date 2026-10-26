@@ -1239,6 +1239,33 @@ true
 
 
 
+## nixkube\.nri\.sweepInterval
+
+
+
+Seconds between two sweeps of NRI volumes whose container the
+runtime no longer lists\. The plugin also sweeps on each container
+removal and each reconnect; this catches a removal the runtime sends
+no event for, such as one after a containerd restart\.
+
+
+
+*Type:*
+positive integer or floating point number, meaning >0
+
+
+
+*Default:*
+
+```nix
+30
+```
+
+*Declared by:*
+ - [/kubenix/options\.nix](file:///kubenix/options.nix)
+
+
+
 ## nixkube\.nri\.vmRuntimeHandlers
 
 

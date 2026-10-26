@@ -216,6 +216,17 @@ in
       default = true;
     };
 
+    nri.sweepInterval = lib.mkOption {
+      description = ''
+        Seconds between two sweeps of NRI volumes whose container the
+        runtime no longer lists. The plugin also sweeps on each container
+        removal and each reconnect; this catches a removal the runtime sends
+        no event for, such as one after a containerd restart.
+      '';
+      type = lib.types.numbers.positive;
+      default = 30;
+    };
+
     nri.vmRuntimeHandlers = lib.mkOption {
       description = ''
         RuntimeClass handlers that run each pod in a virtual machine, such as
