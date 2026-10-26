@@ -79,6 +79,8 @@ in
 
     # The host phase switches the guest's own system. Issue #24.
     nixosHost.enable = true;
+    # Short, so the broken switch reverts within the phase.
+    nixosHost.revertDelay = 120;
 
     # The guest's whole disk is 4 GiB (`vivarium.diskSize`), and the node's
     # own store is already on it. `cacheEnv` is about 512 MiB, so this is what

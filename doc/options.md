@@ -905,9 +905,10 @@ open submodule of attribute set of (Nix config atom (null, bool, int, float, str
 
 
 
-Render the ` nixkube-nixos-host ` PodTemplate\. A Job made from it
-switches a NixOS host to a system, arms a revert, disarms it or runs
-it (\#359)\.
+Render the ` nixkube-nixos-host ` PodTemplate, the NixOSRollout CRD and
+its controller\. A Job made from the template switches a NixOS host to
+a system, arms a revert, disarms it or runs it\. The controller makes
+those Jobs for each NixOSRollout (\#359)\.
 
 Whoever can create a Job from it chooses what a machine runs, as
 root\.

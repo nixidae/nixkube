@@ -16,6 +16,7 @@
     ./config.nix
     ./pynixd.nix
     ./nixos-host.nix
+    ./nixos-rollout.nix
 
     ./rbac.nix
     ./undeploy.nix

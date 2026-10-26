@@ -36,6 +36,7 @@ dependencies = [
 [project.scripts]
 nixkube = "src.cli:main"
 nixkube-host-check = "src.host_check:main"
+nixkube-nixos-rollout = "src.nixos_rollout:main"
 nixkube-composefs-dump = "src.composefs:main"
 nixkube-composefs-build = "src.composefs:builder"
 
