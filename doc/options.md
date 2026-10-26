@@ -931,6 +931,31 @@ false
 
 
 
+## nixkube\.nixosHost\.resyncSeconds
+
+
+
+Seconds between two passes of the NixOSRollout controller\. Each pass
+lists every NixOSRollout and every Node\.
+
+
+
+*Type:*
+positive integer, meaning >0
+
+
+
+*Default:*
+
+```nix
+5
+```
+
+*Declared by:*
+ - [/kubenix/options\.nix](file:///kubenix/options.nix)
+
+
+
 ## nixkube\.nixosHost\.revertDelay
 
 

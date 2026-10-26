@@ -203,6 +203,15 @@ in
       default = 1200;
     };
 
+    nixosHost.resyncSeconds = lib.mkOption {
+      description = ''
+        Seconds between two passes of the NixOSRollout controller. Each pass
+        lists every NixOSRollout and every Node.
+      '';
+      type = lib.types.ints.positive;
+      default = 5;
+    };
+
     nri.composefs = lib.mkOption {
       description = ''
         Give an NRI container its /nix as one composefs mount where the node's

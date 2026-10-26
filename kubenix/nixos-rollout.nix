@@ -333,6 +333,7 @@ in
                   env = lib.mkNamedList {
                     NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
                     REVERT_DELAY.value = toString cfg.nixosHost.revertDelay;
+                    RESYNC_SECONDS.value = toString cfg.nixosHost.resyncSeconds;
                   };
                   resources.requests = {
                     memory = "64Mi";

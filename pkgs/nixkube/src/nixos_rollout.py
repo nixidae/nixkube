@@ -36,7 +36,6 @@ logger = structlog.get_logger("nixkube.nixos_rollout")
 GROUP: Final = "nixkube.nixidae.org"
 VERSION: Final = f"{GROUP}/v1alpha1"
 TEMPLATE: Final = "nixkube-nixos-host"
-RESYNC_SECONDS: Final = 5
 JOB_TTL_SECONDS: Final = 86400
 
 NixOSRollout = new_class(
@@ -187,9 +186,10 @@ def node_ready(node: Any) -> bool:
 
 
 class Controller:
-    def __init__(self, namespace: str, revert_delay: int) -> None:
+    def __init__(self, namespace: str, revert_delay: int, resync: float) -> None:
         self.namespace = namespace
         self.revert_delay = revert_delay
+        self.resync = resync
 
     async def run(self) -> None:
         logger.info("started", namespace=self.namespace, revert_delay=self.revert_delay)
@@ -198,7 +198,7 @@ class Controller:
                 await self.reconcile_all()
             except Exception:
                 logger.warning("reconcile_failed", exc_info=True)
-            await anyio.sleep(RESYNC_SECONDS)
+            await anyio.sleep(self.resync)
 
     async def reconcile_all(self) -> None:
         rollouts = [r async for r in NixOSRollout.list() if isinstance(r, NixOSRollout)]
@@ -501,5 +501,6 @@ def main() -> None:
     controller = Controller(
         namespace=os.environ["NAMESPACE"],
         revert_delay=int(os.environ["REVERT_DELAY"]),
+        resync=float(os.environ["RESYNC_SECONDS"]),
     )
     anyio.run(controller.run, backend="asyncio")
