@@ -26,7 +26,11 @@ let
   paths = lib.mapAttrs (_: source: "${source}") sources;
   pins = lib.mapAttrs (name: path: {
     url = "http://${facts.address}:${toString port}/sources/${name}.tar.gz";
-    sha256 = (builtins.fetchTree { type = "path"; inherit path; }).narHash;
+    sha256 =
+      (builtins.fetchTree {
+        type = "path";
+        inherit path;
+      }).narHash;
   }) paths;
 
   expression = pkgs.writeText "default.nix" ''
