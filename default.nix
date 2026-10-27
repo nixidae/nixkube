@@ -1102,6 +1102,10 @@ rec {
       echo ok > $out
     '';
 
+  # NixOS modules for the hosts nixkube runs on. `host` is the boot
+  # assessment a NixOSRollout that reboots wants.
+  nixosModules.host = ./nix/host.nix;
+
   # Tests written as nixos-test modules, run as vivarium guests: a
   # sandboxed build, a `.driver` run and an MCP session are the same test.
   nixosTests =
