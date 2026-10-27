@@ -17,6 +17,11 @@ Reverted and cordon it.
 `hostReboot` gives cp a plain change and worker another initrd. cp switches
 in place; worker is cordoned, drained of a pod and rebooted into its new
 system, then uncordoned. Last, because a switch back would reboot again.
+
+`hostBadBoot` gives worker another initrd and a kubelet that never starts.
+Each boot of it fails the boot assessment, which reboots it; with no tries
+left systemd-boot boots `hostReboot` again. The rollout's disarm Job then
+finds the old system, and the rollout halts with worker cordoned.
 """
 
 import base64
@@ -49,6 +54,9 @@ BUILD_TIMEOUT = 30 * 60
 REBOOT_TIMEOUT = 15 * 60
 VICTIM = "reboot-victim"
 BOOT_ID = "cat /proc/sys/kernel/random/boot_id"
+# Two tries of `nixkube.host.bootAssessment.timeout` (300 s) each, then a
+# boot of the old system.
+FALLBACK_TIMEOUT = 30 * 60
 
 
 async def running(vm: Machine) -> str:
@@ -76,6 +84,7 @@ async def roll_to(
     systems: dict[str, str],
     source: dict | None = None,
     timeout: int | None = None,
+    reboot_timeout: int | None = None,
 ) -> tuple[dict, list[str]]:
     """Point the rollout at `systems`, or at `source`, and wait until it settles.
 
@@ -102,6 +111,7 @@ async def roll_to(
                 **({"source": source} if source else {"systems": systems}),
                 "maxUnavailable": 1,
                 "confirmTimeout": CONFIRM_TIMEOUT,
+                **({"rebootTimeout": reboot_timeout} if reboot_timeout else {}),
             },
         },
     )
@@ -194,6 +204,8 @@ async def test(vms: Machines) -> None:
     await broken_halts(hosts, first, settings["hostBroken"], after["worker"])
     await kubectl(cp, "uncordon cp")
     await reboots(hosts, settings)
+    if settings["hostBadBoot"]:
+        await falls_back(hosts, settings)
     await kubectl(cp, f"delete nixosrollout {ROLLOUT}")
 
 
@@ -245,6 +257,42 @@ async def reboots(hosts: dict[str, Machine], settings: dict) -> None:
     print(
         "[nixkube] the rollout drained and rebooted worker into its new initrd, "
         "and switched cp in place",
+        flush=True,
+    )
+
+
+async def falls_back(hosts: dict[str, Machine], settings: dict) -> None:
+    """worker boots a system with no kubelet, twice, then its old one."""
+    cp, worker = hosts["cp"], hosts["worker"]
+    old: dict[str, str] = settings["hostReboot"]
+    bad: str = settings["hostBadBoot"]
+    status, _ = await roll_to(
+        cp,
+        {**old, "worker": bad},
+        timeout=FALLBACK_TIMEOUT,
+        reboot_timeout=FALLBACK_TIMEOUT,
+    )
+    node = status["nodes"]["worker"]
+    if status["phase"] != "Halted" or node.get("phase") != "Reverted":
+        raise MachineError(f"[worker] the rollout to {bad} ended {status}")
+    if node.get("failedSystem") != bad:
+        raise MachineError(f"[worker] failedSystem is {node.get('failedSystem')}")
+    booted = (await worker.succeed("readlink /run/booted-system")).strip()
+    if booted != old["worker"]:
+        raise MachineError(f"[worker] booted {booted}, not {old['worker']}")
+    # systemd-boot names a spent entry `<id>+0-<tries>.conf`.
+    entry = await worker.succeed(
+        f"grep -l 'init={bad}/init' /boot/loader/entries/*.conf"
+    )
+    if not entry.strip().endswith("+0-2.conf"):
+        raise MachineError(f"[worker] the entry of {bad} is {entry.strip()}")
+    spec = (await get_json(cp, "get node worker"))["spec"]
+    if not spec.get("unschedulable"):
+        raise MachineError("[worker] the node that fell back is not cordoned")
+    await kubectl(cp, "uncordon worker")
+    print(
+        f"[nixkube] worker failed two boots of {bad}, fell back to "
+        f"{old['worker']}, and the rollout halted",
         flush=True,
     )
 

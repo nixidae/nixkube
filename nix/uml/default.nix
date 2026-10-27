@@ -169,10 +169,23 @@ let
     the switch Jobs name their node and tolerate every taint. It runs
     kubelet, the CRI and those Jobs, so vivarium's worker size fits.
   */
-  workerNode = {
-    imports = [ (nodeBase 2 "worker") ];
-    vivarium.memory = "1280M";
-  };
+  workerNode =
+    { config, ... }:
+    let
+      qemu = config.vivarium.backend == "qemu";
+    in
+    {
+      imports = [
+        (nodeBase 2 "worker")
+        ../host.nix
+      ];
+      vivarium.memory = "1280M";
+      # The host phase reboots it into a system whose kubelet never comes
+      # up, and systemd-boot must fall back. Firmware boots are QEMU's.
+      vivarium.efi = qemu;
+      nixkube.host.bootAssessment.enable = qemu;
+      boot.loader.systemd-boot.bootCounting.tries = 2;
+    };
 
   /*
     A booted guest plus one file, for the host phase to switch to and
@@ -197,6 +210,17 @@ let
     node:
     hostNext node {
       boot.initrd.systemd.contents."/etc/nixkube-reboot".text = "reboot\n";
+    };
+
+  # Another initrd and a kubelet that never starts: the Node is never Ready
+  # on that boot, the boot assessment fails each try, and systemd-boot
+  # falls back to `hostReboot`.
+  hostBadBoot =
+    node:
+    hostNext node {
+      boot.initrd.systemd.contents."/etc/nixkube-reboot".text = "bad\n";
+      systemd.services.kubelet.serviceConfig.ExecStart =
+        lib.mkForce "${lib.getExe' pkgs.coreutils "sleep"} infinity";
     };
 
   # The system the source rollout builds: no cache has it.
@@ -311,6 +335,7 @@ vivarium.mkTest (
           (hostNext systems.worker { })
           (hostBroken systems.cp)
           (hostReboot systems.worker)
+          (hostBadBoot systems.worker)
           hostSource.repository
           # Every input of the toplevel, and not the toplevel.
           (hostBuilt systems.cp).inputDerivation
@@ -540,6 +565,12 @@ vivarium.mkTest (
         cp = builtins.unsafeDiscardStringContext "${hostNext systems.cp { }}";
         worker = builtins.unsafeDiscardStringContext "${hostReboot systems.worker}";
       };
+      # Null where the worker has no systemd-boot to fall back with.
+      hostBadBoot =
+        if systems.worker.config.vivarium.efi then
+          builtins.unsafeDiscardStringContext "${hostBadBoot systems.worker}"
+        else
+          null;
       hostBuilt = lib.mapAttrs (_: node: builtins.unsafeDiscardStringContext "${hostBuilt node}") {
         inherit (systems) cp worker;
       };
