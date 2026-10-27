@@ -296,6 +296,10 @@ rec {
         # `nix run --file . genModDoc` works from any directory in the
         # checkout and from no shell at all.
         root="''${GIT_ROOT:-$(${lib.getExe pkgs.git} rev-parse --show-toplevel)}"
+        # In the nixidae monorepo the checkout's root holds this source.
+        if [ -d "$root/nixkube/doc" ]; then
+          root="$root/nixkube"
+        fi
         cp --no-preserve=mode ${optionsDocs.optionsCommonMark} "$root/doc/options.md"
       '';
 
