@@ -1653,4 +1653,20 @@ rec {
       ) ciWorkflowFiles
     )}
   '';
+
+  # The rest of the schema of nixidae/nixidae#1103, with `nixosModules`,
+  # `checks` and `ciTestWorkflows` above. `lib` is set after the set closes:
+  # inside it, `lib` is nixpkgs' own. Every other name is internal.
+  packages = {
+    inherit (pkgs) nixkube;
+    inherit nixImage scratchImage;
+    default = pkgs.nixkube;
+  };
+  # What a consumer wants from this repository: the module that installs
+  # the driver.
+  easykubenixModules.default = ./kubenix;
+  docs.default = nixkube-docs;
+}
+// {
+  lib = { };
 }
