@@ -1,1 +1,6 @@
 extend = "nix/shared/ruff.toml"
+
+[per-file-target-version]
+"pkgs/nri-wait/**" = "py311"
+"pkgs/grpclib-nri/**" = "py312"
+"pkgs/grpclib-ttrpc/**" = "py312"
