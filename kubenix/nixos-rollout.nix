@@ -20,10 +20,17 @@
 {
   config,
   lib,
+  csiPkgs,
+  ekn,
   ...
 }:
 let
   cfg = config.nixkube;
+  # The controller runs out of the store, mounted through the node's CSI
+  # driver as a pynixd builder is: an apply moves it, no image does.
+  storeVolumeAttributes = lib.mapAttrs (
+    system: pkgs: "${ekn.lib.packageRef "nixkube-rollout-env-${system}" pkgs.nixkube-rollout-env}"
+  ) csiPkgs;
   name = "nixkube-nixos-rollout";
   labels = cfg.labels // {
     "app.kubernetes.io/component" = "nixos-rollout";
@@ -405,9 +412,13 @@ in
               serviceAccountName = name;
               containers = lib.mkNamedList {
                 controller = {
-                  image = cfg.images.nix;
+                  image = cfg.images.scratch;
                   inherit (cfg) imagePullPolicy;
-                  command = [ "nixkube-rollout-controller" ];
+                  command = [
+                    "/nix/var/result/bin/tini"
+                    "--"
+                    "/nix/var/result/bin/nixkube-rollout-controller"
+                  ];
                   env = lib.mkNamedList {
                     NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
                     REVERT_DELAY.value = toString cfg.nixosHost.revertDelay;
@@ -422,6 +433,10 @@ in
                   # A source rollout evaluates here and builds through
                   # pynixd, as a node does.
                   volumeMounts = lib.mkNamedList {
+                    nix-store = {
+                      mountPath = "/nix";
+                      subPath = "nix";
+                    };
                     nix-config.mountPath = "/etc/nix";
                     ssh-config.mountPath = "/etc/ssh";
                     ssh-dynauth.mountPath = "/etc/ssh-dynauth";
@@ -430,6 +445,11 @@ in
                 };
               };
               volumes = lib.mkNamedList {
+                nix-store.csi = {
+                  driver = "nixkube";
+                  readOnly = false;
+                  volumeAttributes = storeVolumeAttributes;
+                };
                 nix-config.configMap.name = "nix-node";
                 ssh-config.configMap = {
                   name = "ssh-config";

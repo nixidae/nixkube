@@ -136,6 +136,37 @@ in
     extraGroupLines = [ "nixbld:x:30000:" ];
   };
 
+  # The NixOSRollout controller, which evaluates and builds sources. It brings
+  # nix, git and ssh along, and installs the fake NSS files first: ssh exits
+  # when its user has no passwd entry.
+  nixkube-rollout-controller = self.writeShellApplication {
+    name = "nixkube-rollout-controller";
+    runtimeInputs = [
+      self.coreutils
+      self.gitMinimal
+      self.nix
+      self.rsync
+      self.openssh
+      self.kubectl
+    ];
+    text = ''
+      mkdir -p /tmp
+      rsync --archive ${self.appstarter-fake-nss}/ /
+      exec ${self.nixkube}/bin/nixkube-nixos-rollout "$@"
+    '';
+  };
+
+  # What the controller's pod mounts through the node's CSI driver, as a
+  # pynixd builder does: the controller runs out of the store, so a change to
+  # it reaches a cluster with an apply and no new image.
+  nixkube-rollout-env = self.buildEnv {
+    name = "nixkube-rollout-env";
+    paths = [
+      self.nixkube-rollout-controller
+      self.tini
+    ];
+  };
+
   ci-debug = pkgs.callPackage ./ci-debug { inherit pkgs; };
 
   # The two kubernetes-csi sidecars the node DaemonSet runs, and images for

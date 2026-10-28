@@ -69,16 +69,10 @@ rec {
       # bring nix, git and ssh along. ssh exits when its user has no passwd
       # entry, so each installs the fake NSS files first.
 
-      # The NixOSRollout controller, which evaluates and builds sources.
-      rollout-controller = sysPkgs.writeShellApplication {
-        name = "nixkube-rollout-controller";
-        inherit runtimeInputs;
-        text = ''
-          mkdir -p /tmp
-          rsync --archive ${fakeNss}/ /
-          exec ${sysPkgs.nixkube}/bin/nixkube-nixos-rollout "$@"
-        '';
-      };
+      # The NixOSRollout controller, which evaluates and builds sources. The
+      # Deployment runs it out of the store; the image keeps it for one that
+      # still names it by PATH.
+      rollout-controller = sysPkgs.nixkube-rollout-controller;
 
       # The switch Job's `fetch` init container: the toplevel the controller
       # built, from pynixd into the host's store through the host's daemon.
