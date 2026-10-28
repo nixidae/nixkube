@@ -124,7 +124,7 @@ def probe_delay(failures: int) -> float:
     """Seconds until the next ping, after `failures` failed pings in a row."""
     if failures == 0:
         return CACHE_PROBE_INTERVAL_SECONDS
-    return min(CACHE_PROBE_RETRY_SECONDS * 2 ** (failures - 1), CACHE_PROBE_INTERVAL_SECONDS)
+    return min(CACHE_PROBE_RETRY_SECONDS * 2.0 ** (failures - 1), CACHE_PROBE_INTERVAL_SECONDS)
 
 
 async def cache_probe_loop() -> None:

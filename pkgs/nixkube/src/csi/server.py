@@ -3,6 +3,7 @@
 import socket
 import time
 from collections import defaultdict
+from collections.abc import Awaitable, Callable, Coroutine
 from functools import wraps
 from pathlib import Path
 from typing import Any, ClassVar
@@ -32,6 +33,7 @@ from ..constants import (
 )
 from ..errors import CSIError, MountError
 from ..events import report_event
+from ..kube_docs import pod_doc
 from ..metrics import (
     VOLUME_MOUNTS,
     VOLUME_PREPARE_DURATION,
@@ -69,7 +71,7 @@ async def check_csi_volume_mounts(pod: Pod) -> None:
     - MissingNixMount: no container mounts the volume at /nix, so /nix/store
       paths will never be reachable regardless of subPath.
     """
-    spec = pod.raw.get("spec", {})
+    spec = pod_doc(pod).get("spec", {})
     all_containers = spec.get("containers", []) + spec.get("initContainers", [])
 
     for volume in spec.get("volumes", []):
@@ -109,9 +111,9 @@ async def check_csi_volume_mounts(pod: Pod) -> None:
             )
 
 
-def csi_error_handler(
-    func: Any,
-) -> Any:  # decorator wraps arbitrary async handler methods
+def csi_error_handler[S, Req, Resp, T](
+    func: Callable[[S, Stream[Req, Resp]], Awaitable[T]],
+) -> Callable[[S, Stream[Req, Resp]], Coroutine[Any, Any, T]]:
     """Decorator for CSI handlers: logs exceptions, emits events, and re-raises as gRPC errors.
 
     Wraps CSI handler methods to catch exceptions, emit Kubernetes events for debugging,
@@ -120,7 +122,7 @@ def csi_error_handler(
     """
 
     @wraps(func)
-    async def wrapper(self, stream):
+    async def wrapper(self: S, stream: Stream[Req, Resp]) -> T:
         handler_logger = structlog.get_logger(f"nixkube.csi.{func.__name__.lower()}")
         try:
             return await func(self, stream)
@@ -241,12 +243,13 @@ class NodeServicer(csi_grpc.NodeBase):
                 return
 
             # Validate that fetched pod matches the UID from volume context
-            assert pod.metadata.uid == pod_uid, f"Pod UID mismatch: {pod.metadata.uid} != {pod_uid}"
+            if pod.metadata.uid != pod_uid:
+                raise RuntimeError(f"Pod UID mismatch: {pod.metadata.uid} != {pod_uid}")
 
             # If the pod is terminating, mounting makes no sense — it's going away.
             # Return success to break kubelet's retry loop; it will call
             # NodeUnpublishVolume to clean up.
-            if pod.raw.get("metadata", {}).get("deletionTimestamp"):
+            if pod_doc(pod).get("metadata", {}).get("deletionTimestamp"):
                 log.info("pod_terminating_skip_mount")
                 await stream.send_message(csi_pb2.NodePublishVolumeResponse())
                 return
@@ -315,7 +318,7 @@ class NodeServicer(csi_grpc.NodeBase):
                 shown = presentation.csi(
                     enabled=CSI_COMPOSEFS,
                     kernel=CSI_COMPOSEFS and await composefs.available(),
-                    user_namespace=pod.raw.get("spec", {}).get("hostUsers") is False,
+                    user_namespace=pod_doc(pod).get("spec", {}).get("hostUsers") is False,
                     host_store=HOST_STORE,
                 )
                 log.debug("volume_presentation", presentation=str(shown))
@@ -477,20 +480,28 @@ class NodeServicer(csi_grpc.NodeBase):
             raise GRPCError(Status.INVALID_ARGUMENT, "NodeGetInfoRequest is None")
         await stream.send_message(csi_pb2.NodeGetInfoResponse(node_id=KUBE_NODE_NAME))
 
-    async def NodeGetVolumeStats(self, stream):
+    async def NodeGetVolumeStats(
+        self, stream: Stream[csi_pb2.NodeGetVolumeStatsRequest, csi_pb2.NodeGetVolumeStatsResponse]
+    ) -> None:
         raise GRPCError(Status.UNIMPLEMENTED, "NodeGetVolumeStats not implemented")
 
-    async def NodeExpandVolume(self, stream):
+    async def NodeExpandVolume(
+        self, stream: Stream[csi_pb2.NodeExpandVolumeRequest, csi_pb2.NodeExpandVolumeResponse]
+    ) -> None:
         raise GRPCError(Status.UNIMPLEMENTED, "NodeExpandVolume not implemented")
 
-    async def NodeStageVolume(self, stream):
+    async def NodeStageVolume(
+        self, stream: Stream[csi_pb2.NodeStageVolumeRequest, csi_pb2.NodeStageVolumeResponse]
+    ) -> None:
         raise GRPCError(Status.UNIMPLEMENTED, "NodeStageVolume not implemented")
 
-    async def NodeUnstageVolume(self, stream):
+    async def NodeUnstageVolume(
+        self, stream: Stream[csi_pb2.NodeUnstageVolumeRequest, csi_pb2.NodeUnstageVolumeResponse]
+    ) -> None:
         raise GRPCError(Status.UNIMPLEMENTED, "NodeUnstageVolume not implemented")
 
 
-async def csi_serve(plugin_name: str | None = None, socket_path: Path | None = None):
+async def csi_serve(plugin_name: str | None = None, socket_path: Path | None = None) -> None:
     logger = structlog.get_logger("nixkube.csi.serve")
     if socket_path is None:
         socket_path = Path(CSI_SOCKET_PATH)

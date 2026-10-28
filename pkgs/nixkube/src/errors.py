@@ -20,7 +20,7 @@ class SubprocessError(Exception):
         stdout: str,
         stderr: str,
         combined: str,
-        command: list[str],
+        command: list[object],
     ) -> None:
         """Initialize subprocess error.
 

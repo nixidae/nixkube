@@ -108,6 +108,10 @@ async def hardlink_tree(src: Path, dst: Path) -> None:
         raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(src))
 
 
+def _rmtree(path: Path) -> None:
+    shutil.rmtree(path)
+
+
 async def _discard(path: Path) -> None:
     """Remove a staging path, whatever it is, without raising."""
     try:
@@ -116,7 +120,7 @@ async def _discard(path: Path) -> None:
             # most of a store path, and deleting it on this loop is one
             # synchronous gap in the heartbeat `nri-wait` gives up on after
             # 30s -- the failure `_entries` checkpoints to avoid (issue #45).
-            await anyio.to_thread.run_sync(shutil.rmtree, path)
+            await anyio.to_thread.run_sync(_rmtree, path)
         else:
             path.unlink(missing_ok=True)
     except OSError:

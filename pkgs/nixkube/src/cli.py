@@ -4,6 +4,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 import anyio
 import structlog
@@ -151,7 +152,17 @@ def store_loops(*, host_store: bool) -> frozenset[str]:
     return frozenset({"nix-daemon", "gc"})
 
 
-async def async_main():
+class LoggerLevel(TypedDict, total=False):
+    level: str
+
+
+class LoggingConfig(TypedDict, total=False):
+    renderer: str
+    loggers: dict[str, LoggerLevel]
+    root: LoggerLevel
+
+
+async def async_main() -> None:
     """Run one-shot setup, then supervise nix-daemon, GC, CSI, and NRI concurrently.
 
     Loads logging configuration from /etc/nix/logging.json (ConfigMap-mounted).
@@ -163,7 +174,7 @@ async def async_main():
     with backoff. That is what the group buys over `asyncio.gather`, which
     propagates the first exception and leaves its siblings running.
     """
-    config: dict = {}
+    config: LoggingConfig = {}
     # `anyio.Path`, not `pathlib.Path`: `open()` in an async function blocks
     # the event loop. It costs nothing here, since nothing else is running
     # yet, but the rule is worth keeping whole -- this is the only place in
@@ -238,7 +249,7 @@ async def async_main():
             tg.start_soon(supervised, nri_serve, "nri", name="nri")
 
 
-def main():
+def main() -> None:
     """Entry point for the nixkube daemon."""
     anyio.run(async_main, backend="asyncio")
 

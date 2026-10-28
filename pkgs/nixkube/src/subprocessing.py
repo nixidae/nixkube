@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import logging  # for log level constants (logging.DEBUG, logging.NOTSET, etc.)
 import shlex
 import subprocess
@@ -25,7 +27,7 @@ class SubprocessResult(NamedTuple):
     elapsed: float
 
 
-async def try_captured(*args, timeout: float | None = None) -> SubprocessResult:
+async def try_captured(*args: object, timeout: float | None = None) -> SubprocessResult:
     """Run a command, capture output, and raise SubprocessError if it fails.
 
     Args:
@@ -51,7 +53,7 @@ async def try_captured(*args, timeout: float | None = None) -> SubprocessResult:
     return result
 
 
-async def try_console(*args, log_level: int = logging.DEBUG, timeout: float | None = None) -> SubprocessResult:
+async def try_console(*args: object, log_level: int = logging.DEBUG, timeout: float | None = None) -> SubprocessResult:
     """Run a command with output forwarded to logs, and raise SubprocessError if it fails.
 
     Args:
@@ -78,7 +80,7 @@ async def try_console(*args, log_level: int = logging.DEBUG, timeout: float | No
     return result
 
 
-async def run_captured(*args, timeout: float | None = None) -> SubprocessResult:
+async def run_captured(*args: object, timeout: float | None = None) -> SubprocessResult:
     """Run a command and capture output without raising on non-zero exit.
 
     Args:
@@ -91,7 +93,7 @@ async def run_captured(*args, timeout: float | None = None) -> SubprocessResult:
     return await run_console(*args, log_level=logging.NOTSET, timeout=timeout)
 
 
-async def run_console(*args, log_level: int = logging.DEBUG, timeout: float | None = None) -> SubprocessResult:
+async def run_console(*args: object, log_level: int = logging.DEBUG, timeout: float | None = None) -> SubprocessResult:
     """Run a command with output forwarded to logs, without raising on non-zero exit.
 
     Args:
@@ -123,7 +125,8 @@ async def run_console(*args, log_level: int = logging.DEBUG, timeout: float | No
             stderr=subprocess.PIPE,
         ) as proc:
             # Both are PIPE above, so neither is None.
-            assert proc.stdout is not None and proc.stderr is not None
+            if proc.stdout is None or proc.stderr is None:
+                raise RuntimeError("subprocess pipes were not opened")
             # Read both while the process runs. A pipe that nobody drains
             # fills at 64KB and stops the child there, so this is what lets
             # a chatty command finish at all -- and reading them together is
@@ -146,7 +149,8 @@ async def run_console(*args, log_level: int = logging.DEBUG, timeout: float | No
             command=list(args),
         )
 
-    assert returncode is not None
+    if returncode is None:
+        raise RuntimeError("process finished without a return code")
     elapsed_time = time.perf_counter() - start_time
     SUBPROCESS_CALLS.labels(command=label, result="ok" if returncode == 0 else "error").inc()
     SUBPROCESS_DURATION.labels(command=label).observe(elapsed_time)
@@ -212,7 +216,7 @@ async def _read_stream(
         logger.exception("stream_read_error")
 
 
-def log_command(*args, log_level: int) -> None:
+def log_command(*args: object, log_level: int) -> None:
     """Log a command with its arguments at the specified log level.
 
     Args:

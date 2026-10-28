@@ -170,8 +170,8 @@ async def _read_store_scan(work: Path, cutoff: float) -> StoreScan:
                 ],
                 stdout=handle,
             )
-    with out.open("rb") as handle:
-        return await scan_path_info(handle, cutoff)
+    with out.open("rb") as read_handle:
+        return await scan_path_info(read_handle, cutoff)
 
 
 def _record_store_size(scan: StoreScan) -> None:

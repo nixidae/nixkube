@@ -40,19 +40,39 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import anyio
 import structlog
 from kr8s import ALL, NotFoundError, ServerError
 from kr8s.asyncio.objects import Job, Node, Pod, PodTemplate, Secret, new_class
 
+from .kube_docs import (
+    job_doc,
+    lease_doc,
+    node_doc,
+    pod_doc,
+    pod_template_doc,
+    rollout_doc,
+    secret_doc,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from anyio.abc import TaskGroup
+    from kr8s.asyncio.objects import APIObject
+    from structlog.typing import FilteringBoundLogger
 
-logger = structlog.get_logger("nixkube.nixos_rollout")
+    from .kube_docs import (
+        LabelSelector,
+        NodeEntry,
+        PodDoc,
+        RolloutSource,
+        RolloutStatus,
+    )
+
+logger: FilteringBoundLogger = structlog.get_logger("nixkube.nixos_rollout")
 
 GROUP: Final = "nixkube.nixidae.org"
 VERSION: Final = f"{GROUP}/v1alpha1"
@@ -108,12 +128,22 @@ HALTING: Final = frozenset({NodePhase.REVERTED, NodePhase.BUILD_FAILED, NodePhas
 # `rebootNeeded` in kubenix/nixos-host.nix.
 REBOOT_NEEDED: Final = 100
 MIRROR: Final = "kubernetes.io/config.mirror"
-# What a node's entry keeps when it starts again. `drained`: the controller
-# cordoned the node, so the controller uncordons it.
-KEPT: Final = ("current", "failedSystem", "drained")
 
 
-def selects(selector: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
+def _kept(entry: NodeEntry) -> NodeEntry:
+    """What a node's entry keeps when it starts again. `drained`: the controller
+    cordoned the node, so the controller uncordons it."""
+    kept: NodeEntry = {}
+    if "current" in entry:
+        kept["current"] = entry["current"]
+    if "failedSystem" in entry:
+        kept["failedSystem"] = entry["failedSystem"]
+    if "drained" in entry:
+        kept["drained"] = entry["drained"]
+    return kept
+
+
+def selects(selector: LabelSelector, labels: Mapping[str, str]) -> bool:
     """Whether a Kubernetes LabelSelector matches `labels`. An empty one matches all."""
     for key, value in (selector.get("matchLabels") or {}).items():
         if labels.get(key) != value:
@@ -143,21 +173,21 @@ def job_name(rollout: str, node: str, action: Action, target: str, generation: i
 
 
 def plan(
-    entries: Mapping[str, Mapping[str, Any]],
+    entries: Mapping[str, NodeEntry],
     systems: Mapping[str, str],
     selected: list[str],
     conflicts: set[str],
     generation: int,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, NodeEntry]:
     """The node entries after a spec change, before any Job is looked at.
 
     A node in flight keeps its entry. A node whose target moved, or that was
     reverted at an older generation, starts again.
     """
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, NodeEntry] = {}
     for node in selected:
         target = systems.get(node)
-        entry = dict(entries.get(node) or {})
+        entry: NodeEntry = copy.copy(entries[node]) if node in entries else {}
         phase = entry.get("phase")
         if target is None:
             continue
@@ -165,11 +195,14 @@ def plan(
             out[node] = entry
             continue
         if node in conflicts:
-            out[node] = {
+            conflict: NodeEntry = {
                 "phase": NodePhase.CONFLICT,
                 "target": target,
                 "message": "selected by more than one NixOSRollout",
-            } | ({"current": entry["current"]} if "current" in entry else {})
+            }
+            if "current" in entry:
+                conflict["current"] = entry["current"]
+            out[node] = conflict
             continue
         if phase in HALTING - {NodePhase.BUILD_FAILED} and entry.get("generation", 0) >= generation:
             out[node] = entry
@@ -177,18 +210,17 @@ def plan(
         if phase == NodePhase.DONE and entry.get("target") == target:
             out[node] = entry
             continue
-        out[node] = {k: v for k, v in entry.items() if k in KEPT} | {
-            "phase": NodePhase.PENDING,
-            "target": target,
-        }
+        pending = _kept(entry)
+        pending.update({"phase": NodePhase.PENDING, "target": target})
+        out[node] = pending
     # A node that left the selector mid-switch is still armed: finish it.
     for node, entry in entries.items():
         if node not in out and entry.get("phase") in IN_FLIGHT:
-            out[node] = dict(entry)
+            out[node] = copy.copy(entry)
     return out
 
 
-def rollout_phase(entries: Mapping[str, Mapping[str, Any]]) -> Phase:
+def rollout_phase(entries: Mapping[str, NodeEntry]) -> Phase:
     phases = {e.get("phase") for e in entries.values()}
     if phases & HALTING:
         return Phase.HALTED
@@ -217,7 +249,7 @@ def node_system(labels: Mapping[str, str]) -> str:
     return ARCH_SYSTEMS.get(arch, f"{arch}-linux")
 
 
-def build_argv(source: Mapping[str, Any], node: str, labels: Mapping[str, str], store: str) -> list[str]:
+def build_argv(source: RolloutSource, node: str, labels: Mapping[str, str], store: str) -> list[str]:
     """Evaluate in the pod's own store, build in pynixd's."""
     args = {
         "url": source["url"],
@@ -291,26 +323,29 @@ class Build:
 
 
 def build_entries(
-    entries: Mapping[str, Any],
-    old_nodes: Mapping[str, Mapping[str, Any]],
+    entries: Mapping[str, NodeEntry],
+    old_nodes: Mapping[str, NodeEntry],
     open_builds: Mapping[str, Build],
     generation: int,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, NodeEntry]:
     """The entries of nodes whose build is running or failed, beside `plan`'s."""
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, NodeEntry] = {}
     for node, build in open_builds.items():
         if node in entries:
             continue
-        old = old_nodes.get(node) or {}
+        old: NodeEntry = old_nodes.get(node) or {}
         # A restarted controller builds again, and until the build returns, a
         # node settled at this generation must stay as it was: a Reverted node
         # that turned Building would be switched again, cordoned or not.
         if old.get("phase") in (NodePhase.DONE, NodePhase.REVERTED) and old.get("generation", 0) >= generation:
-            out[node] = dict(old)
+            out[node] = copy.copy(old)
             continue
-        out[node] = {k: v for k, v in old.items() if k in KEPT} | (
-            {"phase": NodePhase.BUILD_FAILED, "message": build.error} if build.error else {"phase": NodePhase.BUILDING}
-        )
+        entry = _kept(old)
+        if build.error:
+            entry.update({"phase": NodePhase.BUILD_FAILED, "message": build.error})
+        else:
+            entry["phase"] = NodePhase.BUILDING
+        out[node] = entry
     return out
 
 
@@ -333,25 +368,25 @@ def parse_time(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
-def job_state(job: Any) -> str | None:
-    for cond in job.raw.get("status", {}).get("conditions") or []:
+def job_state(job: Job) -> str | None:
+    for cond in job_doc(job).get("status", {}).get("conditions") or []:
         if cond.get("status") == "True" and cond.get("type") in ("Complete", "Failed"):
             return cond["type"]
     return None
 
 
-def node_ready(node: Any) -> bool:
+def node_ready(node: Node) -> bool:
     return any(
         c.get("type") == "Ready" and c.get("status") == "True"
-        for c in node.raw.get("status", {}).get("conditions") or []
+        for c in node_doc(node).get("status", {}).get("conditions") or []
     )
 
 
-def boot_id(node: Any) -> str:
-    return node.raw.get("status", {}).get("nodeInfo", {}).get("bootID", "")
+def boot_id(node: Node) -> str:
+    return node_doc(node).get("status", {}).get("nodeInfo", {}).get("bootID", "")
 
 
-def exit_code(pod: Mapping[str, Any]) -> int | None:
+def exit_code(pod: PodDoc) -> int | None:
     """The switch container's exit code, once it has terminated."""
     for status in pod.get("status", {}).get("containerStatuses") or []:
         if terminated := (status.get("state") or {}).get("terminated"):
@@ -359,7 +394,7 @@ def exit_code(pod: Mapping[str, Any]) -> int | None:
     return None
 
 
-def evictable(pod: Mapping[str, Any]) -> bool:
+def evictable(pod: PodDoc) -> bool:
     """Whether a drain evicts `pod`, as `kubectl drain` decides.
 
     Not a finished pod, a static pod's mirror or a DaemonSet's pod, which
@@ -407,13 +442,13 @@ class Controller:
 
     def systems_from_source(
         self,
-        rollout: Any,
+        rollout: APIObject,
         generation: int,
         selected: list[str],
-        nodes: Mapping[str, Any],
+        nodes: Mapping[str, Node],
     ) -> tuple[dict[str, str], dict[str, Build]]:
         """The toplevels built so far, and the builds still running or failed."""
-        uid = rollout.raw["metadata"]["uid"]
+        uid = rollout_doc(rollout)["metadata"]["uid"]
         for key in [k for k in self.builds if k[0] == uid and k[1] < generation]:
             del self.builds[key]
         built: dict[str, str] = {}
@@ -423,12 +458,13 @@ class Controller:
             build = self.builds.get(key)
             if build is None:
                 build = self.builds[key] = Build()
-                assert self.tasks is not None
+                if self.tasks is None:
+                    raise RuntimeError("systems_from_source needs the task group that run() creates")
                 self.tasks.start_soon(
                     self.build,
                     build,
                     rollout.name,
-                    rollout.raw["spec"]["source"],
+                    rollout_doc(rollout)["spec"]["source"],
                     node,
                     dict(nodes[node].labels),
                 )
@@ -442,7 +478,7 @@ class Controller:
         self,
         build: Build,
         rollout: str,
-        source: Mapping[str, Any],
+        source: RolloutSource,
         node: str,
         labels: Mapping[str, str],
     ) -> None:
@@ -454,8 +490,9 @@ class Controller:
                     env = dict(os.environ)
                     if ref := source.get("secretRef"):
                         secret = await Secret.get(ref["name"], namespace=self.namespace)
-                        data = {k: base64.b64decode(v) for k, v in (secret.raw.get("data") or {}).items()}
-                        env |= git_env(secret.raw.get("type", ""), data, Path(tmp))
+                        doc = secret_doc(secret)
+                        data = {k: base64.b64decode(v) for k, v in (doc.get("data") or {}).items()}
+                        env |= git_env(doc.get("type", ""), data, Path(tmp))
                     result = await anyio.run_process(
                         build_argv(source, node, labels, self.store),
                         env=env,
@@ -479,7 +516,9 @@ class Controller:
         nodes = {n.name: n async for n in Node.list() if isinstance(n, Node)}
         selected = {
             r.name: sorted(
-                name for name, node in nodes.items() if selects(r.raw["spec"].get("nodeSelector") or {}, node.labels)
+                name
+                for name, node in nodes.items()
+                if selects(rollout_doc(r)["spec"].get("nodeSelector") or {}, node.labels)
             )
             for r in rollouts
         }
@@ -497,14 +536,15 @@ class Controller:
 
     async def reconcile(
         self,
-        rollout: Any,
-        nodes: Mapping[str, Any],
+        rollout: APIObject,
+        nodes: Mapping[str, Node],
         selected: list[str],
         conflicts: set[str],
     ) -> None:
-        spec = rollout.raw["spec"]
-        status = rollout.raw.get("status") or {}
-        generation = rollout.raw["metadata"]["generation"]
+        doc = rollout_doc(rollout)
+        spec = doc["spec"]
+        status: RolloutStatus = doc.get("status") or {}
+        generation = doc["metadata"]["generation"]
         timeouts = Timeouts(
             confirm=spec.get("confirmTimeout", 300),
             drain=spec.get("drainTimeout", 300),
@@ -514,6 +554,7 @@ class Controller:
         max_unavailable = spec.get("maxUnavailable", 1)
         fetch_from = self.store if "source" in spec else ""
         open_builds: dict[str, Build] = {}
+        systems: dict[str, str]
         if "source" in spec:
             systems, open_builds = self.systems_from_source(rollout, generation, selected, nodes)
         else:
@@ -535,7 +576,8 @@ class Controller:
         halted = rollout_phase(entries) == Phase.HALTED
         startable = not halted and not spec.get("paused") and confirm_timeout < self.revert_delay and not open_builds
         in_flight = sum(e["phase"] in IN_FLIGHT for e in entries.values())
-        for node, entry in sorted(entries.items()):
+        for node in sorted(entries):
+            entry = entries[node]
             if not startable or in_flight >= max_unavailable:
                 break
             if entry["phase"] == NodePhase.PENDING:
@@ -545,13 +587,19 @@ class Controller:
         phase = rollout_phase(entries)
         if confirm_timeout >= self.revert_delay:
             phase = Phase.HALTED
-        new_status = {
+        new_status: RolloutStatus = {
             "observedGeneration": generation,
             "phase": phase,
             "message": message,
             "nodes": entries,
         }
-        if new_status != {k: status.get(k) for k in new_status}:
+        stored = (
+            status.get("observedGeneration"),
+            status.get("phase"),
+            status.get("message"),
+            status.get("nodes"),
+        )
+        if stored != (generation, phase, message, entries):
             # Replaced whole: a merge patch keeps every key it does not name.
             await rollout.patch(
                 [{"op": "add", "path": "/status", "value": new_status}],
@@ -563,20 +611,22 @@ class Controller:
 
     async def start_switch(
         self,
-        rollout: Any,
+        rollout: APIObject,
         node: str,
-        entry: dict[str, Any],
+        entry: NodeEntry,
         generation: int,
         fetch_from: str,
     ) -> None:
         name = job_name(rollout.name, node, Action.SWITCH, entry["target"], generation)
         await self.create_job(rollout, node, Action.SWITCH, name, entry["target"], fetch_from=fetch_from)
         entry.update(
-            phase=NodePhase.SWITCHING,
-            job=name,
-            since=stamp(now()),
-            generation=generation,
-            message="",
+            {
+                "phase": NodePhase.SWITCHING,
+                "job": name,
+                "since": stamp(now()),
+                "generation": generation,
+                "message": "",
+            }
         )
         logger.info(
             "switch_started",
@@ -588,10 +638,10 @@ class Controller:
 
     async def step(
         self,
-        rollout: Any,
+        rollout: APIObject,
         node: str,
-        entry: dict[str, Any],
-        node_obj: Any,
+        entry: NodeEntry,
+        node_obj: Node | None,
         timeouts: Timeouts,
         fetch_from: str,
     ) -> None:
@@ -617,19 +667,21 @@ class Controller:
                     entry["target"],
                     fetch_from=fetch_from,
                 )
-                entry.update(phase=NodePhase.BOOTING, job=name, message="")
+                entry.update({"phase": NodePhase.BOOTING, "job": name, "message": ""})
                 log.info("drained")
             elif elapsed > timeouts.drain:
                 entry.update(
-                    phase=NodePhase.DRAIN_FAILED,
-                    message=f"not drained within {timeouts.drain}s: " + ", ".join(remaining),
+                    {
+                        "phase": NodePhase.DRAIN_FAILED,
+                        "message": f"not drained within {timeouts.drain}s: " + ", ".join(remaining),
+                    }
                 )
                 log.warning("drain_failed", remaining=remaining)
                 await self.event(rollout, "DrainFailed", f"{node}: {entry['message']}")
             return
         if phase == NodePhase.REBOOTING:
             current = boot_id(node_obj) if node_obj is not None else ""
-            if current and current != entry["bootID"] and node_ready(node_obj):
+            if node_obj is not None and current and current != entry["bootID"] and node_ready(node_obj):
                 name = job_name(
                     rollout.name,
                     node,
@@ -638,7 +690,7 @@ class Controller:
                     entry["generation"],
                 )
                 await self.create_job(rollout, node, Action.DISARM, name, entry["target"])
-                entry.update(phase=NodePhase.DISARMING, job=name)
+                entry.update({"phase": NodePhase.DISARMING, "job": name})
                 log.info("rebooted", boot_id=current)
             elif elapsed > timeouts.reboot:
                 await self.halt(
@@ -650,7 +702,7 @@ class Controller:
             return
         if phase == NodePhase.CONFIRMING:
             lease = await Lease.get(node, namespace="kube-node-lease")
-            renewed = parse_time(lease.raw["spec"]["renewTime"]) > parse_time(entry["leaseRenewTime"])
+            renewed = parse_time(lease_doc(lease)["spec"]["renewTime"]) > parse_time(entry["leaseRenewTime"])
             if renewed and node_obj is not None and node_ready(node_obj):
                 name = job_name(
                     rollout.name,
@@ -660,7 +712,7 @@ class Controller:
                     entry["generation"],
                 )
                 await self.create_job(rollout, node, Action.DISARM, name, entry["target"])
-                entry.update(phase=NodePhase.DISARMING, job=name)
+                entry.update({"phase": NodePhase.DISARMING, "job": name})
                 log.info("switch_confirmed")
             elif elapsed > confirm_timeout:
                 name = job_name(
@@ -695,16 +747,18 @@ class Controller:
                 # one came from a kubelet that ran after the switch.
                 lease = await Lease.get(node, namespace="kube-node-lease")
                 entry.update(
-                    phase=NodePhase.CONFIRMING,
-                    since=stamp(now()),
-                    leaseRenewTime=lease.raw["spec"]["renewTime"],
+                    {
+                        "phase": NodePhase.CONFIRMING,
+                        "since": stamp(now()),
+                        "leaseRenewTime": lease_doc(lease)["spec"]["renewTime"],
+                    }
                 )
                 log.info("switch_done", job=entry["job"])
             case "Complete", NodePhase.BOOTING:
-                entry.update(phase=NodePhase.REBOOTING, since=stamp(now()))
+                entry.update({"phase": NodePhase.REBOOTING, "since": stamp(now())})
                 log.info("reboot_scheduled", job=entry["job"])
             case "Complete", NodePhase.DISARMING:
-                entry.update(phase=NodePhase.DONE, current=entry["target"], message="")
+                entry.update({"phase": NodePhase.DONE, "current": entry["target"], "message": ""})
                 entry.pop("leaseRenewTime", None)
                 entry.pop("bootID", None)
                 if entry.pop("drained", False):
@@ -715,19 +769,21 @@ class Controller:
                 with contextlib.suppress(NotFoundError):
                     await (await Node.get(node)).cordon()
                 entry.update(
-                    phase=NodePhase.DRAINING,
-                    since=stamp(now()),
-                    bootID=boot_id(node_obj) if node_obj is not None else "",
-                    drained=True,
-                    message="the kernel, initrd or modules change: draining to reboot",
+                    {
+                        "phase": NodePhase.DRAINING,
+                        "since": stamp(now()),
+                        "bootID": boot_id(node_obj) if node_obj is not None else "",
+                        "drained": True,
+                        "message": "the kernel, initrd or modules change: draining to reboot",
+                    }
                 )
                 log.info("reboot_needed")
             case "Failed", _:
                 tail = await self.job_log(entry["job"])
                 await self.halt(rollout, node, entry, f"Job {entry['job']} failed: {tail}")
 
-    async def halt(self, rollout: Any, node: str, entry: dict[str, Any], message: str) -> None:
-        entry.update(phase=NodePhase.REVERTED, failedSystem=entry["target"], message=message)
+    async def halt(self, rollout: APIObject, node: str, entry: NodeEntry, message: str) -> None:
+        entry.update({"phase": NodePhase.REVERTED, "failedSystem": entry["target"], "message": message})
         entry.pop("leaseRenewTime", None)
         logger.warning("node_reverted", rollout=rollout.name, node=node, message=message)
         with contextlib.suppress(NotFoundError):
@@ -736,7 +792,7 @@ class Controller:
 
     async def create_job(
         self,
-        rollout: Any,
+        rollout: APIObject,
         node: str,
         action: Action,
         name: str,
@@ -745,7 +801,7 @@ class Controller:
         fetch_from: str = "",
     ) -> None:
         template = await PodTemplate.get(TEMPLATE, namespace=self.namespace)
-        pod = copy.deepcopy(template.raw["template"])
+        pod = copy.deepcopy(pod_template_doc(template)["template"])
         pod["spec"]["nodeName"] = node
         values = {"ACTION": str(action), "TOPLEVEL": target, "FETCH_FROM": fetch_from}
         for container in pod["spec"].get("initContainers", []) + pod["spec"]["containers"]:
@@ -757,7 +813,11 @@ class Controller:
             f"{GROUP}/node": node,
             f"{GROUP}/action": str(action),
         }
-        pod.setdefault("metadata", {}).setdefault("labels", {}).update(labels)
+        if "metadata" not in pod:
+            pod["metadata"] = {}
+        if "labels" not in pod["metadata"]:
+            pod["metadata"]["labels"] = {}
+        pod["metadata"]["labels"].update(labels)
         job = await Job(
             {
                 "apiVersion": "batch/v1",
@@ -772,7 +832,7 @@ class Controller:
                             "apiVersion": VERSION,
                             "kind": "NixOSRollout",
                             "name": rollout.name,
-                            "uid": rollout.raw["metadata"]["uid"],
+                            "uid": rollout_doc(rollout)["metadata"]["uid"],
                         }
                     ],
                 },
@@ -793,11 +853,12 @@ class Controller:
 
     async def job_exit_code(self, job: str) -> int | None:
         async for pod in Pod.list(namespace=self.namespace, label_selector={"job-name": job}):
-            assert isinstance(pod, Pod)
-            return exit_code(pod.raw)
+            if not isinstance(pod, Pod):
+                raise RuntimeError(f"Pod.list yielded {type(pod).__name__}, not a Pod")
+            return exit_code(pod_doc(pod))
         return None
 
-    async def drain(self, node: str, log: Any) -> list[str]:
+    async def drain(self, node: str, log: FilteringBoundLogger) -> list[str]:
         """Evict what `evictable` allows from `node`; returns what is still there.
 
         Through the eviction API, so a PodDisruptionBudget can refuse (429)
@@ -805,13 +866,16 @@ class Controller:
         """
         remaining: list[str] = []
         async for pod in Pod.list(namespace=ALL, field_selector={"spec.nodeName": node}):
-            assert isinstance(pod, Pod)
-            if not evictable(pod.raw):
+            if not isinstance(pod, Pod):
+                raise RuntimeError(f"Pod.list yielded {type(pod).__name__}, not a Pod")
+            doc = pod_doc(pod)
+            if not evictable(doc):
                 continue
             remaining.append(f"{pod.namespace}/{pod.name}")
-            if pod.raw["metadata"].get("deletionTimestamp"):
+            if doc["metadata"].get("deletionTimestamp"):
                 continue
-            assert pod.api is not None
+            if pod.api is None:
+                raise RuntimeError(f"Pod {pod.namespace}/{pod.name} has no API client")
             async with pod.api.call_api(
                 "POST",
                 version="v1",
@@ -837,14 +901,15 @@ class Controller:
     async def job_log(self, job: str) -> str:
         try:
             async for pod in Pod.list(namespace=self.namespace, label_selector={"job-name": job}):
-                assert isinstance(pod, Pod)
+                if not isinstance(pod, Pod):
+                    raise RuntimeError(f"Pod.list yielded {type(pod).__name__}, not a Pod")
                 lines = [line async for line in pod.logs(tail_lines=5)]
                 return " | ".join(lines)[-500:]
         except Exception:
             logger.warning("job_log_failed", job=job, exc_info=True)
         return "no log"
 
-    async def event(self, rollout: Any, reason: str, note: str) -> None:
+    async def event(self, rollout: APIObject, reason: str, note: str) -> None:
         t = now()
         try:
             event = await ModernEvent(
@@ -864,7 +929,7 @@ class Controller:
                         "apiVersion": VERSION,
                         "kind": "NixOSRollout",
                         "name": rollout.name,
-                        "uid": rollout.raw["metadata"]["uid"],
+                        "uid": rollout_doc(rollout)["metadata"]["uid"],
                     },
                 }
             )

@@ -2,13 +2,15 @@
 
 import kr8s
 import structlog
+from kr8s.asyncio.objects import Pod
 
 from .constants import BUILDERS_ENABLED, BUILDERS_SERVICE, NAMESPACE
+from .kube_docs import pod_doc
 
 logger = structlog.get_logger("nixkube.builders")
 
 
-def is_usable(pod) -> bool:
+def is_usable(pod: Pod) -> bool:
     """Can this builder take work right now?
 
     **Ready, not Running.** A pod is Running from the moment its containers
@@ -29,7 +31,7 @@ def is_usable(pod) -> bool:
     builder pods has to give the container a probe on the SSH port for any of
     this to mean anything.
     """
-    status = pod.raw.get("status") or {}
+    status = pod_doc(pod).get("status") or {}
     if status.get("phase") != "Running":
         return False
     return any(

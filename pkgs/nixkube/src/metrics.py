@@ -27,12 +27,13 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Iterator
 from importlib.metadata import PackageNotFoundError, version
 
 import anyio
 import structlog
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, start_http_server
-from prometheus_client.core import GaugeMetricFamily
+from prometheus_client.core import GaugeMetricFamily, Metric
 
 from .constants import NIX_ROOT, PYNIXD_ENABLED
 
@@ -482,7 +483,7 @@ class StoreSpaceCollector:
     DaemonSet shares with its node.
     """
 
-    def collect(self):
+    def collect(self) -> Iterator[Metric]:
         """Yield the two numbers, or nothing when the store is unreachable."""
         path = NIX_ROOT / "nix/store"
         try:
@@ -553,7 +554,7 @@ class AppstarterCollector:
     pod's log and in `APPSTARTER_RUNNING_STORE_PATH`.
     """
 
-    def collect(self):
+    def collect(self) -> Iterator[Metric]:
         """Yield the one bit, or nothing when no state was recorded."""
         try:
             recorded = json.loads(APPSTARTER_STATE.read_text())

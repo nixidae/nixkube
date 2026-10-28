@@ -9,6 +9,7 @@ from kr8s import NotFoundError
 from kr8s.asyncio.objects import Pod, new_class
 
 from .constants import KUBE_POD_NAME, NAMESPACE
+from .kube_docs import EventSeries, event_doc
 
 logger = structlog.get_logger("nixkube.events")
 
@@ -177,9 +178,9 @@ async def report_event(
             event = await ModernEvent.get(event_name, namespace=pod.metadata.namespace)
             # Event already exists - patch to increment count
             try:
-                existing_series = event.raw.get("series")
+                existing_series = event_doc(event).get("series")
                 if existing_series is None:
-                    new_series = {"count": 2, "lastObservedTime": now_iso}
+                    new_series: EventSeries = {"count": 2, "lastObservedTime": now_iso}
                 else:
                     new_series = {
                         "count": existing_series.get("count", 1) + 1,

@@ -2,6 +2,7 @@
 import json
 import shutil
 import time
+from collections.abc import Awaitable, Callable, Coroutine
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 import anyio
 import anyio.abc
 import structlog
+from grpclib.server import Stream
 from grpclib_nri import NriPlugin as NriPluginBase, NriServer
 from kr8s.asyncio.objects import Pod
 
@@ -53,7 +55,7 @@ from .annotations import (
 )
 from .builds import BuildRegistry
 from .cleanup import garbage_collect_stale_volumes, schedule_garbage_collection
-from .mount import kernel_supports_ro, kernel_supports_rw, mount_in_container, rootfs_of
+from .mount import OciConfig, kernel_supports_ro, kernel_supports_rw, mount_in_container, rootfs_of
 from .vm import (
     ALIVE,
     FAILED,
@@ -213,13 +215,13 @@ from .zmq import ZeroMQServer
 # ============================================================================
 
 
-def nri_error_handler(
-    func: Any,
-) -> Any:  # decorator wraps arbitrary async handler methods
+def nri_error_handler[S, Req, Resp, T](
+    func: Callable[[S, Stream[Req, Resp]], Awaitable[T]],
+) -> Callable[[S, Stream[Req, Resp]], Coroutine[Any, Any, T]]:
     """Decorator for NRI handlers: logs exceptions and reports events."""
 
     @wraps(func)
-    async def wrapper(self, stream):
+    async def wrapper(self: S, stream: Stream[Req, Resp]) -> T:
         handler_logger = structlog.get_logger(f"nixkube.nri.{func.__name__.lower()}")
         try:
             return await func(self, stream)
@@ -269,11 +271,14 @@ class NriPlugin(NriPluginBase):
         logger.debug("nri_wait_resolved", binary=self.nri_wait_bin)
 
     @nri_error_handler
-    async def CreateContainer(self, stream) -> None:
+    async def CreateContainer(
+        self, stream: Stream[nri_pb2.CreateContainerRequest, nri_pb2.CreateContainerResponse]
+    ) -> None:
         structlog.contextvars.clear_contextvars()
         logger = structlog.get_logger("nixkube.nri.createcontainer")
         req: nri_pb2.CreateContainerRequest | None = await stream.recv_message()
-        assert req is not None
+        if req is None:
+            raise RuntimeError("CreateContainer received no request")
         structlog.contextvars.bind_contextvars(
             pod={"namespace": req.pod.namespace, "name": req.pod.name},
             container={"name": req.container.name, "id": req.container.id},
@@ -370,11 +375,11 @@ class NriPlugin(NriPluginBase):
                     )
                 else:
                     # Inject OCI hook to wait for build completion and report PID+bundle
-                    assert self.nri_wait_bin is not None, (
-                        "nri-wait binary not found on PATH, wait hook won't be able to execute"
-                    )
+                    if self.nri_wait_bin is None:
+                        raise RuntimeError("nri-wait binary not found on PATH, wait hook won't be able to execute")
                     coreutils_container = shutil.which("coreutils")
-                    assert coreutils_container is not None, "coreutils not found on PATH"
+                    if coreutils_container is None:
+                        raise RuntimeError("coreutils not found on PATH")
                     coreutils_host = NODE_ROOT / Path(coreutils_container).relative_to("/")
                     hook = nri_pb2.Hook(
                         path=str(coreutils_host),
@@ -436,11 +441,12 @@ class NriPlugin(NriPluginBase):
         await stream.send_message(resp)
 
     @nri_error_handler
-    async def StateChange(self, stream) -> None:
+    async def StateChange(self, stream: Stream[nri_pb2.StateChangeEvent, nri_pb2.Empty]) -> None:
         structlog.contextvars.clear_contextvars()
         logger = structlog.get_logger("nixkube.nri.statechange")
         event: nri_pb2.StateChangeEvent | None = await stream.recv_message()
-        assert event is not None
+        if event is None:
+            raise RuntimeError("StateChange received no event")
 
         event_name = nri_pb2.Event.Name(event.event)
         # The label is the enum's name, so the series count is the enum's size.
@@ -452,7 +458,7 @@ class NriPlugin(NriPluginBase):
 
         # Only include container info if this is a container event (container exists and has a name)
         if event.container and event.container.name:
-            container_info: dict = {
+            container_info: dict[str, str | int] = {
                 "name": event.container.name,
                 "state": nri_pb2.ContainerState.Name(event.container.state),
             }
@@ -474,7 +480,7 @@ class NriPlugin(NriPluginBase):
         await stream.send_message(nri_pb2.Empty())
 
     @nri_error_handler
-    async def Synchronize(self, stream) -> None:
+    async def Synchronize(self, stream: Stream[nri_pb2.SynchronizeRequest, nri_pb2.SynchronizeResponse]) -> None:
         """Sweep after every (re)connection to the runtime.
 
         A container that went away while the runtime was down sends no
@@ -769,7 +775,7 @@ async def reachable_rootfs(pid: int, bundle: str) -> str | None:
     """
     root = f"{HOST_PROC_PATH}/{pid}/root"
     try:
-        config = json.loads(await anyio.Path(f"{root}{bundle}/config.json").read_text())
+        config: OciConfig = json.loads(await anyio.Path(f"{root}{bundle}/config.json").read_text())
         rootfs = rootfs_of(bundle, config)
         if await anyio.Path(f"{root}{rootfs}").is_dir():
             return rootfs

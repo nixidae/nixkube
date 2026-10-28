@@ -134,6 +134,10 @@ def disk_usage(path: Path) -> int:
     return total
 
 
+def _rmtree(path: Path) -> None:
+    shutil.rmtree(path)
+
+
 async def retire_loop() -> None:
     """Delete the old store once nothing mounts from it, then stop."""
     host_path = str(HOST_MOUNT_PATH)
@@ -152,7 +156,7 @@ async def retire_loop() -> None:
         elif held:
             logger.info("old_store_in_use", path=host_path, mounts=len(held), first=held[0])
         else:
-            await anyio.to_thread.run_sync(shutil.rmtree, old)
+            await anyio.to_thread.run_sync(_rmtree, old)
             OLD_STORE_BYTES.set(0)
             logger.info("old_store_retired", path=host_path)
             await report_event(

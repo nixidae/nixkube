@@ -77,6 +77,8 @@ via picklable arguments.
                       (Future: open_tree+move_mount before setns removes this dependency)
 """
 
+from __future__ import annotations
+
 import ctypes
 import errno
 import multiprocessing
@@ -85,6 +87,7 @@ import queue
 import traceback
 from functools import cache
 from pathlib import Path
+from typing import TypedDict
 
 import anyio.to_thread
 import structlog
@@ -291,7 +294,17 @@ def _make_overlay_fd(libc: ctypes.CDLL, lowerdir: Path, upperdir: Path, workdir:
         os.close(ctx_fd)
 
 
-def rootfs_of(bundle: str, config: dict) -> str:
+class _OciRoot(TypedDict):
+    path: str
+
+
+class OciConfig(TypedDict):
+    """The part of an OCI runtime `config.json` that rootfs_of reads."""
+
+    root: _OciRoot
+
+
+def rootfs_of(bundle: str, config: OciConfig) -> str:
     """The container's rootfs, from its bundle's OCI `config.json`.
 
     The spec lets `root.path` be absolute or relative to the bundle.
@@ -308,7 +321,7 @@ def _mount_worker(
     nix_tree_path: Path,
     store_mounts: list[tuple[Path, Path]],
     nix_rw: bool,
-    result_queue: "multiprocessing.Queue[Exception | None]",
+    result_queue: multiprocessing.Queue[Exception | None],
     host_proc_path: str,
     farm_paths: list[Path] | None = None,
     image: Path | None = None,
@@ -461,7 +474,7 @@ async def mount_in_container(
     Raises the worker's original exception (with traceback) on failure.
     """
     ctx = multiprocessing.get_context("spawn")
-    result_queue: multiprocessing.Queue = ctx.Queue()
+    result_queue: multiprocessing.Queue[Exception | None] = ctx.Queue()
 
     proc = ctx.Process(
         target=_mount_worker,
@@ -482,7 +495,7 @@ async def mount_in_container(
     # `abandon_on_cancel`: a cancelled mount must not wait for a worker that
     # is itself stuck. The thread is left to finish against a daemon process
     # that dies with the daemon.
-    await anyio.to_thread.run_sync(proc.join, abandon_on_cancel=True)
+    await anyio.to_thread.run_sync(proc.join, abandon_on_cancel=True)  # type: ignore[call-arg]  # zuban-bug: run_sync counts defaulted parameters
 
     try:
         result = result_queue.get_nowait()

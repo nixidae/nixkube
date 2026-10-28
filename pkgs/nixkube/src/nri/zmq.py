@@ -119,7 +119,7 @@ class ZeroMQServer:
             return None
         return (info.pid, info.bundle)
 
-    async def query_build_status(self, container_id: str) -> dict:
+    async def query_build_status(self, container_id: str) -> dict[str, str]:
         """Return build status for a container."""
         if container_id in self.build_status:
             return self.build_status[container_id]
