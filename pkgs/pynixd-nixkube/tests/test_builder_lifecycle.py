@@ -12,6 +12,8 @@ The API calls are patched out. This is about lifetime, not about Kubernetes.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 import anyio
 import anyio.lowlevel
 import pytest
@@ -19,19 +21,23 @@ from structlog.testing import capture_logs
 
 from pynixd_nixkube.builder_manager import BuilderManager
 
+if TYPE_CHECKING:
+    from pynixd.instance import Server
 
-def manager(**kwargs) -> BuilderManager:
-    return BuilderManager(server=None, namespace="nixkube", **kwargs)  # type: ignore[arg-type]
+
+def manager() -> BuilderManager:
+    # These tests never reach the server, so none is given.
+    return BuilderManager(server=cast("Server", None), namespace="nixkube")
 
 
 @pytest.fixture
-def quiet(monkeypatch) -> None:
+def quiet(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace the loops and the two startup calls, so nothing needs a cluster."""
 
-    async def nothing(*_args, **_kwargs) -> None:
+    async def nothing(*_args: object, **_kwargs: object) -> None:
         return None
 
-    async def forever(*_args, **_kwargs) -> None:
+    async def forever(*_args: object, **_kwargs: object) -> None:
         await anyio.sleep(3600)
 
     for name in ("_reap_orphaned_builder_pods", "_sync_dynamic_features"):
@@ -48,7 +54,7 @@ def quiet(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 class TestRunning:
-    async def test_the_block_ends_the_loops(self, quiet) -> None:
+    async def test_the_block_ends_the_loops(self, quiet: None) -> None:
         """A group that did not cancel would hang here: all five loops sleep
         for an hour. `fail_after` is what turns that hang into a failure."""
         m = manager()
@@ -60,7 +66,7 @@ class TestRunning:
 
         assert m._tasks is None
 
-    async def test_a_detached_failure_does_not_end_the_manager(self, quiet) -> None:
+    async def test_a_detached_failure_does_not_end_the_manager(self, quiet: None) -> None:
         async def boom() -> None:
             raise RuntimeError("one node's probe")
 
@@ -75,7 +81,7 @@ class TestRunning:
         assert len(failed) == 1
         assert failed[0]["task"] == "probe:node-1"
 
-    async def test_the_same_failure_started_bare_does_end_it(self, quiet) -> None:
+    async def test_the_same_failure_started_bare_does_end_it(self, quiet: None) -> None:
         """The negative control. Without it the test above passes against a
         `_detach` that starts nothing at all."""
 
@@ -92,7 +98,7 @@ class TestRunning:
 
         assert any(isinstance(e, RuntimeError) for e in caught.value.exceptions)
 
-    async def test_detaching_before_the_block_says_so(self, quiet) -> None:
+    async def test_detaching_before_the_block_says_so(self, quiet: None) -> None:
         """Rather than `AttributeError` on a `None` group, or silence."""
         m = manager()
 

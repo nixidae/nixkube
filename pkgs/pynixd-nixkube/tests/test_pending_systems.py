@@ -23,7 +23,7 @@ def _request(name: str, platform: str) -> BuildDerivationRequest:
 
 
 @pytest.mark.asyncio
-async def test_pending_builds_name_the_systems_a_builder_can_serve():
+async def test_pending_builds_name_the_systems_a_builder_can_serve() -> None:
     queue = BuildQueue()
     await queue.enqueue(_request("a", "x86_64-linux"))
     await queue.enqueue(_request("b", "aarch64-linux"))

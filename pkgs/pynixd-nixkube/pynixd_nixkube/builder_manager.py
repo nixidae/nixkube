@@ -5,20 +5,20 @@ import hashlib
 import socket
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import anyio
 import anyio.abc
 import kr8s.asyncio as k8s
 import structlog
-from kr8s.asyncio.objects import Job, PodTemplate, new_class
+from kr8s.asyncio.objects import APIObject, Job, Node, Pod, PodTemplate, new_class
 from pynixd.build_queue import QueuedBuild
 from pynixd.config import SSHSubprocessStoreSpec
 from pynixd.serde import StoreId
-from pynixd.store import SSHSubprocessStore
+from pynixd.store import SSHSubprocessStore, Store
 
 if TYPE_CHECKING:
     from pynixd.instance import Server
@@ -74,6 +74,119 @@ EVENT_REASON_STARTUP_TIMEOUT = "NixBuilderStartupTimeout"
 BUILDER_KNOWN_HOSTS = "/etc/ssh-dynauth/ssh_known_hosts"
 
 
+# The parts of Kubernetes objects this module reads or writes. The API server
+# sends them as JSON, and kr8s exposes that JSON as `raw`.
+class ObjectMeta(TypedDict, total=False):
+    name: str
+    namespace: str
+    uid: str
+    creationTimestamp: str
+    labels: dict[str, str] | None
+    annotations: dict[str, str] | None
+    ownerReferences: list[object]
+
+
+class PodCondition(TypedDict, total=False):
+    type: str
+    status: str
+
+
+class PodStatus(TypedDict, total=False):
+    phase: str
+    podIP: str
+    conditions: list[PodCondition] | None
+
+
+class CSIVolumeSource(TypedDict, total=False):
+    driver: str
+    readOnly: bool
+    volumeAttributes: dict[str, object]
+
+
+class PodVolume(TypedDict, total=False):
+    csi: CSIVolumeSource
+
+
+class MatchExpression(TypedDict, total=False):
+    key: str
+    operator: str
+    values: list[str]
+
+
+class NodeSelectorTerm(TypedDict, total=False):
+    matchExpressions: list[MatchExpression]
+
+
+class NodeSelector(TypedDict, total=False):
+    nodeSelectorTerms: list[NodeSelectorTerm]
+
+
+class NodeAffinity(TypedDict, total=False):
+    requiredDuringSchedulingIgnoredDuringExecution: NodeSelector
+
+
+class Affinity(TypedDict, total=False):
+    nodeAffinity: NodeAffinity
+
+
+class PodSpec(TypedDict, total=False):
+    nodeName: str
+    nodeSelector: dict[str, str]
+    affinity: Affinity
+    volumes: list[PodVolume]
+
+
+class PodTemplateSpec(TypedDict, total=False):
+    spec: PodSpec
+
+
+class JobStatus(TypedDict, total=False):
+    startTime: str
+    succeeded: int
+    failed: int
+
+
+class JobSpec(TypedDict, total=False):
+    template: PodTemplateSpec
+    backoffLimit: int
+    ttlSecondsAfterFinished: int
+
+
+class JobDoc(TypedDict, total=False):
+    apiVersion: str
+    kind: str
+    metadata: ObjectMeta
+    spec: JobSpec
+    status: JobStatus
+
+
+class PodDoc(TypedDict, total=False):
+    metadata: ObjectMeta
+    spec: PodSpec
+    status: PodStatus
+
+
+class PodTemplateDoc(TypedDict, total=False):
+    template: PodTemplateSpec
+
+
+class NodeDoc(TypedDict, total=False):
+    metadata: ObjectMeta
+
+
+class CSIDriverRef(TypedDict, total=False):
+    name: str
+
+
+class CSINodeSpec(TypedDict, total=False):
+    drivers: list[CSIDriverRef] | None
+
+
+class CSINodeDoc(TypedDict, total=False):
+    metadata: ObjectMeta
+    spec: CSINodeSpec
+
+
 @dataclass
 class PodState:
     """What a builder Job's Pod says about itself."""
@@ -84,15 +197,15 @@ class PodState:
     node: str | None = None
 
 
-def _pod_is_ready(pod_status: dict) -> bool:
+def _pod_is_ready(pod_status: PodStatus) -> bool:
     """True when the Pod carries a Ready condition set to True."""
-    for condition in pod_status.get("conditions", []) or []:
+    for condition in pod_status.get("conditions") or []:
         if condition.get("type") == "Ready":
             return condition.get("status") == "True"
     return False
 
 
-def _job_age_seconds(job_raw: dict, now: datetime) -> float | None:
+def _job_age_seconds(job_raw: JobDoc, now: datetime) -> float | None:
     """Seconds since the Job started, or None when the API gives no timestamp.
 
     `status.startTime` is when the Job controller began, and
@@ -155,19 +268,63 @@ def pending_systems(builds: Iterable[QueuedBuild], available: set[str]) -> set[s
     }
 
 
-def deep_merge(base: dict, overrides: dict) -> dict:
+def deep_merge[T: Mapping[str, object]](base: T, overrides: Mapping[str, object]) -> T:
     """Deep-merge overrides into base (Nix lib.recursiveUpdate style).
 
     Non-dict values in overrides replace base values entirely.
     Lists are replaced, not merged.
     """
-    result = base.copy()
+    result: dict[str, object] = dict(base)
     for key, value in overrides.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = deep_merge(result[key], value)
+        current = result.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            result[key] = deep_merge(current, value)
         else:
             result[key] = value
-    return result
+    # dict(base) drops the TypedDict type; the merge keeps every key of base, so T holds.
+    return cast(T, result)
+
+
+# kr8s types list results as `APIObject | dict`. A registered kind comes back as its class.
+def _expect[K: APIObject](obj: object, kind: type[K]) -> K:
+    if not isinstance(obj, kind):
+        raise RuntimeError(f"kr8s returned {type(obj).__name__} for {kind.__name__}")
+    return obj
+
+
+def _builder_store(store_id: str, found: Store) -> SSHSubprocessStore:
+    if not isinstance(found, SSHSubprocessStore):
+        raise RuntimeError(f"builder store {store_id} is {type(found).__name__}, not SSHSubprocessStore")
+    return found
+
+
+def _job_doc(job: Job) -> JobDoc:
+    return cast(JobDoc, job.raw)
+
+
+def _node_doc(node: Node) -> NodeDoc:
+    return cast(NodeDoc, node.raw)
+
+
+def _pod_doc(pod: Pod) -> PodDoc:
+    return cast(PodDoc, pod.raw)
+
+
+def _job_labels(job: Job) -> dict[str, str]:
+    return _job_doc(job).get("metadata", {}).get("labels") or {}
+
+
+def _nix_store_versions(pod_spec: PodSpec) -> set[str]:
+    """The /nix/store paths of the writable nixkube volume in a Pod spec."""
+    for volume in pod_spec.get("volumes", []):
+        csi = volume.get("csi", {})
+        if csi.get("driver") == "nixkube" and csi.get("readOnly") is False:
+            return {
+                val
+                for val in csi.get("volumeAttributes", {}).values()
+                if isinstance(val, str) and val.startswith("/nix/store/")
+            }
+    return set()
 
 
 class BuilderManager:
@@ -327,7 +484,7 @@ class BuilderManager:
         """Delay after `failures` consecutive failed builders of one system."""
         if failures <= 0:
             return 0.0
-        return min(_BACKOFF_BASE_SECONDS * (2 ** (failures - 1)), self.backoff_cap)
+        return min(_BACKOFF_BASE_SECONDS * float(2 ** (failures - 1)), self.backoff_cap)
 
     def _backoff_remaining(self, system: str) -> float:
         until = self._backoff_until.get(system)
@@ -395,7 +552,7 @@ class BuilderManager:
 
     # ---- Startup watchdog ----
 
-    def _startup_expired(self, job_raw: dict, job_name: str, phase: str | None, now: datetime) -> bool:
+    def _startup_expired(self, job_raw: JobDoc, job_name: str, phase: str | None, now: datetime) -> bool:
         """True when a builder that never started has had long enough.
 
         Not `activeDeadlineSeconds`. That field measures the whole life of a
@@ -422,14 +579,14 @@ class BuilderManager:
         age = _job_age_seconds(job_raw, now)
         return age is not None and age > self.startup_timeout
 
-    async def _expire_slow_starter(self, job: Any, system: str, pod: PodState) -> bool:
+    async def _expire_slow_starter(self, job: Job, system: str, pod: PodState) -> bool:
         """End a builder whose Pod never started. True when it did."""
         job_name = job.metadata.name
         now = datetime.now(UTC)
-        if not self._startup_expired(job.raw, job_name, pod.phase, now):
+        if not self._startup_expired(_job_doc(job), job_name, pod.phase, now):
             return False
 
-        age = _job_age_seconds(job.raw, now)
+        age = _job_age_seconds(_job_doc(job), now)
         # Name the node. The backoff counts per system, and a startup failure
         # is almost always per node -- one broken nix-node makes every system
         # on the cluster look slow. The node is what turns "builds are slow"
@@ -460,7 +617,7 @@ class BuilderManager:
         await self._delete_job(job)
         return True
 
-    async def _report_job_event(self, job: Any, reason: str, note: str, event_type: str = "Normal") -> None:
+    async def _report_job_event(self, job: Job, reason: str, note: str, event_type: str = "Normal") -> None:
         """Report a Kubernetes event against a builder Job.
 
         An operator looks at events first. The symptom this watchdog acts on
@@ -469,7 +626,7 @@ class BuilderManager:
         must not stop the deletion.
         """
         try:
-            uid = getattr(job.metadata, "uid", "") or ""
+            uid = _job_doc(job).get("metadata", {}).get("uid") or ""
             digest = hashlib.md5(f"{uid}{reason}".encode()).hexdigest()[:8]
             event = await ModernEvent(
                 {
@@ -569,19 +726,20 @@ class BuilderManager:
             try:
                 api = await k8s.api()
                 async for event in api.watch("csinodes"):
-                    event_type, resource = cast(Any, event)
+                    event_type, resource = event
                     if event_type not in {"ADDED", "MODIFIED"}:
                         continue
-                    node_name = getattr(resource.metadata, "name", "")
+                    csinode = cast(CSINodeDoc, resource.raw)
+                    node_name = csinode.get("metadata", {}).get("name", "")
                     if not node_name or node_name in self._pending_probes:
                         continue
-                    drivers = {d.get("name") for d in (resource.raw.get("spec", {}).get("drivers") or [])}
+                    drivers = {d.get("name") for d in (csinode.get("spec", {}).get("drivers") or [])}
                     if CSI_DRIVER_NAME not in drivers:
                         continue
                     node = await self._get_node(node_name)
                     if node is None:
                         continue
-                    labels = node.raw.get("metadata", {}).get("labels", {}) or {}
+                    labels = _node_doc(node).get("metadata", {}).get("labels") or {}
                     if PROBED_LABEL in labels:
                         continue
                     kube_arch = labels.get("kubernetes.io/arch", "")
@@ -602,11 +760,11 @@ class BuilderManager:
                 log.warning("node_watch_error", exc_info=True)
                 await anyio.sleep(10)
 
-    async def _get_node(self, node_name: str) -> Any | None:
+    async def _get_node(self, node_name: str) -> Node | None:
         try:
             api = await k8s.api()
             async for node in api.get("nodes", node_name):
-                return cast(Any, node)
+                return _expect(node, Node)
         except Exception:
             log.warning("probe_node_read_failed", node=node_name, exc_info=True)
         return None
@@ -616,7 +774,7 @@ class BuilderManager:
         log.info("probe_node_started", node=node_name, system=system)
         job_name = None
         try:
-            overrides = {
+            overrides: JobDoc = {
                 "metadata": {
                     "labels": {
                         PROBE_LABEL: "true",
@@ -691,10 +849,11 @@ class BuilderManager:
             # what the `fail_after` below is measured against, and that scope
             # uses the event loop's own clock.
             deadline = anyio.current_time() + self.startup_timeout
-            store = None
+            store: SSHSubprocessStore | None = None
             while anyio.current_time() < deadline:
-                store = self.server.stores.get(store_id)  # type: ignore[arg-type]
-                if store is not None:
+                found = self.server.stores.get(StoreId(store_id))
+                if found is not None:
+                    store = _builder_store(store_id, found)
                     break
                 await anyio.sleep(1)
 
@@ -739,7 +898,7 @@ class BuilderManager:
         try:
             api = await k8s.api()
             async for node in api.get("nodes", node_name):
-                node = cast(Any, node)
+                node = _expect(node, Node)
                 await node.patch(
                     {
                         "metadata": {
@@ -779,15 +938,15 @@ class BuilderManager:
         try:
             api = await k8s.api()
             async for node in api.get("nodes"):
-                node = cast(Any, node)
-                labels = getattr(node.metadata, "labels", {}) or {}
+                node_doc = _node_doc(_expect(node, Node))
+                labels = node_doc.get("metadata", {}).get("labels") or {}
                 if labels.get(PROBED_LABEL) != "true":
                     continue
                 kube_arch = labels.get("kubernetes.io/arch", "")
                 sys_label = KUBE_ARCH_TO_NIX_SYSTEM.get(kube_arch)
-                if sys_label not in systems or sys_label in feature_matrix:
+                if sys_label is None or sys_label not in systems or sys_label in feature_matrix:
                     continue
-                annotations = getattr(node.metadata, "annotations", {}) or {}
+                annotations = node_doc.get("metadata", {}).get("annotations") or {}
                 raw = annotations.get(FEATURES_ANNOTATION, "")
                 features = set(filter(None, raw.split(","))) if raw else set()
                 feature_matrix[sys_label] = features or set(_DEFAULT_FEATURES)
@@ -806,8 +965,8 @@ class BuilderManager:
         try:
             api = await k8s.api()
             async for node in api.get("nodes"):
-                node = cast(Any, node)
-                labels = getattr(node.metadata, "labels", {}) or {}
+                node_doc = _node_doc(_expect(node, Node))
+                labels = node_doc.get("metadata", {}).get("labels") or {}
                 if labels.get(PROBED_LABEL) == "true":
                     any_probed = True
                     kube_arch = labels.get("kubernetes.io/arch", "")
@@ -849,9 +1008,9 @@ class BuilderManager:
             namespace=self.namespace,
             label_selector={BUILDER_LABEL: BUILDER_LABEL_VALUE},
         ):
-            job = cast(Any, job)
-            seen.add(job.metadata.name)
-            await self._reconcile_job(job)
+            found = _expect(job, Job)
+            seen.add(found.metadata.name)
+            await self._reconcile_job(found)
 
         for store_id in list(self._registered):
             store_id_prefix = "builder-"
@@ -878,9 +1037,10 @@ class BuilderManager:
                     namespace=self.namespace,
                     label_selector={BUILDER_LABEL: BUILDER_LABEL_VALUE},
                 ):
-                    event_type, job = cast(Any, event)
-                    if job is None:
+                    event_type, obj = event
+                    if obj is None:
                         continue
+                    job = _expect(obj, Job)
 
                     async with self._reconcile_lock:
                         if event_type == "DELETED":
@@ -897,7 +1057,7 @@ class BuilderManager:
 
             await anyio.sleep(_RECONNECT_DELAY)
 
-    async def _reconcile_job(self, job: Any) -> None:
+    async def _reconcile_job(self, job: Job) -> None:
         job_name = job.metadata.name
         store_id = f"builder-{job_name}"
 
@@ -907,11 +1067,11 @@ class BuilderManager:
             await self._delete_job(job)
             return
 
-        labels = getattr(job.metadata, "labels", {}) or {}
+        labels = _job_labels(job)
         is_probe = labels.get(PROBE_LABEL) == "true"
         system = labels.get(SYSTEM_LABEL, "unknown")
 
-        status = job.raw.get("status", {})
+        status = _job_doc(job).get("status", {})
         if status.get("succeeded") or status.get("failed"):
             if (
                 status.get("failed")
@@ -926,7 +1086,7 @@ class BuilderManager:
                 await self._unregister_builder(store_id)
             return
 
-        if not is_probe and self._is_aged(job.raw, datetime.now(UTC)):
+        if not is_probe and self._is_aged(_job_doc(job), datetime.now(UTC)):
             if job_name not in self._aged:
                 log.info("builder_max_age_reached", job=job_name, system=system)
             self._aged.add(job_name)
@@ -996,7 +1156,7 @@ class BuilderManager:
 
     async def _unregister_builder(self, store_id: str) -> None:
         try:
-            await self.server.remove_store(store_id)  # type: ignore[arg-type]
+            await self.server.remove_store(StoreId(store_id))
             self._registered.pop(store_id, None)
             self._idle_since.pop(store_id, None)
             self._job_names.pop(store_id, None)
@@ -1005,7 +1165,7 @@ class BuilderManager:
         except Exception:
             log.exception("builder_unregister_failed", store_id=store_id)
 
-    async def _is_stale_builder(self, job: Any) -> bool:
+    async def _is_stale_builder(self, job: Job) -> bool:
         expected = await self._get_expected_store_versions()
         if not expected:
             return False
@@ -1013,16 +1173,8 @@ class BuilderManager:
         return not job_versions <= expected
 
     @staticmethod
-    def _get_job_store_versions(job: Any) -> set[str]:
-        for vol in getattr(job, "raw", {}).get("spec", {}).get("template", {}).get("spec", {}).get("volumes", []):
-            csi = vol.get("csi", {})
-            if csi.get("driver") == "nixkube" and csi.get("readOnly") is False:
-                found = set()
-                for val in csi.get("volumeAttributes", {}).values():
-                    if isinstance(val, str) and val.startswith("/nix/store/"):
-                        found.add(val)
-                return found
-        return set()
+    def _get_job_store_versions(job: Job) -> set[str]:
+        return _nix_store_versions(_job_doc(job).get("spec", {}).get("template", {}).get("spec", {}))
 
     async def _get_expected_store_versions(self) -> set[str]:
         try:
@@ -1030,18 +1182,10 @@ class BuilderManager:
         except Exception:
             log.exception("builder_podtemplate_get_failed")
             return set()
-        pod_spec = template.raw.get("template", {})
-        for vol in pod_spec.get("spec", {}).get("volumes", []):
-            csi = vol.get("csi", {})
-            if csi.get("driver") == "nixkube" and csi.get("readOnly") is False:
-                found = set()
-                for val in csi.get("volumeAttributes", {}).values():
-                    if isinstance(val, str) and val.startswith("/nix/store/"):
-                        found.add(val)
-                return found
-        return set()
+        template_doc = cast(PodTemplateDoc, template.raw)
+        return _nix_store_versions(template_doc.get("template", {}).get("spec", {}))
 
-    async def _get_job_pod_state(self, job: Any) -> "PodState":
+    async def _get_job_pod_state(self, job: Job) -> "PodState":
         """Return what the Job's Pod says about itself.
 
         Four signals, four uses. A Pod has an IP once its sandbox is up,
@@ -1060,10 +1204,10 @@ class BuilderManager:
                 namespace=self.namespace,
                 label_selector={"job-name": job.metadata.name},
             ):
-                pod = cast(Any, pod)
-                status = pod.raw.get("status", {})
+                pod_doc = _pod_doc(_expect(pod, Pod))
+                status = pod_doc.get("status", {})
                 state.phase = status.get("phase")
-                state.node = pod.raw.get("spec", {}).get("nodeName")
+                state.node = pod_doc.get("spec", {}).get("nodeName")
                 state.ip = status.get("podIP")
                 if state.ip:
                     state.ready = _pod_is_ready(status)
@@ -1074,16 +1218,16 @@ class BuilderManager:
 
     # ---- Builder min/max lifecycle ----
 
-    def _is_aged(self, job_raw: dict, now: datetime) -> bool:
+    def _is_aged(self, job_raw: JobDoc, now: datetime) -> bool:
         if self.max_age <= 0:
             return False
         age = _job_age_seconds(job_raw, now)
         return age is not None and age > self.max_age
 
-    async def _list_builder_jobs(self) -> list[Any]:
+    async def _list_builder_jobs(self) -> list[Job]:
         api = await k8s.api()
         return [
-            cast(Any, job)
+            _expect(job, Job)
             async for job in api.get(
                 "jobs",
                 namespace=self.namespace,
@@ -1101,16 +1245,16 @@ class BuilderManager:
         now = datetime.now(UTC)
         active_by_system: dict[str, int] = {}
         for job in jobs:
-            status = job.raw.get("status", {})
+            status = _job_doc(job).get("status", {})
             if status.get("succeeded") or status.get("failed"):
                 continue
-            labels = getattr(job.metadata, "labels", {}) or {}
+            labels = _job_labels(job)
             if labels.get(PROBE_LABEL) == "true":
                 continue
             # An aged builder counts toward neither the minimum nor the
             # maximum, so its replacement starts while it still serves. At
             # `max == min` the replacement could not start otherwise.
-            if self._is_aged(job.raw, now):
+            if self._is_aged(_job_doc(job), now):
                 continue
             sys_label = labels.get(SYSTEM_LABEL, "unknown")
             active_by_system[sys_label] = active_by_system.get(sys_label, 0) + 1
@@ -1171,12 +1315,12 @@ class BuilderManager:
         wall = datetime.now(UTC)
         active = 0
         for job in jobs:
-            status = job.raw.get("status", {})
+            status = _job_doc(job).get("status", {})
             if status.get("succeeded") or status.get("failed"):
                 continue
-            labels = getattr(job.metadata, "labels", {}) or {}
+            labels = _job_labels(job)
             # Aged builders are leaving; see `_ensure_min_builders`.
-            if labels.get(PROBE_LABEL) == "true" or self._is_aged(job.raw, wall):
+            if labels.get(PROBE_LABEL) == "true" or self._is_aged(_job_doc(job), wall):
                 continue
             active += 1
 
@@ -1196,7 +1340,7 @@ class BuilderManager:
     def _is_aged_store(self, store_id: str) -> bool:
         return self._job_names.get(store_id) in self._aged
 
-    def _is_busy(self, store: Any) -> bool:
+    def _is_busy(self, store: Store) -> bool:
         """True while the store has work, sent or only assigned.
 
         `in_flight` counts connections in use. A build the scheduler has
@@ -1211,14 +1355,16 @@ class BuilderManager:
 
     async def _recycle_aged(self) -> None:
         """Drain each aged builder once its replacement is Ready, then retire it."""
-        views = []
-        # SSHSubprocessStore, which carries `draining`; the mapping's type is
-        # the Store base class, which does not.
-        stores: dict[str, Any] = {}
+        views: list[RecycleView] = []
+        # Only SSHSubprocessStore carries `draining`, and every builder store is one.
+        stores: dict[str, SSHSubprocessStore] = {}
         for store_id, system in self._store_systems.items():
-            store = self.server.stores.get(store_id)  # type: ignore[arg-type]
+            store = self.server.stores.get(StoreId(store_id))
             job_name = self._job_names.get(store_id)
             if store is None or job_name is None:
+                continue
+            if not isinstance(store, SSHSubprocessStore):
+                log.warning("builder_store_not_ssh", store_id=store_id, store_type=type(store).__name__)
                 continue
             stores[store_id] = store
             views.append(
@@ -1227,7 +1373,7 @@ class BuilderManager:
                     system=system,
                     aged=job_name in self._aged,
                     ready=job_name in self._ever_ready and store.is_healthy,
-                    draining=stores[store_id].draining,
+                    draining=store.draining,
                     busy=self._is_busy(store),
                 )
             )
@@ -1259,7 +1405,7 @@ class BuilderManager:
                 for store_id in fresh:
                     if remaining <= self.min_builders:
                         break
-                    store = self.server.stores.get(store_id)  # type: ignore[arg-type]
+                    store = self.server.stores.get(StoreId(store_id))
                     if store is None:
                         continue
 
@@ -1285,7 +1431,7 @@ class BuilderManager:
 
             await anyio.sleep(60)
 
-    async def _delete_job(self, job: Any) -> None:
+    async def _delete_job(self, job: Job) -> None:
         try:
             await job.delete(propagation_policy="Background")
             log.info("builder_job_deleted", job=job.metadata.name)
@@ -1311,8 +1457,8 @@ class BuilderManager:
                 namespace=self.namespace,
                 label_selector={BUILDER_LABEL: BUILDER_LABEL_VALUE},
             ):
-                pod = cast(Any, pod)
-                refs = getattr(pod.metadata, "ownerReferences", None)
+                pod = _expect(pod, Pod)
+                refs = _pod_doc(pod).get("metadata", {}).get("ownerReferences")
                 if not refs:
                     log.info("orphaned_builder_pod_found", pod=pod.metadata.name)
                     await pod.delete(propagation_policy="Background")
@@ -1336,7 +1482,12 @@ class BuilderManager:
 
                 active_per_system: dict[str, int] = {}
                 for s in self.server.stores.values():
-                    if s.store_id.startswith("builder-") and s.is_healthy and not s.draining and not s.no_schedule:
+                    if not s.store_id.startswith("builder-"):
+                        continue
+                    if not isinstance(s, SSHSubprocessStore):
+                        log.warning("builder_store_not_ssh", store_id=s.store_id, store_type=type(s).__name__)
+                        continue
+                    if s.is_healthy and not s.draining and not s.no_schedule:
                         fm = s.feature_matrix
                         if fm:
                             for system in fm:
@@ -1355,7 +1506,9 @@ class BuilderManager:
 
     # ---- Job creation ----
 
-    def _build_job_resource(self, system: str, pod_spec: dict, overrides: dict | None = None) -> dict:
+    def _build_job_resource(
+        self, system: str, pod_spec: PodTemplateSpec, overrides: Mapping[str, object] | None = None
+    ) -> JobDoc:
         """The Job a builder is created from.
 
         `activeDeadlineSeconds` is deliberately absent. It measures a Job's
@@ -1373,7 +1526,7 @@ class BuilderManager:
         finishes.
         """
         job_id = str(uuid.uuid4())[:8]
-        job_resource = {
+        job_resource: JobDoc = {
             "apiVersion": "batch/v1",
             "kind": "Job",
             "metadata": {
@@ -1394,18 +1547,18 @@ class BuilderManager:
             job_resource = deep_merge(job_resource, overrides)
         return job_resource
 
-    async def _create_builder_job(self, system: str, overrides: dict | None = None) -> str | None:
+    async def _create_builder_job(self, system: str, overrides: Mapping[str, object] | None = None) -> str | None:
         try:
             template = await PodTemplate.get(BUILDER_PODTEMPLATE_NAME, namespace=self.namespace)
         except Exception:  # noqa: BLE001 -- absent, malformed or unreachable all mean the same thing to the caller
             log.error("builder_podtemplate_not_found", name=BUILDER_PODTEMPLATE_NAME)
             return None
 
-        pod_spec = dict(template.raw.get("template", {}))
+        pod_spec = cast(PodTemplateDoc, template.raw).get("template", {}).copy()
 
         kube_arch = NIX_SYSTEM_TO_KUBE_ARCH.get(system)
         if kube_arch:
-            spec = pod_spec.setdefault("spec", {})
+            spec = pod_spec.setdefault("spec", PodSpec())
             node_selector = spec.setdefault("nodeSelector", {})
             node_selector["kubernetes.io/arch"] = kube_arch
 
@@ -1413,7 +1566,7 @@ class BuilderManager:
         job_name = job_resource["metadata"]["name"]
 
         try:
-            job = await Job(job_resource)
+            job = await Job(dict(job_resource))
             await job.create()
             log.info(
                 "builder_job_created",

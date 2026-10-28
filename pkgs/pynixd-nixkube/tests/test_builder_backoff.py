@@ -8,34 +8,45 @@ their own. Everything that talks to the API server is not tested here.
 
 import time
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, cast
 
-import anyio
 import pytest
+from kr8s.asyncio.objects import Job
+from pynixd.store import SSHSubprocessStore
 
-from pynixd_nixkube import builder_manager
 from pynixd_nixkube.builder_manager import (
     _BACKOFF_BASE_SECONDS,
     BUILDER_KNOWN_HOSTS,
     BuilderManager,
+    JobDoc,
     PodState,
     _job_age_seconds,
     _pod_is_ready,
 )
 
+if TYPE_CHECKING:
+    from pynixd.instance import Server
+
 SYSTEM = "x86_64-linux"
 
 
-def manager(**kwargs) -> BuilderManager:
-    return BuilderManager(server=None, namespace="nixkube", **kwargs)  # type: ignore[arg-type]
+def manager(*, backoff_cap: float = 600.0, startup_timeout: float = 600.0) -> BuilderManager:
+    # These tests never reach the server, so none is given.
+    return BuilderManager(
+        server=cast("Server", None),
+        namespace="nixkube",
+        backoff_cap=backoff_cap,
+        startup_timeout=startup_timeout,
+    )
 
 
-def test_no_failures_means_no_delay():
+def test_no_failures_means_no_delay() -> None:
     m = manager()
     assert m._backoff_delay(0) == 0.0
     assert m._backoff_remaining(SYSTEM) == 0.0
 
 
-def test_delay_doubles_and_stops_at_the_cap():
+def test_delay_doubles_and_stops_at_the_cap() -> None:
     m = manager(backoff_cap=600.0)
     assert m._backoff_delay(1) == _BACKOFF_BASE_SECONDS
     assert m._backoff_delay(2) == _BACKOFF_BASE_SECONDS * 2
@@ -45,7 +56,7 @@ def test_delay_doubles_and_stops_at_the_cap():
     assert m._backoff_delay(50) == 600.0
 
 
-def test_each_failure_grows_the_delay():
+def test_each_failure_grows_the_delay() -> None:
     m = manager()
     for expected in (1, 2, 3):
         m._record_failure(SYSTEM, f"job-{expected}", reason="JobFailed")
@@ -54,7 +65,7 @@ def test_each_failure_grows_the_delay():
     assert m._backoff_remaining(SYSTEM) == pytest.approx(_BACKOFF_BASE_SECONDS * 4, abs=1.0)
 
 
-def test_one_job_counts_once():
+def test_one_job_counts_once() -> None:
     """A failed Job is seen on every reconcile until its TTL reaps it."""
     m = manager()
     for _ in range(5):
@@ -62,7 +73,7 @@ def test_one_job_counts_once():
     assert m._failures[SYSTEM] == 1
 
 
-def test_a_forgotten_job_may_count_again():
+def test_a_forgotten_job_may_count_again() -> None:
     m = manager()
     m._record_failure(SYSTEM, "job-a", reason="JobFailed")
     m._forget_job("job-a")
@@ -70,7 +81,7 @@ def test_a_forgotten_job_may_count_again():
     assert m._failures[SYSTEM] == 2
 
 
-def test_ready_clears_the_backoff():
+def test_ready_clears_the_backoff() -> None:
     m = manager()
     m._record_failure(SYSTEM, "job-a", reason="JobFailed")
     m._record_failure(SYSTEM, "job-b", reason="JobFailed")
@@ -82,21 +93,21 @@ def test_ready_clears_the_backoff():
     assert m._failures[SYSTEM] == 1
 
 
-def test_systems_are_independent():
+def test_systems_are_independent() -> None:
     m = manager()
     m._record_failure("aarch64-linux", "job-a", reason="JobFailed")
     assert m._backoff_remaining("aarch64-linux") > 0
     assert m._backoff_remaining(SYSTEM) == 0.0
 
 
-def test_the_hold_expires():
+def test_the_hold_expires() -> None:
     m = manager()
     m._record_failure(SYSTEM, "job-a", reason="JobFailed")
     m._backoff_until[SYSTEM] = time.monotonic() - 1.0
     assert m._backoff_remaining(SYSTEM) == 0.0
 
 
-def test_pod_is_ready_reads_the_condition():
+def test_pod_is_ready_reads_the_condition() -> None:
     assert _pod_is_ready({"conditions": [{"type": "Ready", "status": "True"}]})
     assert not _pod_is_ready({"conditions": [{"type": "Ready", "status": "False"}]})
     # A Pod with an IP but no conditions yet is not Ready. This is the case
@@ -107,52 +118,52 @@ def test_pod_is_ready_reads_the_condition():
     assert not _pod_is_ready({"conditions": [{"type": "PodScheduled", "status": "True"}]})
 
 
-def test_job_age_prefers_start_time():
+def test_job_age_prefers_start_time() -> None:
     now = datetime(2026, 9, 10, 12, 0, 0, tzinfo=UTC)
-    raw = {
+    raw: JobDoc = {
         "metadata": {"creationTimestamp": "2026-09-10T11:00:00Z"},
         "status": {"startTime": "2026-09-10T11:59:00Z"},
     }
     assert _job_age_seconds(raw, now) == 60.0
 
 
-def test_job_age_falls_back_to_creation():
+def test_job_age_falls_back_to_creation() -> None:
     """A Job has a creationTimestamp before the controller writes a status."""
     now = datetime(2026, 9, 10, 12, 0, 0, tzinfo=UTC)
-    raw = {"metadata": {"creationTimestamp": "2026-09-10T11:55:00Z"}, "status": {}}
+    raw: JobDoc = {"metadata": {"creationTimestamp": "2026-09-10T11:55:00Z"}, "status": {}}
     assert _job_age_seconds(raw, now) == 300.0
 
 
-def test_job_age_is_none_without_a_timestamp():
+def test_job_age_is_none_without_a_timestamp() -> None:
     now = datetime(2026, 9, 10, 12, 0, 0, tzinfo=UTC)
     assert _job_age_seconds({}, now) is None
     assert _job_age_seconds({"status": {"startTime": "not a date"}}, now) is None
 
 
-def job_raw(started: str, uid: str = "uid-1") -> dict:
+def job_raw(started: str, uid: str = "uid-1") -> JobDoc:
     return {"metadata": {"uid": uid}, "status": {"startTime": started}}
 
 
 NOW = datetime(2026, 9, 10, 12, 0, 0, tzinfo=UTC)
 
 
-def test_a_young_builder_is_left_alone():
+def test_a_young_builder_is_left_alone() -> None:
     m = manager(startup_timeout=600.0)
     assert not m._startup_expired(job_raw("2026-09-10T11:55:00Z"), "job-a", "Pending", NOW)
 
 
-def test_a_pod_that_never_left_pending_expires():
+def test_a_pod_that_never_left_pending_expires() -> None:
     m = manager(startup_timeout=600.0)
     assert m._startup_expired(job_raw("2026-09-10T11:45:00Z"), "job-a", "Pending", NOW)
 
 
-def test_a_job_with_no_pod_at_all_expires():
+def test_a_job_with_no_pod_at_all_expires() -> None:
     """No Pod and no phase is the unschedulable case."""
     m = manager(startup_timeout=600.0)
     assert m._startup_expired(job_raw("2026-09-10T11:45:00Z"), "job-a", None, NOW)
 
 
-def test_a_running_builder_never_expires():
+def test_a_running_builder_never_expires() -> None:
     """The reason this is not activeDeadlineSeconds.
 
     A healthy builder Job runs for hours -- 3h36m measured on a live cluster.
@@ -163,20 +174,20 @@ def test_a_running_builder_never_expires():
     assert not m._startup_expired(job_raw("2026-09-10T08:00:00Z"), "job-a", "Running", NOW)
 
 
-def test_a_running_builder_with_a_flaking_probe_never_expires():
+def test_a_running_builder_with_a_flaking_probe_never_expires() -> None:
     """The restart case. `_ever_ready` is empty and the builder is four hours old."""
     m = manager(startup_timeout=600.0)
     assert not m._ever_ready
     assert not m._startup_expired(job_raw("2026-09-10T08:00:00Z"), "job-a", "Running", NOW)
 
 
-def test_a_builder_seen_ready_never_expires():
+def test_a_builder_seen_ready_never_expires() -> None:
     m = manager(startup_timeout=600.0)
     m._ever_ready.add("job-a")
     assert not m._startup_expired(job_raw("2026-09-10T08:00:00Z"), "job-a", "Pending", NOW)
 
 
-def test_an_expired_builder_is_not_acted_on_twice():
+def test_an_expired_builder_is_not_acted_on_twice() -> None:
     m = manager(startup_timeout=600.0)
     old = job_raw("2026-09-10T11:00:00Z")
     assert m._startup_expired(old, "job-a", "Pending", NOW)
@@ -184,12 +195,12 @@ def test_an_expired_builder_is_not_acted_on_twice():
     assert not m._startup_expired(old, "job-a", "Pending", NOW)
 
 
-def test_a_builder_with_no_timestamp_is_left_alone():
+def test_a_builder_with_no_timestamp_is_left_alone() -> None:
     m = manager(startup_timeout=600.0)
     assert not m._startup_expired({"metadata": {}}, "job-a", "Pending", NOW)
 
 
-def test_the_job_carries_no_deadline():
+def test_the_job_carries_no_deadline() -> None:
     """The rendered Job, not the option that feeds it.
 
     activeDeadlineSeconds would cap a healthy builder's life, so it is absent
@@ -197,16 +208,17 @@ def test_the_job_carries_no_deadline():
     thing about the PodTemplate it renders.
     """
     m = manager()
-    job = m._build_job_resource(SYSTEM, {"spec": {"containers": []}})
+    job = m._build_job_resource(SYSTEM, {"spec": {}})
     assert "activeDeadlineSeconds" not in job["spec"]
     assert "activeDeadlineSeconds" not in job["spec"]["template"]["spec"]
     assert job["spec"]["backoffLimit"] == 0
     assert job["spec"]["ttlSecondsAfterFinished"] == 300
-    assert job["metadata"]["labels"]["nixkube/system"] == SYSTEM
+    labels = job["metadata"].get("labels") or {}
+    assert labels["nixkube/system"] == SYSTEM
     assert job["metadata"]["name"].startswith("nixkube-builder-")
 
 
-def test_overrides_still_merge():
+def test_overrides_still_merge() -> None:
     m = manager()
     job = m._build_job_resource(
         SYSTEM,
@@ -217,7 +229,7 @@ def test_overrides_still_merge():
     assert job["spec"]["backoffLimit"] == 0
 
 
-def test_pod_state_defaults_are_empty():
+def test_pod_state_defaults_are_empty() -> None:
     """An absent Pod reads as absent, not as a started one."""
     state = PodState()
     assert state.ip is None
@@ -226,7 +238,7 @@ def test_pod_state_defaults_are_empty():
     assert state.node is None
 
 
-def test_a_failure_carries_the_node_but_does_not_count_by_it():
+def test_a_failure_carries_the_node_but_does_not_count_by_it() -> None:
     """The node is for the operator, not for the arithmetic.
 
     One broken node makes every builder for its system back off. The count
@@ -240,7 +252,7 @@ def test_a_failure_carries_the_node_but_does_not_count_by_it():
     assert m._failures[SYSTEM] == 2
 
 
-def test_the_builder_store_spec_validates():
+def test_the_builder_store_spec_validates() -> None:
     """The spec pydantic actually accepts.
 
     `known_hosts` has no default in pynixd, so a spec that omits it raises
@@ -261,13 +273,13 @@ def test_the_builder_store_spec_validates():
     assert spec.no_schedule is False
 
 
-def test_a_probe_store_does_not_take_builds():
+def test_a_probe_store_does_not_take_builds() -> None:
     spec = BuilderManager._builder_store_spec("builder-job-a", "10.0.0.1", probe=True)
     assert spec.no_schedule is True
     assert spec.known_hosts == BUILDER_KNOWN_HOSTS
 
 
-def test_the_known_hosts_file_is_the_mounted_configmap():
+def test_the_known_hosts_file_is_the_mounted_configmap() -> None:
     """The path the deployment mounts, not an arbitrary one.
 
     kubenix/pynixd.nix mounts the ssh-dynauth ConfigMap at /etc/ssh-dynauth,
@@ -277,52 +289,56 @@ def test_the_known_hosts_file_is_the_mounted_configmap():
     assert BUILDER_KNOWN_HOSTS == "/etc/ssh-dynauth/ssh_known_hosts"
 
 
-class _FakeStore:
-    """Just enough of an SSHSubprocessStore for the probe path."""
+class _FakeStore(SSHSubprocessStore):
+    """A real SSH store with a feature matrix a test can set."""
 
-    def __init__(self, features: dict | None = None) -> None:
-        self._probe_event = anyio.Event()
-        self.feature_matrix = features or {}
+    def __init__(self, features: dict[str, set[str]] | None = None) -> None:
+        super().__init__(BuilderManager._builder_store_spec("builder-nixkube-builder-probe1", "10.0.0.1"))
+        if features is not None:
+            self.feature_matrix = features
 
 
 class _FakeServer:
-    def __init__(self, stores: dict | None = None) -> None:
-        self.stores = stores or {}
+    def __init__(self, stores: dict[str, SSHSubprocessStore] | None = None) -> None:
+        self.stores: dict[str, SSHSubprocessStore] = stores or {}
 
 
-async def _probe_run(m, monkeypatch, node="node-1"):
+async def _probe_run(
+    m: BuilderManager, monkeypatch: pytest.MonkeyPatch, node: str = "node-1"
+) -> tuple[list[JobDoc], list[str]]:
     """Run _probe_node with the cluster calls stubbed out.
 
     The `finally` fetches the Job to delete it. Without this the test would
     depend on an API call failing, which is a slow way to be right.
     """
-    created = []
-    deleted = []
+    created: list[JobDoc] = []
+    deleted: list[str] = []
 
-    async def fake_create(system, overrides=None):
+    async def fake_create(system: str, overrides: JobDoc | None = None) -> str:
+        assert overrides is not None
         created.append(overrides)
         return "nixkube-builder-probe1"
 
-    async def fake_get(name, namespace=None):
+    async def fake_get(name: str, namespace: str | None = None) -> str:
         return f"job:{name}"
 
-    async def fake_delete(job):
+    async def fake_delete(job: str) -> None:
         deleted.append(job)
 
-    async def fake_reconcile_systems():
+    async def fake_reconcile_systems() -> None:
         return None
 
-    monkeypatch.setattr(builder_manager.Job, "get", staticmethod(fake_get))
-    m._create_builder_job = fake_create
-    m._delete_job = fake_delete
-    m._reconcile_systems = fake_reconcile_systems
+    monkeypatch.setattr(Job, "get", staticmethod(fake_get))
+    monkeypatch.setattr(m, "_create_builder_job", fake_create)
+    monkeypatch.setattr(m, "_delete_job", fake_delete)
+    monkeypatch.setattr(m, "_reconcile_systems", fake_reconcile_systems)
     m._pending_probes.add(node)
     await m._probe_node(node, SYSTEM)
     return created, deleted
 
 
 @pytest.mark.asyncio
-async def test_a_probe_waits_the_builder_budget_then_gives_up(monkeypatch):
+async def test_a_probe_waits_the_builder_budget_then_gives_up(monkeypatch: pytest.MonkeyPatch) -> None:
     """A probe gave a builder 30 seconds to register, and a builder takes longer.
 
     On nixlab2 all four nodes logged `probe_store_not_found` 31 seconds after
@@ -331,7 +347,7 @@ async def test_a_probe_waits_the_builder_budget_then_gives_up(monkeypatch):
     unlabelled and started again four seconds later, for ever.
     """
     m = manager(startup_timeout=0.3)
-    m.server = _FakeServer()
+    monkeypatch.setattr(m, "server", _FakeServer())
 
     started = time.monotonic()
     created, deleted = await _probe_run(m, monkeypatch)
@@ -367,11 +383,12 @@ async def test_a_probe_waits_the_builder_budget_then_gives_up(monkeypatch):
             ]
         }
     ]
-    assert created[0]["metadata"]["labels"]["nixkube/probe"] == "true"
+    labels = created[0]["metadata"].get("labels") or {}
+    assert labels["nixkube/probe"] == "true"
 
 
 @pytest.mark.asyncio
-async def test_a_probe_that_registers_but_never_answers_lets_go(monkeypatch):
+async def test_a_probe_that_registers_but_never_answers_lets_go(monkeypatch: pytest.MonkeyPatch) -> None:
     """The `_probe_event.wait()` that had no timeout.
 
     A store that registered and never answered held this coroutine open, so
@@ -380,7 +397,7 @@ async def test_a_probe_that_registers_but_never_answers_lets_go(monkeypatch):
     """
     m = manager(startup_timeout=0.3)
     store = _FakeStore()
-    m.server = _FakeServer({"builder-nixkube-builder-probe1": store})
+    monkeypatch.setattr(m, "server", _FakeServer({"builder-nixkube-builder-probe1": store}))
 
     _created, deleted = await _probe_run(m, monkeypatch)
 
@@ -390,18 +407,18 @@ async def test_a_probe_that_registers_but_never_answers_lets_go(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_probe_that_answers_labels_the_node(monkeypatch):
+async def test_a_probe_that_answers_labels_the_node(monkeypatch: pytest.MonkeyPatch) -> None:
     m = manager(startup_timeout=5.0)
     store = _FakeStore(features={SYSTEM: {"big-parallel"}})
     store._probe_event.set()
-    m.server = _FakeServer({"builder-nixkube-builder-probe1": store})
+    monkeypatch.setattr(m, "server", _FakeServer({"builder-nixkube-builder-probe1": store}))
 
-    labelled = []
+    labelled: list[tuple[str, str, dict[str, set[str]]]] = []
 
-    async def fake_label(node_name, system, features):
+    async def fake_label(node_name: str, system: str, features: dict[str, set[str]]) -> None:
         labelled.append((node_name, system, features))
 
-    m._label_node = fake_label
+    monkeypatch.setattr(m, "_label_node", fake_label)
     await _probe_run(m, monkeypatch)
 
     assert labelled == [("node-1", SYSTEM, {SYSTEM: {"big-parallel"}})]

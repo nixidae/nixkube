@@ -14,7 +14,7 @@ from .setup import configure_logging, install_nss
 log = structlog.get_logger(__name__)
 
 
-async def _main():
+async def _main() -> None:
     configure_logging()
     log.info("pynixd_nixkube_starting")
     install_nss()
@@ -35,6 +35,6 @@ async def _main():
         await server.wait_finished()
 
 
-def main():
+def main() -> None:
     with contextlib.suppress(KeyboardInterrupt):
         anyio.run(_main, backend="asyncio")

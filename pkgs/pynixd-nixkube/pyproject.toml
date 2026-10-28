@@ -6,6 +6,8 @@ build-backend = "hatchling.build"
 name = "pynixd-nixkube"
 version = "0.1.0"
 description = "Nixkube integration for pynixd"
+# pynixd's own floor.
+requires-python = ">=3.13"
 
 dependencies = [
     "pynixd",
