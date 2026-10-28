@@ -33,7 +33,7 @@ in
   };
 
   mkApp = self.callPackage ../nix/mk-app.nix {
-    inherit (import sources.nanopynix { inherit pkgs sources; }) mkApp;
+    inherit ((import sources.nanopynix { inherit pkgs sources; }).lib) mkApp;
   };
 
   nixkube = self.mkApp {

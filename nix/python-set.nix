@@ -25,7 +25,7 @@
 # reads one prefix.
 #
 # **The machinery is nixvenv's, and this repository only wires it.**
-# `ps.mkPythonSet` and not `nanopynix.pythonSetWith`: nothing here imports a
+# `ps.mkPythonSet` and not `nanopynix.lib.pythonSetWith`: nothing here imports a
 # nanopynix project, and `pythonSetWith` composes all of them into the set.
 {
   lib,
