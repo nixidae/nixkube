@@ -138,9 +138,12 @@ in
 
   # The NixOSRollout controller, which evaluates and builds sources. It brings
   # nix, git and ssh along, and installs the fake NSS files first: ssh exits
-  # when its user has no passwd entry. It names its CA bundle itself: from
-  # the scratch image there is no /etc/ssl, and git's https fetch of a source
-  # fails with "unable to get local issuer certificate" (measured on sg1).
+  # when its user has no passwd entry. It names its CA bundle and its shell
+  # itself, because the scratch image has neither /etc/ssl nor /bin/sh
+  # (measured on sg1): git's https fetch fails with "unable to get local
+  # issuer certificate", and the ssh-ng store's `LocalCommand=echo started`
+  # never runs, so nix waits for "started" while pynixd waits for nix's
+  # handshake, forever. ssh runs a local command with $SHELL before /bin/sh.
   nixkube-rollout-controller = self.writeShellApplication {
     name = "nixkube-rollout-controller";
     runtimeInputs = [
@@ -156,6 +159,7 @@ in
       rsync --archive ${self.appstarter-fake-nss}/ /
       export SSL_CERT_FILE=${self.cacert}/etc/ssl/certs/ca-bundle.crt
       export NIX_SSL_CERT_FILE=$SSL_CERT_FILE GIT_SSL_CAINFO=$SSL_CERT_FILE
+      export SHELL=${self.runtimeShell}
       exec ${self.nixkube}/bin/nixkube-nixos-rollout "$@"
     '';
   };
