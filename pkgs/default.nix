@@ -138,7 +138,9 @@ in
 
   # The NixOSRollout controller, which evaluates and builds sources. It brings
   # nix, git and ssh along, and installs the fake NSS files first: ssh exits
-  # when its user has no passwd entry.
+  # when its user has no passwd entry. It names its CA bundle itself: from
+  # the scratch image there is no /etc/ssl, and git's https fetch of a source
+  # fails with "unable to get local issuer certificate" (measured on sg1).
   nixkube-rollout-controller = self.writeShellApplication {
     name = "nixkube-rollout-controller";
     runtimeInputs = [
@@ -152,6 +154,8 @@ in
     text = ''
       mkdir -p /tmp
       rsync --archive ${self.appstarter-fake-nss}/ /
+      export SSL_CERT_FILE=${self.cacert}/etc/ssl/certs/ca-bundle.crt
+      export NIX_SSL_CERT_FILE=$SSL_CERT_FILE GIT_SSL_CAINFO=$SSL_CERT_FILE
       exec ${self.nixkube}/bin/nixkube-nixos-rollout "$@"
     '';
   };
