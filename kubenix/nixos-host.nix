@@ -68,9 +68,20 @@ let
       nix-env --profile ${profile} --set "$TOPLEVEL"
       unit="nixkube-switch-$(basename "$TOPLEVEL" | cut -c1-12)"
       echo "switching to $TOPLEVEL; host journal: journalctl --unit $unit"
-      if ! "$TOPLEVEL/sw/bin/systemd-run" --unit="$unit" --wait --collect --quiet \
+      # The switch runs as a host unit, so its output lands in the host
+      # journal; following it puts the same lines in this Job's log.
+      since=$(date '+%Y-%m-%d %H:%M:%S')
+      journalctl --follow --output=cat --since="$since" --unit="$unit" &
+      follow=$!
+      switched=0
+      "$TOPLEVEL/sw/bin/systemd-run" --unit="$unit" --wait --collect --quiet \
         --service-type=exec --property=KillMode=process \
-        "$TOPLEVEL/bin/switch-to-configuration" switch; then
+        "$TOPLEVEL/bin/switch-to-configuration" switch || switched=$?
+      # journald forwards asynchronously: the last lines arrive after the unit ends.
+      sleep 2
+      kill "$follow" 2>/dev/null || true
+      wait "$follow" 2>/dev/null || true
+      if [ "$switched" -ne 0 ]; then
         echo "switch-to-configuration failed; reverting to $previous" >&2
         systemctl start ${revertUnit}.service
         systemctl stop ${revertUnit}.timer
