@@ -176,6 +176,30 @@ in
     ];
   };
 
+  # The switch Job's program. It copies its own closure into the host's store
+  # and runs on from there, so that closure is python3Minimal and one file:
+  # every switched host carries it.
+  nixkube-nixos-switch = self.writeTextFile {
+    name = "nixkube-nixos-switch";
+    destination = "/bin/nixkube-nixos-switch";
+    executable = true;
+    text = "#!${self.python3Minimal}/bin/python3\n" + builtins.readFile ./nixkube/src/nixos_switch.py;
+  };
+
+  # What the switch Job's pod mounts through the CSI driver. Only the program
+  # goes on to the host; nix, ssh, bash and the fake NSS serve the copy in
+  # the pod.
+  nixkube-nixos-switch-env = self.buildEnv {
+    name = "nixkube-nixos-switch-env";
+    paths = [
+      self.nixkube-nixos-switch
+      self.nix
+      self.openssh
+      self.bash
+      self.appstarter-fake-nss
+    ];
+  };
+
   ci-debug = pkgs.callPackage ./ci-debug { inherit pkgs; };
 
   # The two kubernetes-csi sidecars the node DaemonSet runs, and images for

@@ -125,7 +125,7 @@ IN_FLIGHT: Final = frozenset(
 HALTING: Final = frozenset({NodePhase.REVERTED, NodePhase.BUILD_FAILED, NodePhase.DRAIN_FAILED})
 
 # The switch Job's exit code when only a boot picks the change up, as
-# `rebootNeeded` in kubenix/nixos-host.nix.
+# `REBOOT_NEEDED` in nixos_switch.py.
 REBOOT_NEEDED: Final = 100
 MIRROR: Final = "kubernetes.io/config.mirror"
 
