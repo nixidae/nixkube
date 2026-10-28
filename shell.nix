@@ -81,7 +81,6 @@ pkgs.mkShell {
     pkgs.cachix
     pkgs.cargo
     pkgs.go
-    pkgs.just
     pkgs.kluctl
     pkgs.kubectx
     pkgs.pyright

@@ -6,9 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Always use Jujutsu (jj) instead of Git** for all version control operations in this repository.
 
-**Before committing**: Run `just precommit` (formats, lints, tests, and regenerates docs). This is the single command to run before every `jj commit`. Do not run `just fmt`, `just lint`, `just test`, or `just gendoc` individually when preparing a commit — use `just precommit` instead.
+**Before committing**, run from `nixkube/` what the CI `check` job runs, and regenerate the docs:
 
-**Running `just` recipes**: You do NOT need `direnv exec . ` to run `just` recipes—they're already part of the dev environment. Only use `direnv exec . ` when running Python introspection code (e.g., `direnv exec . python3 -c ...` or `direnv exec . python3 << 'EOF'`) that depends on rebuilt dependencies in Nix.
+```bash
+nix run --file . treefmt
+nix develop --file shell.nix --command pyright pkgs/nixkube/src
+nix build --file ./checks.nix all
+nix run --file . genModDoc
+```
+
+Run treefmt from `nixkube/` only. From the nixidae root it formats the whole monorepo.
 
 ## Project Overview
 
@@ -84,30 +91,18 @@ Entry point (`src/cli.py`) starts both servers and features:
 
 ## Common Commands
 
-Use the `justfile` for common development tasks. Run `just --list` to see all available recipes.
-
-### Code Quality
-
-**Format code before committing:**
-```bash
-just fmt
-```
-
-**Check formatting without changes:**
-```bash
-just check-fmt
-```
-
-**Run Python type checker:**
-```bash
-just lint
-```
+Run every command from `nixkube/`. The commands to run before a commit are at the top of this file.
 
 ### Testing
 
-**Run Python tests:**
+**Run the Python tests** (`nix build --file ./checks.nix all` is the gate; this is the fast loop):
 ```bash
-just test
+nix develop --file shell.nix --command python -m pytest pkgs/nixkube/tests pkgs/nri-wait/tests pkgs/pynixd-nixkube/tests pkgs/grpclib-ttrpc/tests pkgs/grpclib-nri/tests
+```
+
+**Run the root-only tests** (bind farm, CSI mount flags, farm builder):
+```bash
+nix build --file . nixosTests.bind-farm nixosTests.csi-mount-rec nixosTests.farm-builder --no-link
 ```
 
 ### CI
@@ -144,29 +139,19 @@ either one alone fails the build.
 
 **Build Kubernetes manifests:**
 ```bash
-just build-manifests
-```
-
-**Build development environment:**
-```bash
-just build-dev
+nix build --file . kubenixApply.manifestJSONFile
 ```
 
 **Build all outputs for both architectures (requires builders):**
 ```bash
-just build-all
+nix build --file . push --no-link
 ```
 
 ### Deployment
 
-**Deploy to Kubernetes cluster** (reads SSH keys from `./keys/*.pub`):
-```bash
-just deploy
-```
-
 **Push to cachix and container registry:**
 ```bash
-just push
+nix run --file . push
 ```
 
 ### Development Environment
@@ -177,7 +162,6 @@ The development environment includes:
 - ruff, pyright (linting/type checking)
 - kluctl, stern, kubectx (Kubernetes tools)
 - buildah, skopeo, regctl (container tools)
-- just (for running recipes)
 
 Enter the environment with `direnv allow && direnv reload` (or open a new terminal).
 
