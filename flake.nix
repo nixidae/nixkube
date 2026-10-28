@@ -62,8 +62,8 @@
       # cannot realise it and `nix flake show` throws on it. A consumer who
       # wants one takes the module below and evaluates it themselves.
       packages = forEachSystem (system: {
-        inherit (each.${system}) nixkube-docs;
-        default = each.${system}.nixkube-docs;
+        nixkube-docs = each.${system}.docs.default;
+        default = each.${system}.docs.default;
       });
 
       # The easykubenix module that installs the driver, which is what a
