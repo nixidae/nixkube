@@ -29,6 +29,9 @@ let
 
   revertUnit = "nixkube-revert";
   profile = "/nix/var/nix/profiles/system";
+  # Roots the target until the profile holds it, and through a revert that
+  # leaves the profile elsewhere. /run goes with the next boot.
+  targetRoot = "/run/nixkube-target";
   # `REBOOT_NEEDED` in pkgs/nixkube/src/nixos_rollout.py.
   rebootNeeded = 100;
 
@@ -50,7 +53,7 @@ let
         echo "a revert is armed: an earlier switch is not confirmed" >&2
         exit 1
       fi
-      nix-store --realise "$TOPLEVEL" >/dev/null
+      nix-store --realise "$TOPLEVEL" --add-root ${targetRoot} >/dev/null
       # Only a boot picks these up. Nothing has changed yet: the controller
       # drains the node and runs `boot` instead.
       booted=$(readlink /run/booted-system)
@@ -94,7 +97,7 @@ let
         echo "already booted $TOPLEVEL"
         exit 0
       fi
-      nix-store --realise "$TOPLEVEL" >/dev/null
+      nix-store --realise "$TOPLEVEL" --add-root ${targetRoot} >/dev/null
       nix-env --profile ${profile} --set "$TOPLEVEL"
       "$TOPLEVEL/bin/switch-to-configuration" boot
       # Later, so this Job completes first; the controller then waits for
