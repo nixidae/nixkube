@@ -2,7 +2,7 @@
 
 let
   system = builtins.currentSystem;
-  sources = (import ../. { }).sources;
+  inherit ((import ../. { })) sources;
 
   pkgs = import sources.nixpkgs {
     inherit system;

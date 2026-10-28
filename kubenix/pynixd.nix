@@ -95,7 +95,7 @@ let
       their client keys are auto-discovered from HOME/.ssh/ if client_keys
       is omitted.
     '';
-    type = jsonFormat.type;
+    inherit (jsonFormat) type;
     default = { };
     example = lib.literalExpression ''
       {

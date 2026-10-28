@@ -21,7 +21,7 @@ rec {
     ];
   };
   inherit sources;
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
 
   # This repository's Python projects, built by pyproject.nix rather than by
   # nixpkgs' Python builders. nix/python-set.nix says why. Issue #50.
@@ -766,9 +766,7 @@ rec {
     # value that bounds a Pod hung before startup kills working builders
     # mid-build. The bound is `builder-startup-timeout`, in the manager.
     assert
-      !(builtins.hasAttr "activeDeadlineSeconds" (
-        stock.config.kubernetes.resources.nixkube.PodTemplate.nixkube-builder.template.spec
-      ));
+      !(builtins.hasAttr "activeDeadlineSeconds" stock.config.kubernetes.resources.nixkube.PodTemplate.nixkube-builder.template.spec);
     pkgs.runCommand "builder-settings-override" { } "echo ok > $out";
 
   # A caller's `sources` decide which pynixd and dinix nixkube uses, through

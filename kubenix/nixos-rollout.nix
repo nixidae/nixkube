@@ -318,7 +318,7 @@ in
         subjects = lib.mkNamedList {
           ${name} = {
             kind = "ServiceAccount";
-            namespace = cfg.namespace;
+            inherit (cfg) namespace;
           };
         };
         roleRef = {

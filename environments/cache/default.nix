@@ -7,7 +7,7 @@
   dinix,
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   dinixEval = import dinix {
     inherit pkgs;
     modules = [

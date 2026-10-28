@@ -29,7 +29,7 @@ let
     built
     ++ [
       (n2c.buildLayer {
-        deps = group.deps;
+        inherit (group) deps;
         layers = built;
       })
     ]

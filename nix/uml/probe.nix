@@ -66,7 +66,7 @@ let
                   volumeMounts = [
                     {
                       name = "store";
-                      mountPath = mountPath;
+                      inherit mountPath;
                     }
                   ];
                 }

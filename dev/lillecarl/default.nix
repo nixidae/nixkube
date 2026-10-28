@@ -156,7 +156,7 @@ rec {
       let
         config = easykube.eval.config;
         ns = config.nixkube.namespace;
-        file = (builtins.unsafeGetAttrPos "x" { x = "y"; }).file;
+        inherit ((builtins.unsafeGetAttrPos "x" { x = "y"; })) file;
         common = "--file ${file} --no-link --print-out-paths --max-jobs 0 --print-build-logs";
         storeUri = "ssh-ng://nix@${hostname}:2222";
         builderUri = ''"${storeUri} x86_64-linux - 10 1 ca-derivations,dynamic-derivations,recursive-nix - -"'';

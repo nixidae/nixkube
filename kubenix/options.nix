@@ -55,7 +55,7 @@ in
     };
     metadata = lib.mkOption {
       description = "Metadata (labels, annotations) applied to nixkube resources";
-      type = (curPkgs.formats.json { }).type;
+      inherit ((curPkgs.formats.json { })) type;
       default = { };
     };
     version = lib.mkOption {

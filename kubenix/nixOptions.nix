@@ -108,7 +108,7 @@ types.submodule (
         in
         {
           inherit file;
-          text = file.text;
+          inherit (file) text;
         }
       );
     };

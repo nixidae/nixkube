@@ -7,7 +7,7 @@
 }:
 let
   cfg = config.nixkube;
-  namespace = cfg.namespace;
+  inherit (cfg) namespace;
 in
 {
   config = lib.mkIf cfg.enable {

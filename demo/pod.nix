@@ -2,7 +2,7 @@
 
 let
   system = builtins.currentSystem;
-  sources = (import ../. { }).sources;
+  inherit ((import ../. { })) sources;
 
   sysMap = {
     "x86_64-linux" = "aarch64-linux";

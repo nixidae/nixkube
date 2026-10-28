@@ -71,7 +71,7 @@ in
         subjects = lib.mkNamedList {
           nixkube = {
             kind = "ServiceAccount";
-            namespace = cfg.namespace;
+            inherit (cfg) namespace;
           };
         };
         roleRef = {
