@@ -1427,9 +1427,9 @@ rec {
   # `check` job builds this attribute rather than listing them again.
   #
   # It holds exactly what the workflow held, so this is a refactor and not a
-  # widening. Two things stay outside it, both because they need something a
-  # derivation does not have: pyright wants the dev shell, and treefmt is
-  # checked with `git diff` against a working tree.
+  # widening. treefmt stays outside it: it is checked with `git diff` against
+  # a working tree, which a derivation does not have. zuban runs inside each
+  # Python suite (nix/tests.nix).
   #
   # `umlImagesMatch` is the one member that builds rather than evaluates: it
   # writes two image tarballs, so on a cold store it also fetches the nix

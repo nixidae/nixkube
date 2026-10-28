@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-# The Python suites, one derivation each.
+# The Python suites, one derivation each, each behind zuban in strict mode.
 #
 # pyproject.nix's builders have no `pytestCheckHook` equivalent: a package
 # propagates nothing, so its own build cannot import what it depends on. A
@@ -30,6 +30,17 @@ let
       ];
     };
 
+  # The project's Python and its `mypy.ini`, for zuban.
+  typeSource =
+    projectRoot:
+    lib.fileset.toSource {
+      root = projectRoot;
+      fileset = lib.fileset.unions [
+        (lib.fileset.fileFilter (file: file.hasExt "py" || file.hasExt "pyi") projectRoot)
+        (projectRoot + "/mypy.ini")
+      ];
+    };
+
   mkSuite =
     {
       name,
@@ -49,17 +60,25 @@ let
       env ? { },
       nativeBuildInputs ? [ ],
     }:
+    let
+      venv = pythonSet.mkVirtualEnv "${name}-test-env" spec;
+    in
     pkgs.runCommand "${name}-tests"
       (
         env
         // {
           nativeBuildInputs = [
-            (pythonSet.mkVirtualEnv "${name}-test-env" spec)
+            venv
+            pkgs.zuban
           ]
           ++ nativeBuildInputs;
         }
       )
       ''
+        # A directory of its own: beside `tests/`, the source would shadow
+        # the venv's copy, which is the one pytest has to import.
+        cp -r ${typeSource projectRoot} typecheck
+        (cd typecheck && zuban mypy --python-executable ${venv}/bin/python)
         cp -r ${suiteSource projectRoot}/. .
         chmod -R +w .
         ${lib.optionalString (importPackages != [ ]) ''

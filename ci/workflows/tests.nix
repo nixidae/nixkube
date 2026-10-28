@@ -121,22 +121,6 @@ ghalib.evalWorkflow {
       timeout-minutes = 30;
       ghanix = bootstrap;
       steps = [
-        # `nix develop`, not `nix-shell --run`. To run a command, nix-shell
-        # needs an interactive bash, and it gets one by evaluating its own
-        # built-in `(import <nixpkgs> {}).bashInteractive`. Nothing in this
-        # repository asks for that; nix-shell does. With no `nixpkgs` in
-        # NIX_PATH it fails:
-        #
-        #   error: file 'nixpkgs' was not found in the Nix search path
-        #   uses bash from your environment
-        #
-        # The derivation still came from shell.nix, so the type check was
-        # correct, but the shell around it was the runner's rather than a
-        # pinned one.
-        {
-          name = "Run type checker";
-          run = "nix develop --file shell.nix --command pyright pkgs/nixkube/src";
-        }
         # One step, and `nix build --file ./checks.nix all` is the same one a
         # contributor runs. Eight gates were eight steps here, which meant
         # the only list of what CI checks lived in this file -- so running it

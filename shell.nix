@@ -13,9 +13,8 @@ let
   # dependency graph: a name missing from a pyproject.toml fails resolution
   # rather than falling back to a store copy.
   #
-  # This is what `pyright` reads. `ci.nix` runs it as `nix develop --file
-  # shell.nix --command pyright pkgs/nixkube/src`, and pyright resolves
-  # imports through the first `python` on PATH, which is this venv's.
+  # What zuban checks against, by hand: in a package directory,
+  # `zuban mypy --python-executable "$(command -v python)"`.
   python = pkgs.pythonSet.mkVirtualEnv "nixkube-dev-env" {
     nixkube = [ "test" ];
     pynixd-nixkube = [ "test" ];
@@ -38,9 +37,8 @@ let
   };
 
   # `pylsp-mypy` fails its own test suite on python3.14 in the pinned
-  # nixpkgs, so the whole shell refused to build -- and with it `check`,
-  # whose first step is `nix-shell --run "pyright ..."`. An editor
-  # integration was able to fail CI.
+  # nixpkgs, so the whole shell refused to build: an editor integration
+  # was able to break the shell.
   #
   #   FAILED test/test_plugin.py::test_plugin - assert 2 == 1
   #   FAILED test/test_plugin.py::test_handling_of_line_endings[...] - KeyError: 'code'
@@ -83,7 +81,7 @@ pkgs.mkShell {
     pkgs.go
     pkgs.kluctl
     pkgs.kubectx
-    pkgs.pyright
+    pkgs.zuban
     pylsp
     pkgs.regctl
     pkgs.ruff

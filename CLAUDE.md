@@ -10,7 +10,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 nix run --file . treefmt
-nix develop --file shell.nix --command pyright pkgs/nixkube/src
 nix build --file ./checks.nix all
 nix run --file . genModDoc
 ```
@@ -159,7 +158,7 @@ nix run --file . push
 The development environment includes:
 - Python with nixkube, csi-proto-python, kr8s
 - xonsh shell
-- ruff, pyright (linting/type checking)
+- ruff, zuban (linting/type checking; `nix build --file ./checks.nix all` runs zuban in each Python suite)
 - kluctl, stern, kubectx (Kubernetes tools)
 - buildah, skopeo, regctl (container tools)
 
