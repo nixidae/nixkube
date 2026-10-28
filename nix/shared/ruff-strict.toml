@@ -1,0 +1,59 @@
+# The strict ruff rules every source shares: the target a source works its
+# findings down to. Copied beside `ruff.toml`, as that file says.
+#
+# It extends the source's own `ruff.toml`, two directories up from the copy,
+# so the source's isort groups and banned-api table apply. `select` here
+# replaces that file's list. A source's `ruff-strict.toml` extends this one
+# and adds its own rules with `extend-select` and `ignore`.
+#
+# No TC: nanopynix bans `typing.TYPE_CHECKING`, and TC moves imports into it.
+
+extend = "../../ruff.toml"
+
+[lint]
+select = [
+  "A",
+  "ARG",
+  "ASYNC",
+  "B",
+  "BLE",
+  "C4",
+  "E",
+  "ERA",
+  "F",
+  "FA",
+  "FLY",
+  "FURB",
+  "I",
+  "LOG",
+  "N",
+  "PERF",
+  "PIE",
+  "PT",
+  "PTH",
+  "Q",
+  "RET",
+  "RSE",
+  "RUF",
+  "SIM",
+  "T20",
+  "TD",
+  "TID",
+  "TRY",
+  "UP",
+  "W",
+  "YTT",
+]
+ignore = [
+  # ruff format sets the length.
+  "E501",
+  # Relative imports inside a package are the house style.
+  "TID252",
+  # A protocol method takes the parameters of its interface.
+  "ARG002",
+  "TRY003",
+  "BLE001",
+]
+
+[format]
+docstring-code-format = true
