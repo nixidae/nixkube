@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import anyio
 import pytest
 
 from src.errors import CommandTimeoutError, SubprocessError
@@ -7,7 +8,7 @@ from src.subprocessing import run_captured, try_captured, try_console
 
 
 @pytest.mark.asyncio
-async def test_simple_echo():
+async def test_simple_echo() -> None:
     """Test simple echo command."""
     result = await run_captured("echo", "hello world")
     assert result.returncode == 0
@@ -16,7 +17,7 @@ async def test_simple_echo():
 
 
 @pytest.mark.asyncio
-async def test_stdout_and_stderr():
+async def test_stdout_and_stderr() -> None:
     """Test capturing both stdout and stderr."""
     result = await run_captured("sh", "-c", "echo stdout; echo stderr >&2")
     assert result.returncode == 0
@@ -27,14 +28,14 @@ async def test_stdout_and_stderr():
 
 
 @pytest.mark.asyncio
-async def test_non_zero_exit_code():
+async def test_non_zero_exit_code() -> None:
     """Test that non-zero exit codes are returned without raising."""
     result = await run_captured("sh", "-c", "exit 42")
     assert result.returncode == 42
 
 
 @pytest.mark.asyncio
-async def test_try_captured_raises_on_error():
+async def test_try_captured_raises_on_error() -> None:
     """Test that try_captured raises SubprocessError on non-zero exit."""
     with pytest.raises(SubprocessError) as exc_info:
         await try_captured("sh", "-c", "exit 1")
@@ -42,7 +43,7 @@ async def test_try_captured_raises_on_error():
 
 
 @pytest.mark.asyncio
-async def test_try_console_raises_on_error():
+async def test_try_console_raises_on_error() -> None:
     """Test that try_console raises SubprocessError on non-zero exit."""
     with pytest.raises(SubprocessError) as exc_info:
         await try_console("sh", "-c", "exit 1")
@@ -50,7 +51,7 @@ async def test_try_console_raises_on_error():
 
 
 @pytest.mark.asyncio
-async def test_combined_output_contains_all_data():
+async def test_combined_output_contains_all_data() -> None:
     """Test that combined output contains all data from both streams."""
     result = await run_captured("sh", "-c", "echo a; echo b >&2; echo c")
     lines_set = set(result.combined.split("\n"))
@@ -58,14 +59,14 @@ async def test_combined_output_contains_all_data():
 
 
 @pytest.mark.asyncio
-async def test_timing_recorded():
+async def test_timing_recorded() -> None:
     """Test that elapsed time is recorded."""
     result = await run_captured("echo", "test")
     assert result.elapsed > 0
 
 
 @pytest.mark.asyncio
-async def test_multiple_lines():
+async def test_multiple_lines() -> None:
     """Test capturing multiple lines of output."""
     result = await run_captured("sh", "-c", "echo line1; echo line2; echo line3")
     assert result.returncode == 0
@@ -75,7 +76,7 @@ async def test_multiple_lines():
 
 
 @pytest.mark.asyncio
-async def test_stderr_only():
+async def test_stderr_only() -> None:
     """Test capturing stderr-only output."""
     result = await run_captured("sh", "-c", "echo error >&2")
     assert result.returncode == 0
@@ -85,7 +86,7 @@ async def test_stderr_only():
 
 
 @pytest.mark.asyncio
-async def test_empty_output():
+async def test_empty_output() -> None:
     """Test command with no output."""
     result = await run_captured("true")
     assert result.returncode == 0
@@ -95,7 +96,7 @@ async def test_empty_output():
 
 
 @pytest.mark.asyncio
-async def test_timeout_raised():
+async def test_timeout_raised() -> None:
     """Test that timeout is raised when command exceeds timeout."""
     with pytest.raises(CommandTimeoutError) as exc_info:
         await run_captured("sleep", "10", timeout=0.1)
@@ -103,7 +104,7 @@ async def test_timeout_raised():
 
 
 @pytest.mark.asyncio
-async def test_the_caller_survives_a_timeout():
+async def test_the_caller_survives_a_timeout() -> None:
     """The deadline is a cancel scope, and a scope left half-exited keeps the
     caller in a cancelling state: the next `await` raises rather than runs.
     `get_build_args` calls `run_captured` and then goes on to build, so a
@@ -119,7 +120,7 @@ async def test_the_caller_survives_a_timeout():
 
 
 @pytest.mark.asyncio
-async def test_large_output():
+async def test_large_output() -> None:
     """Test handling of large output."""
     # Generate 1000 lines of output
     result = await run_captured("sh", "-c", "for i in $(seq 1 1000); do echo line_$i; done")
@@ -131,7 +132,7 @@ async def test_large_output():
 
 
 @pytest.mark.asyncio
-async def test_unicode_output():
+async def test_unicode_output() -> None:
     """Test handling of unicode characters in output."""
     result = await run_captured("echo", "hello 世界 🌍")
     assert result.returncode == 0
@@ -140,7 +141,7 @@ async def test_unicode_output():
 
 
 @pytest.mark.asyncio
-async def test_error_message_preserved():
+async def test_error_message_preserved() -> None:
     """Test that error messages are preserved in stderr."""
     result = await run_captured("sh", "-c", "echo important error >&2; exit 1")
     assert result.returncode == 1
@@ -149,7 +150,7 @@ async def test_error_message_preserved():
 
 
 @pytest.mark.asyncio
-async def test_try_captured_preserves_full_error():
+async def test_try_captured_preserves_full_error() -> None:
     """Test that try_captured includes full output in error."""
     with pytest.raises(SubprocessError) as exc_info:
         await try_captured("sh", "-c", "echo output; echo error >&2; exit 5")
@@ -160,7 +161,7 @@ async def test_try_captured_preserves_full_error():
 
 
 @pytest.mark.asyncio
-async def test_a_timeout_error_from_inside_is_not_reported_as_the_deadline():
+async def test_a_timeout_error_from_inside_is_not_reported_as_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     """The deadline is the cancel scope that caught it, not `TimeoutError`.
 
     A `TimeoutError` raised *inside* -- a socket, a transport, a nested
@@ -173,15 +174,13 @@ async def test_a_timeout_error_from_inside_is_not_reported_as_the_deadline():
     TimeoutError` never matched either. This is the shape that told the two
     apart.
     """
-    from src import subprocessing
 
-    async def refuse(*_args, **_kwargs):
+    async def refuse(*_args: object, **_kwargs: object) -> None:
         raise TimeoutError("the transport gave up")
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(subprocessing.anyio, "open_process", refuse)
-        with pytest.raises(TimeoutError) as caught:
-            await run_captured("echo", "hello", timeout=30)
+    monkeypatch.setattr(anyio, "open_process", refuse)
+    with pytest.raises(TimeoutError) as caught:
+        await run_captured("echo", "hello", timeout=30)
 
     assert not isinstance(caught.value, CommandTimeoutError), (
         "an inner TimeoutError was rewritten as this command timing out"

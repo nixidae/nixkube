@@ -9,9 +9,11 @@ that reads the status alone.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import prometheus_client
+import pytest
 
 from src import metrics
 
@@ -40,12 +42,12 @@ class TestStoreSpace:
     holds.
     """
 
-    def test_both_numbers_are_served(self):
+    def test_both_numbers_are_served(self) -> None:
         series = _series()
         assert "nixkube_store_filesystem_size_bytes" in series
         assert "nixkube_store_filesystem_available_bytes" in series
 
-    def test_the_numbers_describe_a_real_file_system(self):
+    def test_the_numbers_describe_a_real_file_system(self) -> None:
         series = _series()
         total = series["nixkube_store_filesystem_size_bytes"]
         available = series["nixkube_store_filesystem_available_bytes"]
@@ -53,7 +55,7 @@ class TestStoreSpace:
         assert total > 0
         assert 0 <= available <= total
 
-    def test_an_unreadable_store_serves_no_series(self, monkeypatch):
+    def test_an_unreadable_store_serves_no_series(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A store that is gone must not take the rest of the scrape with it.
 
         Every other series is still an answer, so these two go absent.
@@ -64,7 +66,7 @@ class TestStoreSpace:
 
 
 class TestCounters:
-    def test_the_gc_counters_are_registered(self):
+    def test_the_gc_counters_are_registered(self) -> None:
         """`gc_loop` counts a failed cycle as well as a finished one.
 
         The loop logs an error and sleeps, so a cycle that fails every time
@@ -79,7 +81,7 @@ class TestCounters:
         assert series['nixkube_gc_cycles_total{result="error"}'] >= 1
         assert series["nixkube_gc_paths_deleted_total"] >= 3
 
-    def test_the_volume_counters_are_registered(self):
+    def test_the_volume_counters_are_registered(self) -> None:
         metrics.VOLUME_MOUNTS.labels(result="ok").inc()
         metrics.VOLUME_UNMOUNTS.labels(result="ok").inc()
 
@@ -97,25 +99,25 @@ class TestCommandLabel:
     that is one series per value.
     """
 
-    def test_a_store_path_argument_does_not_reach_the_label(self):
+    def test_a_store_path_argument_does_not_reach_the_label(self) -> None:
         assert metrics.command_label(("nix", "build", "/nix/store/aaa-hello")) == ("nix build")
 
-    def test_a_flake_reference_does_not_reach_the_label(self):
+    def test_a_flake_reference_does_not_reach_the_label(self) -> None:
         """The case that looks safe: a bare word after the subcommand."""
         assert metrics.command_label(("nix", "build", "nixpkgs#hello")) == "nix build"
 
-    def test_a_store_subcommand_is_kept(self):
+    def test_a_store_subcommand_is_kept(self) -> None:
         """`nix store ping` and `nix store sign` are different work and both
         are in the allow-list, so the label keeps the third token."""
         assert metrics.command_label(("nix", "store", "ping", "--json")) == "nix store ping"
 
-    def test_an_unknown_subcommand_falls_back_to_the_binary(self):
+    def test_an_unknown_subcommand_falls_back_to_the_binary(self) -> None:
         assert metrics.command_label(("nix", "frobnicate", "x")) == "nix"
 
-    def test_a_binary_is_named_without_its_store_path(self):
+    def test_a_binary_is_named_without_its_store_path(self) -> None:
         assert metrics.command_label(("/nix/store/abc-nix/bin/nix", "copy", "--to", "x")) == "nix copy"
 
-    def test_no_arguments_answers_a_name_and_not_an_error(self):
+    def test_no_arguments_answers_a_name_and_not_an_error(self) -> None:
         assert metrics.command_label(()) == "unknown"
 
 
@@ -123,7 +125,7 @@ class TestTheNewCounters:
     """Declared and incremented. A metric nothing moves exports a flat zero,
     which reads on a dashboard exactly like a quiet node."""
 
-    def test_the_subprocess_counters_are_registered(self):
+    def test_the_subprocess_counters_are_registered(self) -> None:
         metrics.SUBPROCESS_CALLS.labels(command="nix build", result="ok").inc()
         metrics.SUBPROCESS_DURATION.labels(command="nix build").observe(1.0)
 
@@ -131,13 +133,13 @@ class TestTheNewCounters:
         assert series['nixkube_subprocess_calls_total{command="nix build",result="ok"}'] >= 1
         assert series['nixkube_subprocess_duration_seconds_count{command="nix build"}'] >= 1
 
-    def test_the_build_counters_are_registered(self):
+    def test_the_build_counters_are_registered(self) -> None:
         metrics.NIX_BUILDS.labels(kind="store_path", result="ok").inc()
 
         series = _series()
         assert series['nixkube_nix_builds_total{kind="store_path",result="ok"}'] >= 1
 
-    def test_the_hardlink_counters_are_registered(self):
+    def test_the_hardlink_counters_are_registered(self) -> None:
         metrics.HARDLINK_CLOSURES.labels(result="ok").inc()
         metrics.HARDLINK_PATHS.inc(2)
 
@@ -145,25 +147,25 @@ class TestTheNewCounters:
         assert series['nixkube_hardlink_closures_total{result="ok"}'] >= 1
         assert series["nixkube_hardlink_paths_total"] >= 2
 
-    def test_the_supervision_counter_is_registered(self):
+    def test_the_supervision_counter_is_registered(self) -> None:
         """A restart count was the diagnosis twice on the nixlab2 cluster, and
         both times it came from `kubectl` and not from a series."""
         metrics.SERVICE_RESTARTS.labels(service="csi").inc()
 
         assert _series()['nixkube_service_restarts_total{service="csi"}'] >= 1
 
-    def test_the_cache_gauge_is_registered(self):
+    def test_the_cache_gauge_is_registered(self) -> None:
         metrics.CACHE_REACHABLE.set(1)
 
         assert _series()["nixkube_cache_reachable"] == 1
 
-    def test_configured_is_reported_beside_reachable(self):
+    def test_configured_is_reported_beside_reachable(self) -> None:
         """`reachable == 0` is the correct state on a cluster with no pynixd,
         so an alert on it alone fires everywhere. The pair is what says
         whether zero is a fault."""
         assert "nixkube_cache_configured" in _series()
 
-    def test_a_completed_check_writes_the_answer_and_the_time(self):
+    def test_a_completed_check_writes_the_answer_and_the_time(self) -> None:
         """Both, or `reachable == 0` cannot be read at all: a node that has
         not built since it started has never run the check, and an unset
         gauge reads 0 -- the number a failure writes. Measured on nixlab2:
@@ -177,7 +179,7 @@ class TestTheNewCounters:
         assert series["nixkube_cache_reachable"] == 0
         assert series["nixkube_cache_last_check_timestamp_seconds"] > 0
 
-    def test_the_timestamp_moves_with_a_later_check(self):
+    def test_the_timestamp_moves_with_a_later_check(self) -> None:
         """A consumer bounds the age of the reading, so a stamp that never
         advances is the same as no stamp at all."""
         from src import cache
@@ -190,7 +192,7 @@ class TestTheNewCounters:
         assert series["nixkube_cache_last_check_timestamp_seconds"] >= first
         assert series["nixkube_cache_reachable"] == 1
 
-    def test_the_loop_lag_gauges_are_registered(self):
+    def test_the_loop_lag_gauges_are_registered(self) -> None:
         """nixkube blocks its own loop, and a stalled loop looks exactly like
         a slow build from outside."""
         series = _series()
@@ -199,7 +201,7 @@ class TestTheNewCounters:
 
 
 class TestTheLoopLagMonitor:
-    def test_the_window_forgets_an_old_stall(self, monkeypatch):
+    def test_the_window_forgets_an_old_stall(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """`lifetime_max` keeps a stall for the operator; `window_max` decays,
         or one bad closure holds the node's lag high forever.
 
@@ -207,7 +209,7 @@ class TestTheLoopLagMonitor:
         than this machine's timing.
         """
         now = [1000.0]
-        monkeypatch.setattr(metrics.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(time, "monotonic", lambda: now[0])
         monitor = metrics.LoopLagMonitor(window=10.0)
 
         monitor._samples.append((now[0], 0.4))
@@ -223,27 +225,27 @@ class TestTheLoopLagMonitor:
 
 
 class TestServe:
-    def test_a_port_it_cannot_bind_does_not_end_the_daemon(self, monkeypatch):
+    def test_a_port_it_cannot_bind_does_not_end_the_daemon(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A node that cannot serve metrics still has a CSI driver to run.
 
         Refusing to start one because the other is unavailable turns an
         observability gap into an outage.
         """
 
-        def refuse(*_args, **_kwargs):
+        def refuse(*_args: object, **_kwargs: object) -> None:
             raise OSError("address already in use")
 
         monkeypatch.setattr(metrics, "start_http_server", refuse)
 
         metrics.serve(port=9099, addr="127.0.0.1")
 
-    def test_it_falls_back_to_ipv4_when_ipv6_is_off(self, monkeypatch):
+    def test_it_falls_back_to_ipv4_when_ipv6_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A `::` socket serves both families while the kernel keeps
         `net.ipv6.bindv6only=0`. A kernel with IPv6 switched off refuses the
         bind, and that node is scrapable over IPv4 or not at all."""
-        tried = []
+        tried: list[str] = []
 
-        def refuse_ipv6(_port, addr):
+        def refuse_ipv6(_port: int, addr: str) -> None:
             tried.append(addr)
             if addr == "::":
                 raise OSError("cannot assign requested address")
@@ -254,12 +256,12 @@ class TestServe:
 
         assert tried == ["::", "0.0.0.0"]
 
-    def test_a_named_address_is_not_second_guessed(self, monkeypatch):
+    def test_a_named_address_is_not_second_guessed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """An operator who set `METRICS_ADDR` gets that address and no
         other. The fallback is for the every-interface default alone."""
-        tried = []
+        tried: list[str] = []
 
-        def refuse(_port, addr):
+        def refuse(_port: int, addr: str) -> None:
             tried.append(addr)
             raise OSError("address already in use")
 
@@ -269,10 +271,10 @@ class TestServe:
 
         assert tried == ["127.0.0.1"]
 
-    def test_ipv4_is_not_tried_when_ipv6_bound(self, monkeypatch):
+    def test_ipv4_is_not_tried_when_ipv6_bound(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Two sockets on one port is one of them failing, and the log would
         say the daemon serves an address it does not."""
-        tried = []
+        tried: list[str] = []
 
         monkeypatch.setattr(metrics, "start_http_server", lambda _port, addr: tried.append(addr))
 
@@ -295,7 +297,7 @@ class TestAppstarterDegraded:
         path.mkdir(parents=True)
         (path / "state.json").write_text(f'{{"wanted": "{wanted}", "running": "{running}"}}')
 
-    def test_the_wanted_environment_reads_zero(self, tmp_path, monkeypatch):
+    def test_the_wanted_environment_reads_zero(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self._state(tmp_path, "/nix/store/aaa-node", "/nix/store/aaa-node")
         monkeypatch.setattr(metrics, "APPSTARTER_STATE", tmp_path / "nix/var/appstarter/state.json")
 
@@ -304,7 +306,7 @@ class TestAppstarterDegraded:
         assert family.name == "nixkube_appstarter_degraded"
         assert family.samples[0].value == 0
 
-    def test_the_image_fallback_reads_one(self, tmp_path, monkeypatch):
+    def test_the_image_fallback_reads_one(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self._state(tmp_path, "/nix/store/aaa-node", "/nix/store/bbb-older")
         monkeypatch.setattr(metrics, "APPSTARTER_STATE", tmp_path / "nix/var/appstarter/state.json")
 
@@ -312,14 +314,14 @@ class TestAppstarterDegraded:
 
         assert family.samples[0].value == 1
 
-    def test_no_state_serves_no_series(self, tmp_path, monkeypatch):
+    def test_no_state_serves_no_series(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Absent, never zero. A process that cannot tell must not answer
         "not degraded" -- that is the one answer that hides this."""
         monkeypatch.setattr(metrics, "APPSTARTER_STATE", tmp_path / "absent.json")
 
         assert list(metrics.AppstarterCollector().collect()) == []
 
-    def test_a_truncated_state_serves_no_series(self, tmp_path, monkeypatch):
+    def test_a_truncated_state_serves_no_series(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """`init` writes through a staging file and renames, so this should
         not happen -- and a crash mid-write must still not read as healthy."""
         path = tmp_path / "state.json"

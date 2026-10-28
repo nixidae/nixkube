@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -32,11 +33,11 @@ def fail() -> SubprocessResult:
     return SubprocessResult(returncode=1, stdout="", stderr="error", combined="error", elapsed=0.0)
 
 
-def make_mock_run(copy_results: list[SubprocessResult]):
+def make_mock_run(copy_results: list[SubprocessResult]) -> Callable[..., Awaitable[SubprocessResult]]:
     """Return an async mock for run_captured that routes by nix subcommand."""
     copy_iter = iter(copy_results)
 
-    async def mock_run(*args, **kwargs):
+    async def mock_run(*args: str, **kwargs: object) -> SubprocessResult:
         args_list = list(args)
         if "path-info" in args_list:
             if "--derivation" in args_list:
@@ -55,12 +56,12 @@ class TestCopyToCacheRetry:
     """Tests for copy_to_cache() retry loop and backoff behavior."""
 
     @pytest.fixture(autouse=True)
-    def pynixd_enabled(self, monkeypatch):
+    def pynixd_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """There is a cache to copy to. Without one copy_to_cache returns at once."""
         monkeypatch.setattr("src.cache.PYNIXD_ENABLED", True)
 
     @pytest.mark.asyncio
-    async def test_empty_paths_returns_early(self):
+    async def test_empty_paths_returns_early(self) -> None:
         """Empty package_paths should skip all subprocess calls."""
         from src.cache import copy_to_cache
 
@@ -69,7 +70,7 @@ class TestCopyToCacheRetry:
             mock_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_first_attempt_success_no_sleep(self):
+    async def test_first_attempt_success_no_sleep(self) -> None:
         """Successful first copy attempt should not trigger any sleep."""
         from src.cache import copy_to_cache
 
@@ -82,7 +83,7 @@ class TestCopyToCacheRetry:
             mock_sleep.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_all_attempts_fail_sleeps_five_times(self):
+    async def test_all_attempts_fail_sleeps_five_times(self) -> None:
         """All 6 copy attempts failing should sleep 5 times (not before attempt 0)."""
         from src.cache import copy_to_cache
 
@@ -95,7 +96,7 @@ class TestCopyToCacheRetry:
             assert mock_sleep.call_count == 5
 
     @pytest.mark.asyncio
-    async def test_retry_succeeds_on_third_attempt(self):
+    async def test_retry_succeeds_on_third_attempt(self) -> None:
         """Two failures then success → only 2 sleeps."""
         from src.cache import copy_to_cache
 
@@ -108,7 +109,7 @@ class TestCopyToCacheRetry:
             assert mock_sleep.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_backoff_values(self):
+    async def test_backoff_values(self) -> None:
         """Verify exponential backoff sequence: 5, 10, 20, 40, 60 seconds."""
         from src.cache import copy_to_cache
 
@@ -127,14 +128,14 @@ class TestCopyToCacheRetry:
         assert sleep_calls == [5, 10, 20, 40, 60]
 
     @pytest.mark.asyncio
-    async def test_sign_failure_does_not_abort_copy(self):
+    async def test_sign_failure_does_not_abort_copy(self) -> None:
         """A sign failure should log a warning but still attempt the copy."""
         from src.cache import copy_to_cache
 
         sign_called = False
         copy_called = False
 
-        async def mock_run(*args, **kwargs):
+        async def mock_run(*args: str, **kwargs: object) -> SubprocessResult:
             nonlocal sign_called, copy_called
             args_list = list(args)
             if "path-info" in args_list:
@@ -161,11 +162,11 @@ class TestCopyToCacheWithoutPynixd:
     """copy_to_cache() when the deployment has no cache at all."""
 
     @pytest.fixture(autouse=True)
-    def pynixd_disabled(self, monkeypatch):
+    def pynixd_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("src.cache.PYNIXD_ENABLED", False)
 
     @pytest.mark.asyncio
-    async def test_paths_run_nothing(self):
+    async def test_paths_run_nothing(self) -> None:
         """No cache means no sign, no copy and no retries."""
         from src.cache import copy_to_cache
 
@@ -179,7 +180,7 @@ class TestCopyToCacheWithoutPynixd:
         mock_sleep.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_all_paths_run_nothing(self):
+    async def test_all_paths_run_nothing(self) -> None:
         """The GC pass asks for every path in the store. It gets the same answer."""
         from src.cache import copy_to_cache
 
@@ -209,7 +210,7 @@ class TestCopyToCacheWithoutPynixd:
     ],
 )
 @pytest.mark.asyncio
-async def test_a_raising_ping_is_false_and_not_an_error(error):
+async def test_a_raising_ping_is_false_and_not_an_error(error: Exception) -> None:
     """Every `NodePublishVolume` asks this, so raising stops every mount.
 
     `CommandTimeoutError` is the one that fires in practice: `run_captured`
@@ -217,7 +218,7 @@ async def test_a_raising_ping_is_false_and_not_an_error(error):
     left every workload in ContainerCreating until the UML test gave up.
     """
 
-    async def raises(*_args, **_kwargs):
+    async def raises(*_args: object, **_kwargs: object) -> None:
         raise error
 
     with (
@@ -236,7 +237,7 @@ async def test_a_raising_ping_is_false_and_not_an_error(error):
     ],
 )
 @pytest.mark.asyncio
-async def test_only_a_clean_answer_is_yes(result, why):
+async def test_only_a_clean_answer_is_yes(result: SubprocessResult, why: str) -> None:
     """Anything short of success means "do not add pynixd as a substituter"."""
     with (
         patch("src.cache.PYNIXD_ENABLED", True),
@@ -246,7 +247,7 @@ async def test_only_a_clean_answer_is_yes(result, why):
 
 
 @pytest.mark.asyncio
-async def test_a_cache_that_answers_is_true():
+async def test_a_cache_that_answers_is_true() -> None:
     with (
         patch("src.cache.PYNIXD_ENABLED", True),
         patch("src.cache.run_captured", new=AsyncMock(return_value=ok("{}"))),
@@ -255,11 +256,11 @@ async def test_a_cache_that_answers_is_true():
 
 
 @pytest.mark.asyncio
-async def test_the_ping_carries_a_short_timeout():
+async def test_the_ping_carries_a_short_timeout() -> None:
     """The wait is paid per mount, so it cannot be the build timeout."""
     seen: dict[str, float | None] = {}
 
-    async def record(*_args, timeout=None, **_kwargs):
+    async def record(*_args: str, timeout: float | None = None, **_kwargs: object) -> SubprocessResult:
         seen["timeout"] = timeout
         return ok("{}")
 
@@ -274,10 +275,12 @@ async def test_the_ping_carries_a_short_timeout():
 
 
 def reachable() -> float:
-    return CACHE_REACHABLE._value.get()
+    # prometheus_client keeps the gauge value in a private, untyped object, so
+    # reading it goes through `_value`.
+    return float(CACHE_REACHABLE._value.get())
 
 
-def test_the_probe_backs_off_to_its_interval():
+def test_the_probe_backs_off_to_its_interval() -> None:
     assert probe_delay(0) == CACHE_PROBE_INTERVAL_SECONDS
     assert probe_delay(1) == CACHE_PROBE_RETRY_SECONDS
     assert probe_delay(2) == CACHE_PROBE_RETRY_SECONDS * 2
@@ -290,7 +293,7 @@ class _Stop(BaseException):
 
 
 @pytest.mark.asyncio
-async def test_a_failed_ping_during_a_restart_clears_itself():
+async def test_a_failed_ping_during_a_restart_clears_itself() -> None:
     """#72: a ping failed 11 s before pynixd was Ready, and the gauge stayed
     0 for 10 h because nothing pinged again until the next build."""
     CACHE_REACHABLE.set(0)
@@ -319,7 +322,7 @@ async def test_a_failed_ping_during_a_restart_clears_itself():
 
 
 @pytest.mark.asyncio
-async def test_no_cache_means_no_probe():
+async def test_no_cache_means_no_probe() -> None:
     with (
         patch("src.cache.PYNIXD_ENABLED", False),
         patch("src.cache.run_captured", new_callable=AsyncMock) as mock_run,
@@ -329,7 +332,7 @@ async def test_no_cache_means_no_probe():
 
 
 @pytest.mark.asyncio
-async def test_a_copy_pynixd_took_says_it_is_reachable():
+async def test_a_copy_pynixd_took_says_it_is_reachable() -> None:
     CACHE_REACHABLE.set(0)
     with (
         patch("src.cache.PYNIXD_ENABLED", True),
@@ -340,7 +343,7 @@ async def test_a_copy_pynixd_took_says_it_is_reachable():
 
 
 @pytest.mark.asyncio
-async def test_a_failed_copy_leaves_the_gauge_alone():
+async def test_a_failed_copy_leaves_the_gauge_alone() -> None:
     """The negative control: a copy fails for reasons of its own."""
     CACHE_REACHABLE.set(0)
     with (
@@ -353,7 +356,7 @@ async def test_a_failed_copy_leaves_the_gauge_alone():
 
 
 @pytest.mark.asyncio
-async def test_no_cache_asks_nothing():
+async def test_no_cache_asks_nothing() -> None:
     with (
         patch("src.cache.PYNIXD_ENABLED", False),
         patch("src.cache.run_captured", new_callable=AsyncMock) as mock_run,

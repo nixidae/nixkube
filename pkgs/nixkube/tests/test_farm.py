@@ -19,7 +19,7 @@ def store(tmp_path: Path) -> Path:
     return store
 
 
-def test_place_makes_empty_mountpoints_and_copies_links(store: Path, tmp_path: Path):
+def test_place_makes_empty_mountpoints_and_copies_links(store: Path, tmp_path: Path) -> None:
     farm = tmp_path / "farm"
     place(farm, sorted(store.iterdir()))
     assert (farm / "aaa-dir").is_dir()
@@ -30,7 +30,7 @@ def test_place_makes_empty_mountpoints_and_copies_links(store: Path, tmp_path: P
     assert (farm / "ccc-link").readlink() == Path("/nix/store/aaa-dir/bin")
 
 
-def test_place_twice_leaves_what_is_there(store: Path, tmp_path: Path):
+def test_place_twice_leaves_what_is_there(store: Path, tmp_path: Path) -> None:
     farm = tmp_path / "farm"
     place(farm, sorted(store.iterdir()))
     (farm / "aaa-dir" / "written-by-a-pod").touch()
@@ -38,12 +38,12 @@ def test_place_twice_leaves_what_is_there(store: Path, tmp_path: Path):
     assert (farm / "aaa-dir" / "written-by-a-pod").exists()
 
 
-def test_place_refuses_a_path_that_is_not_there(store: Path, tmp_path: Path):
+def test_place_refuses_a_path_that_is_not_there(store: Path, tmp_path: Path) -> None:
     with pytest.raises(FarmError, match="not there"):
         place(tmp_path / "farm", [store / "ddd-missing"])
 
 
-def test_mount_points_reads_field_five(tmp_path: Path):
+def test_mount_points_reads_field_five(tmp_path: Path) -> None:
     mountinfo = tmp_path / "mountinfo"
     mountinfo.write_text(
         "22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n"

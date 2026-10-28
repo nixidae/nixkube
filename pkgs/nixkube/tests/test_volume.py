@@ -13,7 +13,7 @@ class TestIsMount:
         mounts_file.write_text(content)
         return mounts_file
 
-    def test_path_present_returns_true(self, tmp_path: Path):
+    def test_path_present_returns_true(self, tmp_path: Path) -> None:
         """Path listed as mountpoint should return True."""
         target = tmp_path / "target"
         target.mkdir()
@@ -23,7 +23,7 @@ class TestIsMount:
         )
         assert is_mount(target, mounts_file=mounts) is True
 
-    def test_path_absent_returns_false(self, tmp_path: Path):
+    def test_path_absent_returns_false(self, tmp_path: Path) -> None:
         """Path not listed as mountpoint should return False."""
         target = tmp_path / "target"
         target.mkdir()
@@ -35,14 +35,14 @@ class TestIsMount:
         )
         assert is_mount(target, mounts_file=mounts) is False
 
-    def test_empty_mounts_file_returns_false(self, tmp_path: Path):
+    def test_empty_mounts_file_returns_false(self, tmp_path: Path) -> None:
         """Empty mounts file should return False."""
         target = tmp_path / "target"
         target.mkdir()
         mounts = self.write_mounts(tmp_path, "")
         assert is_mount(target, mounts_file=mounts) is False
 
-    def test_malformed_line_skipped(self, tmp_path: Path):
+    def test_malformed_line_skipped(self, tmp_path: Path) -> None:
         """Lines with fewer than 2 fields should be skipped gracefully."""
         target = tmp_path / "target"
         target.mkdir()
@@ -53,14 +53,14 @@ class TestIsMount:
         )
         assert is_mount(target, mounts_file=mounts) is True
 
-    def test_oserror_returns_false(self, tmp_path: Path):
+    def test_oserror_returns_false(self, tmp_path: Path) -> None:
         """OSError reading the mounts file should return False, not raise."""
         target = tmp_path / "target"
         target.mkdir()
         nonexistent = tmp_path / "does_not_exist"
         assert is_mount(target, mounts_file=nonexistent) is False
 
-    def test_multiple_mounts_finds_correct_one(self, tmp_path: Path):
+    def test_multiple_mounts_finds_correct_one(self, tmp_path: Path) -> None:
         """Correct path is found among multiple mount entries."""
         target = tmp_path / "target"
         target.mkdir()
@@ -76,7 +76,7 @@ class TestIsMount:
         )
         assert is_mount(target, mounts_file=mounts) is True
 
-    def test_partial_path_match_not_counted(self, tmp_path: Path):
+    def test_partial_path_match_not_counted(self, tmp_path: Path) -> None:
         """A path that is a prefix of a mount should not match."""
         target = tmp_path / "target"
         target.mkdir()
@@ -104,14 +104,14 @@ class TestIsMountSource:
     def line(self, root: str, target: str) -> str:
         return f"81 26 0:52 {root} {target} rw,relatime shared:1 - ext4 /dev/ubda rw\n"
 
-    def test_source_present_returns_true(self, tmp_path: Path):
+    def test_source_present_returns_true(self, tmp_path: Path) -> None:
         """A volume root something is mounted from is live."""
         volume = tmp_path / "volume"
         volume.mkdir()
         info = self.write_mountinfo(tmp_path, self.line(str(volume.resolve()), "/var/lib/kubelet/x/mount"))
         assert is_mount_source(volume, mountinfo_file=info) is True
 
-    def test_deleted_source_still_returns_true(self, tmp_path: Path):
+    def test_deleted_source_still_returns_true(self, tmp_path: Path) -> None:
         """The kernel marks an unlinked source "//deleted". It is still live.
 
         This is the state that used to make a pod unrepairable: the mount
@@ -125,21 +125,21 @@ class TestIsMountSource:
         )
         assert is_mount_source(volume, mountinfo_file=info) is True
 
-    def test_target_is_not_a_source(self, tmp_path: Path):
+    def test_target_is_not_a_source(self, tmp_path: Path) -> None:
         """Being a mount *point* says nothing about being a mount *source*."""
         volume = tmp_path / "volume"
         volume.mkdir()
         info = self.write_mountinfo(tmp_path, self.line("/somewhere/else", str(volume.resolve())))
         assert is_mount_source(volume, mountinfo_file=info) is False
 
-    def test_absent_source_returns_false(self, tmp_path: Path):
+    def test_absent_source_returns_false(self, tmp_path: Path) -> None:
         """Nothing mounts it, so it is collectable."""
         volume = tmp_path / "volume"
         volume.mkdir()
         info = self.write_mountinfo(tmp_path, self.line("/other", "/mnt/x"))
         assert is_mount_source(volume, mountinfo_file=info) is False
 
-    def test_unreadable_mountinfo_returns_true(self, tmp_path: Path):
+    def test_unreadable_mountinfo_returns_true(self, tmp_path: Path) -> None:
         """Unknown must not authorise a delete.
 
         The opposite default loses a running pod's store whenever the mount

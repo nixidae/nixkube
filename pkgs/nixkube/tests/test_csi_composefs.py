@@ -14,7 +14,7 @@ TOOLS = Tools(
 )
 
 
-def test_the_expression_names_the_tools_and_sorts_the_roots():
+def test_the_expression_names_the_tools_and_sorts_the_roots() -> None:
     expr = expression(
         {Path("/nix/store/zzz-b"), Path("/nix/store/yyy-a")},
         Path("/nix/store/yyy-a"),
@@ -29,12 +29,12 @@ def test_the_expression_names_the_tools_and_sorts_the_roots():
     assert 'primary = "${(builtins.storePath "/nix/store/yyy-a")}";' in expr
 
 
-def test_without_a_primary_it_is_the_empty_string():
+def test_without_a_primary_it_is_the_empty_string() -> None:
     expr = expression({Path("/nix/store/yyy-a")}, None, TOOLS)
     assert '  primary = "";' in expr.splitlines()
 
 
-def test_the_store_is_a_data_only_lower(tmp_path: Path):
+def test_the_store_is_a_data_only_lower(tmp_path: Path) -> None:
     ro = overlay_options(tmp_path / "erofs", "/nix/store", None)
     # `::`, not `:`: with one colon the store is an ordinary lower layer and
     # every store path shows at the volume's root.
@@ -43,7 +43,7 @@ def test_the_store_is_a_data_only_lower(tmp_path: Path):
     assert "upperdir" not in ro
 
 
-def test_read_write_writes_in_the_volume(tmp_path: Path):
+def test_read_write_writes_in_the_volume(tmp_path: Path) -> None:
     rw = overlay_options(tmp_path / "erofs", "/nix/store", tmp_path)
     assert f"upperdir={tmp_path}/upper" in rw and f"workdir={tmp_path}/work" in rw
 
@@ -59,12 +59,12 @@ def test_read_write_writes_in_the_volume(tmp_path: Path):
         ([], b"", False),
     ],
 )
-def test_the_probe_accepts_only_the_one_file(listing, content, accepted):
+def test_the_probe_accepts_only_the_one_file(listing: list[str], content: bytes, accepted: bool) -> None:
     assert probe_root_is_exact(listing, content) is accepted
 
 
 @pytest.fixture
-def csi_dirs(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+def csi_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     gcroots, volumes = tmp_path / "gcroots", tmp_path / "volumes"
     gcroots.mkdir()
     volumes.mkdir()
@@ -74,7 +74,7 @@ def csi_dirs(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     return gcroots, volumes
 
 
-def test_the_sweep_keeps_a_composefs_volume_whose_target_is_mounted(csi_dirs):
+def test_the_sweep_keeps_a_composefs_volume_whose_target_is_mounted(csi_dirs: tuple[Path, Path]) -> None:
     gcroots, volumes = csi_dirs
     for name, target in [("live", "/proc"), ("gone", "/no/such/target")]:
         (gcroots / name).mkdir()
@@ -90,5 +90,5 @@ def test_the_sweep_keeps_a_composefs_volume_whose_target_is_mounted(csi_dirs):
     assert not (gcroots / "gone").exists()
 
 
-def test_target_is_mounted_without_a_target_file_is_no(tmp_path: Path):
+def test_target_is_mounted_without_a_target_file_is_no(tmp_path: Path) -> None:
     assert cleanup.target_is_mounted(tmp_path) is False

@@ -54,21 +54,21 @@ def _calls_without_timeout(source: str) -> list[tuple[str, int]]:
     return missing
 
 
-def test_the_modules_were_actually_found():
+def test_the_modules_were_actually_found() -> None:
     """A glob that matches nothing passes every check below it."""
     assert MODULES, "found no modules to check under src/nix"
     assert {path.name for path in MODULES} >= {"build.py", "verify.py", "closure.py"}
 
 
 @pytest.mark.parametrize("module", MODULES, ids=lambda p: p.name)
-def test_every_nix_call_carries_a_deadline(module: Path):
+def test_every_nix_call_carries_a_deadline(module: Path) -> None:
     missing = _calls_without_timeout(module.read_text())
     assert not missing, f"{module.name} runs nix with no timeout: " + ", ".join(
         f"{name} at line {line}" for name, line in missing
     )
 
 
-def test_the_check_can_fail():
+def test_the_check_can_fail() -> None:
     """The negative control for the parametrised check above.
 
     Without it, a broken matcher -- a renamed runner, an AST change -- reports

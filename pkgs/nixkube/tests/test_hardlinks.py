@@ -22,7 +22,7 @@ class TestHardlinkTree:
     """Tests for hardlink_tree function."""
 
     @pytest.mark.asyncio
-    async def test_hardlink_single_file(self):
+    async def test_hardlink_single_file(self) -> None:
         """Hardlink a single file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             src_file = Path(tmpdir) / "src" / "file.txt"
@@ -38,7 +38,7 @@ class TestHardlinkTree:
             assert os.stat(src_file).st_ino == os.stat(dst_file).st_ino
 
     @pytest.mark.asyncio
-    async def test_hardlink_directory(self):
+    async def test_hardlink_directory(self) -> None:
         """Hardlink a directory tree."""
         with tempfile.TemporaryDirectory() as tmpdir:
             src_dir = Path(tmpdir) / "src"
@@ -54,7 +54,7 @@ class TestHardlinkTree:
             assert (dst_dir / "subdir" / "file2.txt").read_text() == "data2"
 
     @pytest.mark.asyncio
-    async def test_hardlink_symlink_preserved(self):
+    async def test_hardlink_symlink_preserved(self) -> None:
         """Hardlink should preserve symlinks."""
         with tempfile.TemporaryDirectory() as tmpdir:
             src_dir = Path(tmpdir) / "src"
@@ -76,7 +76,7 @@ class TestDerefHardlinkTree:
     """Tests for deref_hardlink_tree function."""
 
     @pytest.mark.asyncio
-    async def test_dereference_symlink_in_store(self):
+    async def test_dereference_symlink_in_store(self) -> None:
         """Symlink to /nix/store target should be dereferenced."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create fake /nix/store structure
@@ -100,7 +100,7 @@ class TestDerefHardlinkTree:
             assert result_link.read_text() == "target content"
 
     @pytest.mark.asyncio
-    async def test_broken_symlink_in_store_copied(self):
+    async def test_broken_symlink_in_store_copied(self) -> None:
         """Broken symlink in /nix/store should be copied as-is."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store_dir = Path(tmpdir) / "nix" / "store"
@@ -121,7 +121,7 @@ class TestDerefHardlinkTree:
             assert os.readlink(result_link) == "/nix/store/nonexistent-path"
 
     @pytest.mark.asyncio
-    async def test_symlink_outside_store_copied(self):
+    async def test_symlink_outside_store_copied(self) -> None:
         """Symlink pointing outside /nix/store should be copied as-is."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store_dir = Path(tmpdir) / "nix" / "store"
@@ -142,7 +142,7 @@ class TestDerefHardlinkTree:
             assert os.readlink(result_link) == "/etc/passwd"
 
     @pytest.mark.asyncio
-    async def test_regular_file_hardlinked(self):
+    async def test_regular_file_hardlinked(self) -> None:
         """Regular files should be hardlinked."""
         with tempfile.TemporaryDirectory() as tmpdir:
             src_file = Path(tmpdir) / "src_file.txt"
@@ -156,7 +156,7 @@ class TestDerefHardlinkTree:
             assert os.stat(src_file).st_ino == os.stat(dst_file).st_ino
 
     @pytest.mark.asyncio
-    async def test_nested_structure_with_symlinks(self):
+    async def test_nested_structure_with_symlinks(self) -> None:
         """Complex nested structure with mixed symlinks and files."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store_dir = Path(tmpdir) / "nix" / "store"
@@ -188,7 +188,7 @@ class TestDerefHardlinkTree:
             assert (dst / "link_to_target" / "real.so").read_text() == "real library"
 
     @pytest.mark.asyncio
-    async def test_empty_directory(self):
+    async def test_empty_directory(self) -> None:
         """Empty directory should be created at destination."""
         with tempfile.TemporaryDirectory() as tmpdir:
             src_dir = Path(tmpdir) / "empty"
@@ -211,10 +211,10 @@ class TestEventLoopStaysAlive:
     """
 
     @pytest.mark.asyncio
-    async def test_a_walk_lets_another_task_run(self):
+    async def test_a_walk_lets_another_task_run(self) -> None:
         ticks = 0
 
-        async def ticker():
+        async def ticker() -> None:
             nonlocal ticks
             while True:
                 await anyio.lowlevel.checkpoint()
@@ -245,7 +245,7 @@ class TestWhichSideWasMissing:
     """
 
     @pytest.mark.asyncio
-    async def test_a_store_path_that_is_not_there_fails_the_volume(self):
+    async def test_a_store_path_that_is_not_there_fails_the_volume(self) -> None:
         """Not a no-op: silence here gives the container an empty /nix."""
         with tempfile.TemporaryDirectory() as tmpdir:
             gone = Path(tmpdir) / "store" / "abc-gone"
@@ -253,17 +253,19 @@ class TestWhichSideWasMissing:
             with pytest.raises(HardlinkClosureError) as caught:
                 await hardlink_closure({gone}, dst)
 
-        assert f"source {gone} exists=False" in caught.value.logs
+        logs = caught.value.logs
+        assert logs is not None, "the hardlink failure carries no logs"
+        assert f"source {gone} exists=False" in logs
 
     @pytest.mark.asyncio
-    async def test_deref_also_refuses_a_path_that_is_not_there(self):
+    async def test_deref_also_refuses_a_path_that_is_not_there(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             gone = Path(tmpdir) / "store" / "abc-gone"
             with pytest.raises(FileNotFoundError):
                 await deref_hardlink_tree(gone, Path(tmpdir) / "vol")
 
     @pytest.mark.asyncio
-    async def test_deref_still_copies_a_broken_symlink(self):
+    async def test_deref_still_copies_a_broken_symlink(self) -> None:
         """The one absent target that is not an error: issue-documented."""
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir) / "link"
@@ -273,7 +275,7 @@ class TestWhichSideWasMissing:
             assert dst.is_symlink()
 
     @pytest.mark.asyncio
-    async def test_a_missing_target_does_not_accuse_the_source(self):
+    async def test_a_missing_target_does_not_accuse_the_source(self) -> None:
         """The case the incident actually needed telling apart."""
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir) / "store" / "abc-pkg"
@@ -284,11 +286,11 @@ class TestWhichSideWasMissing:
 
             real_link = Path.hardlink_to
 
-            def vanishing(self, target):
+            def vanishing(self: Path, target: Path) -> None:
                 # The volume goes away between the walk and the link, which
                 # is what a teardown racing a CreateContainer handler does.
                 shutil.rmtree(dst_root, ignore_errors=True)
-                return real_link(self, target)
+                real_link(self, target)
 
             with pytest.MonkeyPatch.context() as patch:
                 patch.setattr(Path, "hardlink_to", vanishing)
@@ -296,6 +298,7 @@ class TestWhichSideWasMissing:
                     await hardlink_closure({src}, dst_root)
 
         logs = caught.value.logs
+        assert logs is not None, "the hardlink failure carries no logs"
         assert f"source {src / 'file'} exists=True" in logs, "the store file is still there and the log must say so"
         assert "parent" in logs and "exists=False" in logs, "the missing side is the target's parent directory"
 
@@ -318,7 +321,7 @@ class TestAnInterruptedWalkIsNotMistakenForAFinishedOne:
         return src
 
     @pytest.mark.asyncio
-    async def test_a_cancelled_walk_leaves_no_store_path_behind(self):
+    async def test_a_cancelled_walk_leaves_no_store_path_behind(self) -> None:
         """Cancellation is the case the staging rename is for.
 
         `CancelledError` is a BaseException, so the `except Exception` that
@@ -336,10 +339,9 @@ class TestAnInterruptedWalkIsNotMistakenForAFinishedOne:
             started = anyio.Event()
             real_link = Path.hardlink_to
 
-            def notice(self, target):
-                result = real_link(self, target)
+            def notice(self: Path, target: Path) -> None:
+                real_link(self, target)
                 started.set()
-                return result
 
             with pytest.MonkeyPatch.context() as patch:
                 patch.setattr(Path, "hardlink_to", notice)
@@ -351,7 +353,7 @@ class TestAnInterruptedWalkIsNotMistakenForAFinishedOne:
             assert not os.path.lexists(dst / src.name), "a cancelled walk left a store path the next attempt will skip"
 
     @pytest.mark.asyncio
-    async def test_it_leaves_nothing_of_its_own_behind(self):
+    async def test_it_leaves_nothing_of_its_own_behind(self) -> None:
         """The staging name must not reach the container's store."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -363,7 +365,7 @@ class TestAnInterruptedWalkIsNotMistakenForAFinishedOne:
             assert sorted(p.name for p in dst.iterdir()) == [src.name]
 
     @pytest.mark.asyncio
-    async def test_a_broken_symlink_store_path_survives_a_second_call(self):
+    async def test_a_broken_symlink_store_path_survives_a_second_call(self) -> None:
         """`exists` answers False for one, so it used to be relinked."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

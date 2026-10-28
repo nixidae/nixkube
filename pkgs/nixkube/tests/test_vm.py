@@ -26,17 +26,17 @@ from src.nri.vm import (
 KATA = frozenset({"kata"})
 
 
-def test_a_vm_handler_is_a_vm_runtime():
+def test_a_vm_handler_is_a_vm_runtime() -> None:
     assert is_vm_runtime("kata", KATA)
 
 
-def test_runc_and_an_unnamed_handler_keep_the_namespace_mount():
+def test_runc_and_an_unnamed_handler_keep_the_namespace_mount() -> None:
     """A CRI that leaves the handler empty must get today's path, not this one."""
     assert not is_vm_runtime("runc", KATA)
     assert not is_vm_runtime("", KATA)
 
 
-def test_the_waiter_runs_first_and_the_args_follow():
+def test_the_waiter_runs_first_and_the_args_follow() -> None:
     assert waiter_args(["/nix/store/x-hello/bin/hello", "--greeting", "hi"]) == [
         f"/nix/{STATE_DIR}/busybox",
         "sh",
@@ -47,22 +47,22 @@ def test_the_waiter_runs_first_and_the_args_follow():
     ]
 
 
-def test_the_mount_source_is_the_nodes_path():
+def test_the_mount_source_is_the_nodes_path() -> None:
     tree = Path("/nix/var/nix-csi/containers/abc/nix")
     assert host_source(tree, Path("/var/lib/nix-csi")) == Path("/var/lib/nix-csi/nix/var/nix-csi/containers/abc/nix")
 
 
-def test_a_writable_nix_is_refused_with_the_reason():
+def test_a_writable_nix_is_refused_with_the_reason() -> None:
     reason = refusal(True, None)
     assert reason is not None and "hardlinks into the node's store" in reason
 
 
-def test_store_path_mounts_are_refused():
+def test_store_path_mounts_are_refused() -> None:
     reason = refusal(False, {Path("/opt"): Path("/nix/store/x-hello")})
     assert reason is not None and "CSI volume" in reason
 
 
-def test_a_plain_read_only_pod_is_not_refused():
+def test_a_plain_read_only_pod_is_not_refused() -> None:
     assert refusal(False, None) is None
     assert refusal(False, {}) is None
 
@@ -85,7 +85,7 @@ def run(tree: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 @pytest.mark.asyncio
-async def test_the_waiter_runs_the_command_once_ready(tmp_path):
+async def test_the_waiter_runs_the_command_once_ready(tmp_path: Path) -> None:
     tree = await waiter(tmp_path)
     await mark(tree, READY)
     result = run(tree, "/bin/sh", "-c", "echo ran $0", "arg0")
@@ -94,7 +94,7 @@ async def test_the_waiter_runs_the_command_once_ready(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_the_waiter_fails_with_the_builds_reason(tmp_path):
+async def test_the_waiter_fails_with_the_builds_reason(tmp_path: Path) -> None:
     tree = await waiter(tmp_path)
     await mark(tree, FAILED, "nixkube: no substituter has it\n")
     result = run(tree, "/bin/sh", "-c", "echo ran")
@@ -104,7 +104,7 @@ async def test_the_waiter_fails_with_the_builds_reason(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_the_waiter_gives_up_when_the_node_goes_quiet(tmp_path):
+async def test_the_waiter_gives_up_when_the_node_goes_quiet(tmp_path: Path) -> None:
     tree = await waiter(tmp_path)
     stale = time.time() - 60
     os.utime(tree / STATE_DIR / ALIVE, (stale, stale))
@@ -114,7 +114,7 @@ async def test_the_waiter_gives_up_when_the_node_goes_quiet(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_the_waiter_waits_while_the_node_reports(tmp_path):
+async def test_the_waiter_waits_while_the_node_reports(tmp_path: Path) -> None:
     """The negative control for the two above: no marker, fresh heartbeat."""
     tree = await waiter(tmp_path)
     state = tree / STATE_DIR

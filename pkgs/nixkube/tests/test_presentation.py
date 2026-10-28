@@ -22,7 +22,13 @@ from src.presentation import Presentation
         (False, True, False, True, Presentation.REFUSED),
     ],
 )
-def test_csi(enabled, kernel, user_namespace, host_store, shown):
+def test_csi(
+    enabled: bool,
+    kernel: bool,
+    user_namespace: bool,
+    host_store: bool,
+    shown: Presentation,
+) -> None:
     chosen = presentation.csi(
         enabled=enabled,
         kernel=kernel,
@@ -47,7 +53,14 @@ def test_csi(enabled, kernel, user_namespace, host_store, shown):
         (True, True, True, True, True, Presentation.REFUSED),
     ],
 )
-def test_nri(vm, enabled, kernel, bind_farm, host_store, shown):
+def test_nri(
+    vm: bool,
+    enabled: bool,
+    kernel: bool,
+    bind_farm: bool,
+    host_store: bool,
+    shown: Presentation,
+) -> None:
     chosen = presentation.nri(
         vm=vm,
         enabled=enabled,
@@ -67,18 +80,18 @@ def test_nri(vm, enabled, kernel, bind_farm, host_store, shown):
         (False, True, Presentation.REFUSED),
     ],
 )
-def test_farm_fallback(fits, host_store, shown):
+def test_farm_fallback(fits: bool, host_store: bool, shown: Presentation) -> None:
     assert presentation.farm_fallback(fits=fits, host_store=host_store) is shown
 
 
-def test_the_chart_reaches_every_outcome():
+def test_the_chart_reaches_every_outcome() -> None:
     chart = presentation.chart()
     for shown in Presentation:
         assert f'label="{shown}"' in chart, shown
     assert chart.startswith("// Rendered by")
 
 
-def test_a_question_that_changes_nothing_is_not_asked():
+def test_a_question_that_changes_nothing_is_not_asked() -> None:
     def decide(*, a: bool, b: bool) -> Presentation:
         return Presentation.FARM if a else Presentation.HARDLINKS
 

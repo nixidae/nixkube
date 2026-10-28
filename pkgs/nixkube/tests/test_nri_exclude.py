@@ -15,13 +15,17 @@ it. nixidae/nixidae#493, nixidae/nixidae#363.
 from __future__ import annotations
 
 import pytest
+from grpclib.server import Stream
 from nri.nri_pb2 import CreateContainerRequest, CreateContainerResponse
 
 from src.nri import server as nri_server
 
 
-class _Stream:
-    """The two calls `CreateContainer` makes on a grpclib stream."""
+class _Stream(Stream[CreateContainerRequest, CreateContainerResponse]):
+    """The two calls `CreateContainer` makes on a grpclib stream.
+
+    `Stream.__init__` needs a live HTTP/2 stream, so it is not called.
+    """
 
     def __init__(self, request: CreateContainerRequest) -> None:
         self._request = request
@@ -44,22 +48,25 @@ def _request(annotations: dict[str, str], *, container: str = "appstarter-init")
     return request
 
 
-async def _create(monkeypatch, request: CreateContainerRequest) -> _Stream:
+async def _create(monkeypatch: pytest.MonkeyPatch, request: CreateContainerRequest) -> _Stream:
     """Drive `CreateContainer` without a plugin instance.
 
     The early returns under test read the request and module-level helpers,
-    never `self`, so a stand-in is enough to reach them -- and a real
-    `NriPlugin` would want a ZeroMQ server and a CRI socket.
+    never `self`, so an instance without `__init__` is enough to reach them --
+    and a real `NriPlugin` would want a ZeroMQ server and a CRI socket.
     """
     monkeypatch.setattr(nri_server, "get_current_system", lambda: "x86_64-linux")
     stream = _Stream(request)
-    await nri_server.NriPlugin.CreateContainer(object(), stream)
+    plugin = nri_server.NriPlugin.__new__(nri_server.NriPlugin)
+    await plugin.CreateContainer(stream)
     return stream
 
 
 @pytest.mark.asyncio
 class TestTheExclusion:
-    async def test_an_excluded_container_is_answered_with_an_empty_adjustment(self, monkeypatch) -> None:
+    async def test_an_excluded_container_is_answered_with_an_empty_adjustment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         stream = await _create(monkeypatch, _request({"nixkube/appstarter-init-exclude": "true"}))
 
         assert len(stream.sent) == 1
@@ -67,7 +74,7 @@ class TestTheExclusion:
         assert not adjustment.mounts
         assert not adjustment.env
 
-    async def test_the_environment_is_never_read(self, monkeypatch) -> None:
+    async def test_the_environment_is_never_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The reason the check sits where it does. Extracting the store paths
         is what leads to realising them on the node, and for this container
         the only substituter for that closure is the workload it is starting."""
@@ -82,7 +89,7 @@ class TestTheExclusion:
 
         assert called == []
 
-    async def test_a_container_nobody_excluded_is_still_read(self, monkeypatch) -> None:
+    async def test_a_container_nobody_excluded_is_still_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The negative control. Without it a stand-down that fired for every
         container would pass every test above."""
         called: list[object] = []
@@ -96,7 +103,7 @@ class TestTheExclusion:
 
         assert called, "the exclusion fired for a container that asked for nothing"
 
-    async def test_a_mounted_nix_still_stands_down(self, monkeypatch) -> None:
+    async def test_a_mounted_nix_still_stands_down(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The check that was there first, and that this one had to be placed
         before: a container carrying its own `/nix` is left alone whatever its
         annotations say."""

@@ -5,29 +5,30 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.csi.server import check_csi_volume_mounts
+from src.kube_docs import Container, Volume, VolumeMount
 
 
-def make_pod(spec: dict) -> MagicMock:
+def make_pod(spec: dict[str, object]) -> MagicMock:
     """Create a mock Pod with a .raw property returning the given spec dict."""
     pod = MagicMock()
     pod.raw = {"spec": spec}
     return pod
 
 
-def nixkube_volume(name: str, driver: str = "nixkube") -> dict:
+def nixkube_volume(name: str, driver: str = "nixkube") -> Volume:
     return {"name": name, "csi": {"driver": driver}}
 
 
-def non_csi_volume(name: str) -> dict:
+def non_csi_volume(name: str) -> Volume:
     return {"name": name, "emptyDir": {}}
 
 
-def container_with_mounts(name: str, *mounts: dict) -> dict:
+def container_with_mounts(name: str, *mounts: VolumeMount) -> Container:
     return {"name": name, "volumeMounts": list(mounts)}
 
 
-def mount(vol_name: str, mount_path: str, sub_path: str | None = None) -> dict:
-    m: dict = {"name": vol_name, "mountPath": mount_path}
+def mount(vol_name: str, mount_path: str, sub_path: str | None = None) -> VolumeMount:
+    m: VolumeMount = {"name": vol_name, "mountPath": mount_path}
     if sub_path is not None:
         m["subPath"] = sub_path
     return m
@@ -37,7 +38,7 @@ class TestCheckCsiVolumeMounts:
     """Tests for check_csi_volume_mounts() warning event logic."""
 
     @pytest.mark.asyncio
-    async def test_no_volumes_no_events(self):
+    async def test_no_volumes_no_events(self) -> None:
         """Pod with no volumes emits no events."""
         pod = make_pod({"containers": [], "volumes": []})
         with patch("src.csi.server.report_event", new_callable=AsyncMock) as mock_event:
@@ -45,7 +46,7 @@ class TestCheckCsiVolumeMounts:
             mock_event.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_non_csi_volume_no_events(self):
+    async def test_non_csi_volume_no_events(self) -> None:
         """Non-CSI volumes (emptyDir) are ignored."""
         pod = make_pod(
             {
@@ -58,7 +59,7 @@ class TestCheckCsiVolumeMounts:
             mock_event.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_non_nixkube_csi_driver_no_events(self):
+    async def test_non_nixkube_csi_driver_no_events(self) -> None:
         """CSI volumes from other drivers are ignored."""
         pod = make_pod(
             {
@@ -71,7 +72,7 @@ class TestCheckCsiVolumeMounts:
             mock_event.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_correct_config_no_events(self):
+    async def test_correct_config_no_events(self) -> None:
         """Correct nixkube volume (subPath='nix', mountPath='/nix') emits no events."""
         pod = make_pod(
             {
@@ -84,7 +85,7 @@ class TestCheckCsiVolumeMounts:
             mock_event.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_missing_subpath_emits_warning(self):
+    async def test_missing_subpath_emits_warning(self) -> None:
         """Volume mount without subPath emits MissingSubPath warning."""
         pod = make_pod(
             {
@@ -98,7 +99,7 @@ class TestCheckCsiVolumeMounts:
             assert "MissingSubPath" in reasons
 
     @pytest.mark.asyncio
-    async def test_missing_nix_mount_emits_warning(self):
+    async def test_missing_nix_mount_emits_warning(self) -> None:
         """Volume mounted elsewhere but not at /nix emits MissingNixMount warning."""
         pod = make_pod(
             {
@@ -112,7 +113,7 @@ class TestCheckCsiVolumeMounts:
             assert "MissingNixMount" in reasons
 
     @pytest.mark.asyncio
-    async def test_no_mounts_at_all_emits_missing_nix_mount(self):
+    async def test_no_mounts_at_all_emits_missing_nix_mount(self) -> None:
         """nixkube volume with no volumeMounts in any container emits MissingNixMount."""
         pod = make_pod(
             {
@@ -127,7 +128,7 @@ class TestCheckCsiVolumeMounts:
             assert "MissingSubPath" not in reasons
 
     @pytest.mark.asyncio
-    async def test_both_warnings_when_missing_subpath_and_not_at_nix(self):
+    async def test_both_warnings_when_missing_subpath_and_not_at_nix(self) -> None:
         """Mount missing subPath and not at /nix triggers both warnings."""
         pod = make_pod(
             {
@@ -142,7 +143,7 @@ class TestCheckCsiVolumeMounts:
             assert "MissingNixMount" in reasons
 
     @pytest.mark.asyncio
-    async def test_compat_driver_name_also_checked(self):
+    async def test_compat_driver_name_also_checked(self) -> None:
         """nix.csi.store driver is treated the same as nixkube."""
         pod = make_pod(
             {
@@ -158,7 +159,7 @@ class TestCheckCsiVolumeMounts:
             assert "MissingNixMount" not in reasons
 
     @pytest.mark.asyncio
-    async def test_init_container_mount_checked(self):
+    async def test_init_container_mount_checked(self) -> None:
         """Mounts in initContainers are also checked for missing subPath."""
         pod = make_pod(
             {
@@ -173,7 +174,7 @@ class TestCheckCsiVolumeMounts:
             assert "MissingSubPath" in reasons
 
     @pytest.mark.asyncio
-    async def test_init_container_nix_mount_satisfies_missing_nix_check(self):
+    async def test_init_container_nix_mount_satisfies_missing_nix_check(self) -> None:
         """A /nix mount in an initContainer prevents MissingNixMount."""
         pod = make_pod(
             {
@@ -187,7 +188,7 @@ class TestCheckCsiVolumeMounts:
             mock_event.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_multiple_containers_one_missing_subpath(self):
+    async def test_multiple_containers_one_missing_subpath(self) -> None:
         """Only the container with a missing subPath triggers MissingSubPath."""
         pod = make_pod(
             {
@@ -205,7 +206,7 @@ class TestCheckCsiVolumeMounts:
             assert "bad" in missing_subpath_calls[0].kwargs["note"]
 
     @pytest.mark.asyncio
-    async def test_multiple_nixkube_volumes_checked_independently(self):
+    async def test_multiple_nixkube_volumes_checked_independently(self) -> None:
         """Each nixkube volume is checked independently."""
         pod = make_pod(
             {
@@ -230,7 +231,7 @@ class TestCheckCsiVolumeMounts:
             assert reasons.count("MissingNixMount") == 1
 
     @pytest.mark.asyncio
-    async def test_events_are_warnings(self):
+    async def test_events_are_warnings(self) -> None:
         """All emitted events have event_type='Warning'.
 
         This mount is missing its subPath and is not at /nix, so it is worth

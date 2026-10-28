@@ -16,7 +16,9 @@ import json
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
+from typing import BinaryIO
 from unittest.mock import AsyncMock
 
 import anyio
@@ -24,9 +26,10 @@ import pytest
 
 from src import gc_task
 from src.gc_task import StoreScan, _count_deleted, scan_path_info
+from src.metrics import GC_LAST_SUCCESS, GC_PATHS_DELETED, STORE_NAR_BYTES, STORE_PATHS
 
 
-async def _scan(info: dict, cutoff: float) -> StoreScan:
+async def _scan(info: dict[str, dict[str, int]], cutoff: float) -> StoreScan:
     """Run the real streaming reduction over `info`, as nix would send it."""
     return await scan_path_info(io.BytesIO(json.dumps(info).encode()), cutoff)
 
@@ -54,19 +57,19 @@ class TestSelectOldPaths:
     """
 
     @pytest.mark.asyncio
-    async def test_a_path_registered_before_the_cutoff_is_selected(self):
+    async def test_a_path_registered_before_the_cutoff_is_selected(self) -> None:
         info = {"/nix/store/aaa-old": {"registrationTime": 100, "narSize": 1}}
         scan = await _scan(info, cutoff=200)
         assert scan.old_paths == ["/nix/store/aaa-old"]
 
     @pytest.mark.asyncio
-    async def test_a_path_registered_after_the_cutoff_is_kept(self):
+    async def test_a_path_registered_after_the_cutoff_is_kept(self) -> None:
         info = {"/nix/store/bbb-new": {"registrationTime": 300, "narSize": 1}}
         scan = await _scan(info, cutoff=200)
         assert scan.old_paths == []
 
     @pytest.mark.asyncio
-    async def test_the_key_is_the_path_and_the_value_carries_no_path(self):
+    async def test_the_key_is_the_path_and_the_value_carries_no_path(self) -> None:
         """The shape that made the old code answer nothing.
 
         A value with no `path` key is what Nix really sends, so a reader that
@@ -78,13 +81,13 @@ class TestSelectOldPaths:
         assert scan.old_paths == ["/nix/store/ccc-old"]
 
     @pytest.mark.asyncio
-    async def test_a_path_with_no_registration_time_is_kept(self):
+    async def test_a_path_with_no_registration_time_is_kept(self) -> None:
         """Absent means "do not touch", not "old"."""
         scan = await _scan({"/nix/store/ddd": {"narSize": 1}}, cutoff=200)
         assert scan.old_paths == []
 
     @pytest.mark.asyncio
-    async def test_the_real_output_of_nix_path_info_parses(self):
+    async def test_the_real_output_of_nix_path_info_parses(self) -> None:
         """One entry, copied from `nix path-info --all --json --json-format 1`."""
         raw = (
             '{"/nix/store/slqhbc4rf1c8j67bjzjdrh32cmwwyrhn-probe-a":'
@@ -98,7 +101,7 @@ class TestSelectOldPaths:
         assert scan.nar_bytes == 120
 
     @pytest.mark.asyncio
-    async def test_it_checkpoints_while_it_reads(self):
+    async def test_it_checkpoints_while_it_reads(self) -> None:
         """The reason for the stream: this loop also serves the NRI heartbeat.
 
         Measured on 216,455 paths / 282 MB of JSON: parsing it whole held the
@@ -122,7 +125,7 @@ class TestSelectOldPaths:
         assert scan.paths == gc_task._SCAN_YIELD_EVERY * 2
         assert seen == 2, f"checkpointed {seen} times over {scan.paths} paths"
 
-    def test_the_c_backend_is_the_one_that_ships(self):
+    def test_the_c_backend_is_the_one_that_ships(self) -> None:
         """A silent fall back to the pure-Python backend costs ~10x.
 
         `ijson` picks a backend at import. The node is where this runs and
@@ -134,7 +137,7 @@ class TestSelectOldPaths:
         assert ijson.backend == "yajl2_c", f"ijson fell back to {ijson.backend!r}"
 
     @pytest.mark.asyncio
-    async def test_a_truncated_answer_ends_the_cycle_quietly(self):
+    async def test_a_truncated_answer_ends_the_cycle_quietly(self) -> None:
         """`nix path-info` killed mid-write leaves an incomplete object.
 
         It must not take the loop down: the cycle logs and returns, and the
@@ -153,7 +156,7 @@ class TestCountDeleted:
     in use. Nix deletes what it can and exits 1 for the rest.
     """
 
-    def test_a_clean_run_counts_what_it_deleted(self):
+    def test_a_clean_run_counts_what_it_deleted(self) -> None:
         lines = [
             "finding garbage collector roots...",
             "deleting '/nix/store/aaa-one'",
@@ -162,10 +165,10 @@ class TestCountDeleted:
         ]
         assert _count_deleted(lines) == 2
 
-    def test_a_live_path_is_tolerated_and_not_counted(self):
+    def test_a_live_path_is_tolerated_and_not_counted(self) -> None:
         assert _count_deleted(MIXED) == 1
 
-    def test_an_all_live_run_deletes_nothing_and_does_not_raise(self):
+    def test_an_all_live_run_deletes_nothing_and_does_not_raise(self) -> None:
         lines = [
             (
                 "error: Cannot delete path '/nix/store/wwv-alive' since it is still "
@@ -175,7 +178,7 @@ class TestCountDeleted:
         ]
         assert _count_deleted(lines) == 0
 
-    def test_any_other_error_still_fails_the_cycle(self):
+    def test_any_other_error_still_fails_the_cycle(self) -> None:
         """Tolerating exit 1 must not tolerate a broken store.
 
         Without this the fix for the liveness case would swallow every failure
@@ -185,12 +188,12 @@ class TestCountDeleted:
         with pytest.raises(RuntimeError, match="unrecognised flag"):
             _count_deleted(lines)
 
-    def test_a_real_error_beside_a_liveness_one_still_fails(self):
+    def test_a_real_error_beside_a_liveness_one_still_fails(self) -> None:
         lines = [*MIXED, "error: opening lock file: Permission denied"]
         with pytest.raises(RuntimeError, match="Permission denied"):
             _count_deleted(lines)
 
-    def test_the_count_is_not_the_length_of_the_offered_list(self):
+    def test_the_count_is_not_the_length_of_the_offered_list(self) -> None:
         """It used to be, so a cycle that deleted one of 300 reported 300."""
         assert _count_deleted(MIXED) != 2
 
@@ -204,11 +207,13 @@ class TestTheCommands:
     """
 
     @pytest.fixture
-    def recorded(self, monkeypatch) -> list[list[str]]:
+    def recorded(self, monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         """Record each argv, and answer as a successful nix would."""
         calls: list[list[str]] = []
 
-        async def fake_run_process(command, *, stdout=None, **_kwargs):
+        async def fake_run_process(
+            command: Sequence[object], *, stdout: BinaryIO | None = None, **_kwargs: object
+        ) -> subprocess.CompletedProcess[bytes]:
             argv = [str(arg) for arg in command]
             calls.append(argv)
             if stdout is not None:
@@ -218,12 +223,12 @@ class TestTheCommands:
                     stdout.write(b"deleting '/nix/store/aaa-old'\n")
             return subprocess.CompletedProcess(argv, 0, b"", b"")
 
-        monkeypatch.setattr(gc_task.anyio, "run_process", fake_run_process)
+        monkeypatch.setattr(anyio, "run_process", fake_run_process)
         monkeypatch.setattr(gc_task, "PYNIXD_ENABLED", False)
         return calls
 
     @pytest.mark.asyncio
-    async def test_the_delete_does_not_pass_skip_live(self, recorded):
+    async def test_the_delete_does_not_pass_skip_live(self, recorded: list[list[str]]) -> None:
         await gc_task._run_gc_cycle()
 
         delete = next(c for c in recorded if "delete" in c)
@@ -231,7 +236,7 @@ class TestTheCommands:
         assert "--ignore-liveness" not in delete, "that flag deletes live paths"
 
     @pytest.mark.asyncio
-    async def test_path_info_asks_for_a_json_format(self, recorded):
+    async def test_path_info_asks_for_a_json_format(self, recorded: list[list[str]]) -> None:
         """Bare `--json` is deprecated on 2.34 and warns on every cycle."""
         await gc_task._run_gc_cycle()
 
@@ -240,10 +245,10 @@ class TestTheCommands:
         assert info[info.index("--json-format") + 1] == "1"
 
     @pytest.mark.asyncio
-    async def test_a_cycle_counts_what_nix_deleted(self, recorded):
-        before = gc_task.GC_PATHS_DELETED._value.get()
+    async def test_a_cycle_counts_what_nix_deleted(self, recorded: list[list[str]]) -> None:
+        before = GC_PATHS_DELETED._value.get()
         await gc_task._run_gc_cycle()
-        assert gc_task.GC_PATHS_DELETED._value.get() == before + 1
+        assert GC_PATHS_DELETED._value.get() == before + 1
 
 
 class TestStoreSize:
@@ -254,7 +259,7 @@ class TestStoreSize:
     """
 
     @pytest.mark.asyncio
-    async def test_the_sum_and_the_count_come_from_one_answer(self):
+    async def test_the_sum_and_the_count_come_from_one_answer(self) -> None:
         gc_task._record_store_size(
             await _scan(
                 {
@@ -265,22 +270,22 @@ class TestStoreSize:
             )
         )
 
-        assert gc_task.STORE_PATHS._value.get() == 2
-        assert gc_task.STORE_NAR_BYTES._value.get() == 350
+        assert STORE_PATHS._value.get() == 2
+        assert STORE_NAR_BYTES._value.get() == 350
 
     @pytest.mark.asyncio
-    async def test_an_empty_store_answers_zero_rather_than_nothing(self):
+    async def test_an_empty_store_answers_zero_rather_than_nothing(self) -> None:
         """Absent and zero mean different things on a dashboard."""
         gc_task._record_store_size(await _scan({}, cutoff=0))
 
-        assert gc_task.STORE_PATHS._value.get() == 0
-        assert gc_task.STORE_NAR_BYTES._value.get() == 0
+        assert STORE_PATHS._value.get() == 0
+        assert STORE_NAR_BYTES._value.get() == 0
 
     @pytest.mark.asyncio
-    async def test_a_path_with_no_nar_size_does_not_break_the_sum(self):
+    async def test_a_path_with_no_nar_size_does_not_break_the_sum(self) -> None:
         gc_task._record_store_size(await _scan({"/nix/store/aaa": {"registrationTime": 1}}, cutoff=0))
 
-        assert gc_task.STORE_NAR_BYTES._value.get() == 0
+        assert STORE_NAR_BYTES._value.get() == 0
 
 
 class TestLastSuccess:
@@ -290,7 +295,7 @@ class TestLastSuccess:
     says that on its own.
     """
 
-    def test_it_starts_at_zero(self):
+    def test_it_starts_at_zero(self) -> None:
         """So an alert reads `== 0 or time() - it > N`, not a 1970 timestamp.
 
         A private registry, because the shared gauge may already have been set
@@ -302,35 +307,35 @@ class TestLastSuccess:
         assert fresh._value.get() == 0
 
     @pytest.mark.asyncio
-    async def test_a_finished_cycle_advances_it(self, monkeypatch):
-        async def cycle():
+    async def test_a_finished_cycle_advances_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def cycle() -> None:
             return None
 
         monkeypatch.setattr(gc_task, "_run_gc_cycle", cycle)
-        monkeypatch.setattr(gc_task, "GC_LAST_SUCCESS", gc_task.GC_LAST_SUCCESS)
+        monkeypatch.setattr(gc_task, "GC_LAST_SUCCESS", GC_LAST_SUCCESS)
 
-        before = gc_task.GC_LAST_SUCCESS._value.get()
+        before = GC_LAST_SUCCESS._value.get()
         # One pass of the loop body, then stop it at the sleep.
-        monkeypatch.setattr(gc_task.anyio, "sleep", AsyncMock(side_effect=anyio.get_cancelled_exc_class()))
+        monkeypatch.setattr(anyio, "sleep", AsyncMock(side_effect=anyio.get_cancelled_exc_class()))
         with pytest.raises(anyio.get_cancelled_exc_class()):
             await gc_task.gc_loop()
 
-        assert gc_task.GC_LAST_SUCCESS._value.get() > before
+        assert GC_LAST_SUCCESS._value.get() > before
 
     @pytest.mark.asyncio
-    async def test_a_failed_cycle_does_not(self, monkeypatch):
+    async def test_a_failed_cycle_does_not(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """It says when collection last worked, not when it last ran."""
 
-        async def cycle():
+        async def cycle() -> None:
             raise RuntimeError("nix store delete failed")
 
         monkeypatch.setattr(gc_task, "_run_gc_cycle", cycle)
-        gc_task.GC_LAST_SUCCESS.set(1000.0)
-        monkeypatch.setattr(gc_task.anyio, "sleep", AsyncMock(side_effect=anyio.get_cancelled_exc_class()))
+        GC_LAST_SUCCESS.set(1000.0)
+        monkeypatch.setattr(anyio, "sleep", AsyncMock(side_effect=anyio.get_cancelled_exc_class()))
         with pytest.raises(anyio.get_cancelled_exc_class()):
             await gc_task.gc_loop()
 
-        assert gc_task.GC_LAST_SUCCESS._value.get() == 1000.0
+        assert GC_LAST_SUCCESS._value.get() == 1000.0
 
 
 class TestTimeouts:
@@ -341,7 +346,7 @@ class TestTimeouts:
     the same call.
     """
 
-    def test_every_step_has_a_timeout_constant(self):
+    def test_every_step_has_a_timeout_constant(self) -> None:
         from src.constants import (
             GC_COPY_TIMEOUT_SECONDS,
             GC_DELETE_TIMEOUT_SECONDS,
@@ -353,13 +358,13 @@ class TestTimeouts:
         assert GC_DELETE_TIMEOUT_SECONDS > 0
 
     @pytest.mark.asyncio
-    async def test_a_path_info_that_never_returns_ends_the_cycle(self, monkeypatch):
+    async def test_a_path_info_that_never_returns_ends_the_cycle(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The measured failure: the call hangs and the loop waits for ever."""
 
-        async def hang(*_args, **_kwargs):
+        async def hang(*_args: object, **_kwargs: object) -> None:
             await anyio.sleep(3600)
 
-        monkeypatch.setattr(gc_task.anyio, "run_process", hang)
+        monkeypatch.setattr(anyio, "run_process", hang)
         monkeypatch.setattr(gc_task, "PYNIXD_ENABLED", False)
         monkeypatch.setattr(gc_task, "GC_PATH_INFO_TIMEOUT_SECONDS", 0.05)
 
@@ -376,7 +381,7 @@ class TestRealProcesses:
     """
 
     @pytest.mark.asyncio
-    async def test_a_giant_single_line_survives_a_file_redirect(self):
+    async def test_a_giant_single_line_survives_a_file_redirect(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "big.txt"
             with anyio.fail_after(20):
@@ -412,7 +417,7 @@ class TestRealProcesses:
         assert "to stderr" in written
 
     @pytest.mark.asyncio
-    async def test_a_command_that_hangs_past_the_deadline_raises(self):
+    async def test_a_command_that_hangs_past_the_deadline_raises(self) -> None:
         """The property the loop is built on, against a real process.
 
         Every stop issue #38 counted was a nix call that never returned. A

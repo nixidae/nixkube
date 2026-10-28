@@ -8,6 +8,7 @@ partway through a closure, leaving a store that is half there. Nothing
 outside a node can see this coming, so the daemon has to say it.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,7 @@ def _mountinfo(tmp_path: Path, lines: int) -> Path:
 
 
 @pytest.fixture
-def limit(monkeypatch):
+def limit(monkeypatch: pytest.MonkeyPatch) -> Callable[[int], None]:
     def _set(value: int) -> None:
         monkeypatch.setattr(mountbudget, "mount_limit", lambda: value)
 
@@ -32,17 +33,17 @@ def limit(monkeypatch):
 
 
 class TestBudgetArithmetic:
-    def test_it_fits_when_there_is_room(self):
+    def test_it_fits_when_there_is_room(self) -> None:
         assert Budget(used=10, limit=100, needed=50).fits
 
-    def test_it_does_not_fit_when_the_request_is_the_overflow(self):
+    def test_it_does_not_fit_when_the_request_is_the_overflow(self) -> None:
         """91 into 90 free. The one that matters: the request itself decides."""
         assert not Budget(used=10, limit=100, needed=91).fits
 
-    def test_exactly_filling_the_limit_still_fits(self):
+    def test_exactly_filling_the_limit_still_fits(self) -> None:
         assert Budget(used=10, limit=100, needed=90).fits
 
-    def test_a_limit_of_zero_does_not_divide_by_it(self):
+    def test_a_limit_of_zero_does_not_divide_by_it(self) -> None:
         assert Budget(used=0, limit=0, needed=1).ratio == 1.0
 
 
@@ -54,19 +55,19 @@ class TestAffordable:
     tenth for everyone else.
     """
 
-    def test_plenty_of_room_is_affordable(self):
+    def test_plenty_of_room_is_affordable(self) -> None:
         assert Budget(used=10, limit=100, needed=50).affordable
 
-    def test_a_request_that_fits_but_leaves_no_headroom_is_not(self):
+    def test_a_request_that_fits_but_leaves_no_headroom_is_not(self) -> None:
         """The case the whole policy turns on: it fits, and it must not run."""
         budget = Budget(used=10, limit=100, needed=85)
         assert budget.fits, "95 of 100 does fit"
         assert not budget.affordable, "and would leave the node 5 mounts"
 
-    def test_exactly_at_the_threshold_is_not_affordable(self):
+    def test_exactly_at_the_threshold_is_not_affordable(self) -> None:
         assert not Budget(used=0, limit=100, needed=90).affordable
 
-    def test_just_under_the_threshold_is(self):
+    def test_just_under_the_threshold_is(self) -> None:
         assert Budget(used=0, limit=100, needed=89).affordable
 
 
@@ -75,7 +76,7 @@ class TestMeasure:
     nothing in this project routes them through the stdlib handler `caplog`
     reads. A `caplog` assertion here passes against silence."""
 
-    def test_a_request_that_fits_is_quiet(self, tmp_path, limit):
+    def test_a_request_that_fits_is_quiet(self, tmp_path: Path, limit: Callable[[int], None]) -> None:
         limit(100_000)
         with capture_logs() as logs:
             budget = measure(2443, mountinfo=_mountinfo(tmp_path, 200))
@@ -83,7 +84,9 @@ class TestMeasure:
         assert budget.fits
         assert [entry["event"] for entry in logs] == ["mount_budget"]
 
-    def test_a_request_that_does_not_fit_says_so_at_error_level(self, tmp_path, limit):
+    def test_a_request_that_does_not_fit_says_so_at_error_level(
+        self, tmp_path: Path, limit: Callable[[int], None]
+    ) -> None:
         limit(1000)
         with capture_logs() as logs:
             budget = measure(2443, mountinfo=_mountinfo(tmp_path, 200))
@@ -93,7 +96,9 @@ class TestMeasure:
         assert said, f"stayed quiet about a farm that cannot be built: {logs}"
         assert said[0]["log_level"] == "error"
 
-    def test_a_request_that_fits_but_takes_the_headroom_is_refused_loudly(self, tmp_path, limit):
+    def test_a_request_that_fits_but_takes_the_headroom_is_refused_loudly(
+        self, tmp_path: Path, limit: Callable[[int], None]
+    ) -> None:
         """The fallback case, which is silent otherwise.
 
         7500 held plus 2443 wanted is 99% of 10,000. It fits. Taking it leaves
@@ -110,7 +115,7 @@ class TestMeasure:
         assert said, f"fell back to hardlinks without saying so: {logs}"
         assert said[0]["log_level"] == "error"
 
-    def test_the_numbers_reach_the_log(self, tmp_path, limit):
+    def test_the_numbers_reach_the_log(self, tmp_path: Path, limit: Callable[[int], None]) -> None:
         limit(1000)
         with capture_logs() as logs:
             measure(2443, mountinfo=_mountinfo(tmp_path, 200))
@@ -124,10 +129,10 @@ class TestMeasure:
 class TestItNeverTakesTheCallerDown:
     """Reading /proc is not a reason to fail a container."""
 
-    def test_an_unreadable_mountinfo_counts_zero(self, tmp_path):
+    def test_an_unreadable_mountinfo_counts_zero(self, tmp_path: Path) -> None:
         assert mountbudget.mounts_used(tmp_path / "not-there") == 0
 
-    def test_an_unreadable_limit_falls_back_to_the_kernel_default(self, monkeypatch):
+    def test_an_unreadable_limit_falls_back_to_the_kernel_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(mountbudget, "MOUNT_MAX_PATH", Path("/nonexistent/mount-max"))
         assert mountbudget.mount_limit() == 100_000
 
@@ -141,18 +146,20 @@ class TestTheVolumeFallsBackRatherThanFailing:
     """
 
     @pytest.mark.asyncio
-    async def test_an_unaffordable_farm_becomes_a_hardlink_tree(self, tmp_path, monkeypatch):
+    async def test_an_unaffordable_farm_becomes_a_hardlink_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from src import volume as volume_module
 
         linked: list[set[Path]] = []
 
-        async def closure(paths):
+        async def closure(paths: set[Path]) -> set[Path]:
             return {Path(f"/nix/store/{n:032d}-p") for n in range(3)}
 
-        async def link(store_paths, dst):
+        async def link(store_paths: set[Path], dst: Path) -> None:
             linked.append(set(store_paths))
 
-        async def nothing(*_args, **_kwargs):
+        async def nothing(*_args: object, **_kwargs: object) -> None:
             return None
 
         monkeypatch.setattr(volume_module, "get_closure_paths", closure)
@@ -172,18 +179,18 @@ class TestTheVolumeFallsBackRatherThanFailing:
         assert said and said[0]["log_level"] == "error", f"fell back without saying so: {logs}"
 
     @pytest.mark.asyncio
-    async def test_an_affordable_farm_copies_nothing(self, tmp_path, monkeypatch):
+    async def test_an_affordable_farm_copies_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from src import volume as volume_module
 
         linked: list[set[Path]] = []
 
-        async def closure(paths):
+        async def closure(paths: set[Path]) -> set[Path]:
             return {Path("/nix/store/aaa-pkg")}
 
-        async def link(store_paths, dst):
+        async def link(store_paths: set[Path], dst: Path) -> None:
             linked.append(set(store_paths))
 
-        async def nothing(*_args, **_kwargs):
+        async def nothing(*_args: object, **_kwargs: object) -> None:
             return None
 
         monkeypatch.setattr(volume_module, "get_closure_paths", closure)
@@ -201,14 +208,16 @@ class TestTheVolumeFallsBackRatherThanFailing:
         assert prepared.paths == [Path("/nix/store/aaa-pkg")]
 
     @pytest.mark.asyncio
-    async def test_a_host_store_refuses_rather_than_falls_back(self, tmp_path, monkeypatch):
+    async def test_a_host_store_refuses_rather_than_falls_back(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from src import volume as volume_module
         from src.errors import MountError
 
-        async def closure(paths):
+        async def closure(paths: set[Path]) -> set[Path]:
             return {Path("/nix/store/aaa-pkg")}
 
-        async def nothing(*_args, **_kwargs):
+        async def nothing(*_args: object, **_kwargs: object) -> None:
             return None
 
         monkeypatch.setattr(volume_module, "get_closure_paths", closure)

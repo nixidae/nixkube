@@ -16,7 +16,7 @@ from src.nri.annotations import (
 
 def _make_req(
     container_name: str,
-    annotations: dict,
+    annotations: dict[str, str],
     env: list[str] | None = None,
     args: list[str] | None = None,
 ) -> nri_pb2.CreateContainerRequest:
@@ -37,13 +37,13 @@ def _make_req(
 class TestParseStoreMountsForName:
     """Test _parse_store_mounts_for_name annotation parsing."""
 
-    def test_basic_store_path_mount(self):
+    def test_basic_store_path_mount(self) -> None:
         """Parse a basic store path mount."""
         annotations = {"nixkube/pod": "/etc/ssl=/nix/store/cacert-1.0/etc/ssl"}
         result = _parse_store_mounts_for_name(annotations, "pod", "x86_64-linux")
         assert result == {Path("/etc/ssl"): Path("/nix/store/cacert-1.0/etc/ssl")}
 
-    def test_multiple_suffixes(self):
+    def test_multiple_suffixes(self) -> None:
         """Parse multiple mounts with different suffixes."""
         annotations = {
             "nixkube/pod-ssl": "/etc/ssl/certs=/nix/store/cacert-1.0/etc/ssl/certs",
@@ -54,7 +54,7 @@ class TestParseStoreMountsForName:
         assert Path("/etc/ssl/certs") in result
         assert Path("/etc/passwd") in result
 
-    def test_system_specific_mount(self):
+    def test_system_specific_mount(self) -> None:
         """Parse system-specific annotations."""
         annotations = {
             "nixkube/pod@x86_64-linux": "/etc/myapp=/nix/store/x86-hash",
@@ -68,7 +68,7 @@ class TestParseStoreMountsForName:
         result_arm = _parse_store_mounts_for_name(annotations, "pod", "aarch64-linux")
         assert result_arm == {Path("/etc/myapp"): Path("/nix/store/aarch64-hash")}
 
-    def test_system_mismatch_filtered(self):
+    def test_system_mismatch_filtered(self) -> None:
         """System-specific annotations are filtered out if system doesn't match."""
         annotations = {
             "nixkube/pod@aarch64-linux": "/etc/myapp=/nix/store/aarch64-hash",
@@ -76,7 +76,7 @@ class TestParseStoreMountsForName:
         result = _parse_store_mounts_for_name(annotations, "pod", "x86_64-linux")
         assert result == {}
 
-    def test_all_systems_backward_compat(self):
+    def test_all_systems_backward_compat(self) -> None:
         """Annotations without @system apply to all systems."""
         annotations = {"nixkube/pod": "/etc/ssl=/nix/store/cacert/etc/ssl"}
         result_x86 = _parse_store_mounts_for_name(annotations, "pod", "x86_64-linux")
@@ -85,7 +85,7 @@ class TestParseStoreMountsForName:
         assert result_x86 == {Path("/etc/ssl"): Path("/nix/store/cacert/etc/ssl")}
         assert result_arm == {Path("/etc/ssl"): Path("/nix/store/cacert/etc/ssl")}
 
-    def test_system_specific_with_index(self):
+    def test_system_specific_with_index(self) -> None:
         """Parse system-specific annotations with index suffix (system before index)."""
         annotations = {
             "nixkube/pod@x86_64-linux-1": "/etc/ssl=/nix/store/x86-cacert",
@@ -96,7 +96,7 @@ class TestParseStoreMountsForName:
         result_arm = _parse_store_mounts_for_name(annotations, "pod", "aarch64-linux")
         assert result_arm == {Path("/etc/ssl"): Path("/nix/store/arm-cacert")}
 
-    def test_old_format_suffix_before_system_is_unfiltered(self):
+    def test_old_format_suffix_before_system_is_unfiltered(self) -> None:
         """Old format (suffix before system: nixkube/pod-1@system) is treated as
         an unqualified annotation (no system filtering) because the @system part
         is absorbed into the index group and doesn't match the system group."""
@@ -109,7 +109,7 @@ class TestParseStoreMountsForName:
         result_arm = _parse_store_mounts_for_name(annotations, "pod", "aarch64-linux")
         assert result_x86 == result_arm  # both match: system filter is lost
 
-    def test_container_specific_prefix(self):
+    def test_container_specific_prefix(self) -> None:
         """Parse container-specific annotations."""
         annotations = {
             "nixkube/myapp": "/etc/myapp=/nix/store/myapp-1.0",
@@ -120,7 +120,7 @@ class TestParseStoreMountsForName:
         assert result[Path("/etc/myapp")] == Path("/nix/store/myapp-1.0")
         assert result[Path("/etc/ssl")] == Path("/nix/store/cacert")
 
-    def test_container_specific_with_system(self):
+    def test_container_specific_with_system(self) -> None:
         """Parse container-specific system-filtered annotations."""
         annotations = {
             "nixkube/myapp@x86_64-linux": "/etc/myapp=/nix/store/x86-app",
@@ -129,7 +129,7 @@ class TestParseStoreMountsForName:
         result_x86 = _parse_store_mounts_for_name(annotations, "myapp", "x86_64-linux")
         assert result_x86 == {Path("/etc/myapp"): Path("/nix/store/x86-app")}
 
-    def test_invalid_annotation_skipped(self):
+    def test_invalid_annotation_skipped(self) -> None:
         """Annotations without '=' are skipped."""
         annotations = {
             "nixkube/pod": "invalid",
@@ -139,13 +139,13 @@ class TestParseStoreMountsForName:
         assert len(result) == 1
         assert result[Path("/etc/ssl")] == Path("/nix/store/cacert")
 
-    def test_flake_reference_detection(self):
+    def test_flake_reference_detection(self) -> None:
         """Flake references are preserved as source paths."""
         annotations = {"nixkube/pod": "/etc/myapp=github:nixos/nixpkgs#legacyPackages.x86_64-linux.hello"}
         result = _parse_store_mounts_for_name(annotations, "pod", "x86_64-linux")
         assert result == {Path("/etc/myapp"): Path("github:nixos/nixpkgs#legacyPackages.x86_64-linux.hello")}
 
-    def test_nix_expression_detection(self):
+    def test_nix_expression_detection(self) -> None:
         """Nix expressions are preserved as source paths."""
         annotations = {"nixkube/pod": '/etc/result=builtins.toFile "test" "value"'}
         result = _parse_store_mounts_for_name(annotations, "pod", "x86_64-linux")
@@ -155,7 +155,7 @@ class TestParseStoreMountsForName:
 class TestParseStoreMounts:
     """Test parse_store_mounts with wildcard and container-specific merging."""
 
-    def test_wildcard_and_container_merge(self):
+    def test_wildcard_and_container_merge(self) -> None:
         """Container-specific mounts override wildcard mounts."""
         annotations = {
             "nixkube/pod": "/etc/ssl=/nix/store/cacert-default",
@@ -165,7 +165,7 @@ class TestParseStoreMounts:
         # Container-specific should override wildcard
         assert result[Path("/etc/ssl")] == Path("/nix/store/cacert-myapp")
 
-    def test_wildcard_plus_container_specific_paths(self):
+    def test_wildcard_plus_container_specific_paths(self) -> None:
         """Merge wildcard and container-specific mounts for different paths."""
         annotations = {
             "nixkube/pod": "/etc/ssl=/nix/store/cacert",
@@ -176,7 +176,7 @@ class TestParseStoreMounts:
         assert result[Path("/etc/ssl")] == Path("/nix/store/cacert")
         assert result[Path("/opt/app")] == Path("/nix/store/myapp")
 
-    def test_system_specific_wildcard_override(self):
+    def test_system_specific_wildcard_override(self) -> None:
         """System-specific wildcard annotations apply when system matches."""
         annotations = {
             "nixkube/pod": "/etc/ssl=/nix/store/cacert-default",
@@ -190,7 +190,7 @@ class TestParseStoreMounts:
         # aarch64 should get default (no system-specific match)
         assert result_arm[Path("/etc/ssl")] == Path("/nix/store/cacert-default")
 
-    def test_system_specific_container_override(self):
+    def test_system_specific_container_override(self) -> None:
         """System-specific container annotations override wildcards."""
         annotations = {
             "nixkube/pod@x86_64-linux": "/opt/lib=/nix/store/lib-x86",
@@ -211,26 +211,26 @@ class TestParseNixExclude:
     substituter is the pynixd this pod is starting. Issue #55.
     """
 
-    def test_nothing_is_excluded_by_default(self):
+    def test_nothing_is_excluded_by_default(self) -> None:
         """The negative control. A default of true would silence NRI
         everywhere and look like a working cluster with no store mounted."""
         assert parse_nix_exclude({}, "myapp", "x86_64-linux") is False
 
-    def test_a_named_container_is_excluded(self):
+    def test_a_named_container_is_excluded(self) -> None:
         annotations = {"nixkube/appstarter-init-exclude": "true"}
         assert parse_nix_exclude(annotations, "appstarter-init", "x86_64-linux") is True
 
-    def test_a_named_container_does_not_exclude_its_neighbours(self):
+    def test_a_named_container_does_not_exclude_its_neighbours(self) -> None:
         """The pynixd pod carries this annotation and its main container must
         still be handled normally."""
         annotations = {"nixkube/appstarter-init-exclude": "true"}
         assert parse_nix_exclude(annotations, "pynixd", "x86_64-linux") is False
 
-    def test_pod_wide_exclude_covers_every_container(self):
+    def test_pod_wide_exclude_covers_every_container(self) -> None:
         annotations = {"nixkube/pod-exclude": "true"}
         assert parse_nix_exclude(annotations, "anything", "x86_64-linux") is True
 
-    def test_a_container_can_opt_back_in(self):
+    def test_a_container_can_opt_back_in(self) -> None:
         """Same precedence as `-rw`: container-specific wins, including an
         explicit false against a pod-wide true."""
         annotations = {
@@ -239,7 +239,7 @@ class TestParseNixExclude:
         }
         assert parse_nix_exclude(annotations, "myapp", "x86_64-linux") is False
 
-    def test_the_system_variant_is_honoured(self):
+    def test_the_system_variant_is_honoured(self) -> None:
         annotations = {
             "nixkube/myapp-exclude@x86_64-linux": "true",
             "nixkube/myapp-exclude@aarch64-linux": "false",
@@ -251,22 +251,22 @@ class TestParseNixExclude:
 class TestParseNixRW:
     """Test parse_nix_rw RW flag parsing."""
 
-    def test_pod_wide_rw_enabled(self):
+    def test_pod_wide_rw_enabled(self) -> None:
         """Pod-wide RW flag enables RW for all containers."""
         annotations = {"nixkube/pod-rw": "true"}
         assert parse_nix_rw(annotations, "myapp", "x86_64-linux") is True
 
-    def test_pod_wide_rw_disabled(self):
+    def test_pod_wide_rw_disabled(self) -> None:
         """Absent RW flag defaults to false."""
-        annotations = {}
+        annotations: dict[str, str] = {}
         assert parse_nix_rw(annotations, "myapp", "x86_64-linux") is False
 
-    def test_pod_wide_rw_explicit_false(self):
+    def test_pod_wide_rw_explicit_false(self) -> None:
         """Explicit false disables RW."""
         annotations = {"nixkube/pod-rw": "false"}
         assert parse_nix_rw(annotations, "myapp", "x86_64-linux") is False
 
-    def test_container_specific_override(self):
+    def test_container_specific_override(self) -> None:
         """Container-specific RW overrides pod-wide setting."""
         annotations = {
             "nixkube/pod-rw": "true",
@@ -274,7 +274,7 @@ class TestParseNixRW:
         }
         assert parse_nix_rw(annotations, "myapp", "x86_64-linux") is False
 
-    def test_system_specific_pod_rw(self):
+    def test_system_specific_pod_rw(self) -> None:
         """System-specific pod-wide RW flag applies to matching system."""
         annotations = {
             "nixkube/pod-rw@x86_64-linux": "true",
@@ -283,7 +283,7 @@ class TestParseNixRW:
         assert parse_nix_rw(annotations, "myapp", "x86_64-linux") is True
         assert parse_nix_rw(annotations, "myapp", "aarch64-linux") is False
 
-    def test_system_specific_container_rw(self):
+    def test_system_specific_container_rw(self) -> None:
         """System-specific container-specific RW overrides pod-wide."""
         annotations = {
             "nixkube/pod-rw": "true",
@@ -294,7 +294,7 @@ class TestParseNixRW:
         # aarch64 gets container-specific false
         assert parse_nix_rw(annotations, "myapp", "aarch64-linux") is False
 
-    def test_container_takes_precedence_over_system_pod(self):
+    def test_container_takes_precedence_over_system_pod(self) -> None:
         """Container-specific (any system) takes precedence over system-specific pod."""
         annotations = {
             "nixkube/pod-rw@x86_64-linux": "true",
@@ -302,7 +302,7 @@ class TestParseNixRW:
         }
         assert parse_nix_rw(annotations, "myapp", "x86_64-linux") is False
 
-    def test_system_specific_container_without_system_specific_pod(self):
+    def test_system_specific_container_without_system_specific_pod(self) -> None:
         """System-specific container RW works with default pod RW."""
         annotations = {
             "nixkube/pod-rw": "false",
@@ -317,27 +317,27 @@ class TestExtractContainerStorePaths:
 
     STORE_PATH = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-hello-1.0"
 
-    def test_extracts_from_env(self):
+    def test_extracts_from_env(self) -> None:
         req = _make_req("myapp", {}, env=[f"NIX_PATH={self.STORE_PATH}"])
         result = extract_container_store_paths(req, "x86_64-linux")
         assert Path(self.STORE_PATH) in result
 
-    def test_extracts_from_args(self):
+    def test_extracts_from_args(self) -> None:
         req = _make_req("myapp", {}, args=[self.STORE_PATH])
         result = extract_container_store_paths(req, "x86_64-linux")
         assert Path(self.STORE_PATH) in result
 
-    def test_extracts_from_pod_annotation(self):
+    def test_extracts_from_pod_annotation(self) -> None:
         req = _make_req("myapp", {"nixkube/pod": self.STORE_PATH})
         result = extract_container_store_paths(req, "x86_64-linux")
         assert Path(self.STORE_PATH) in result
 
-    def test_extracts_from_container_annotation(self):
+    def test_extracts_from_container_annotation(self) -> None:
         req = _make_req("myapp", {"nixkube/myapp": self.STORE_PATH})
         result = extract_container_store_paths(req, "x86_64-linux")
         assert Path(self.STORE_PATH) in result
 
-    def test_system_filtered_annotation(self):
+    def test_system_filtered_annotation(self) -> None:
         store_x86 = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-x86-1.0"
         store_arm = "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-arm-1.0"
         req = _make_req(
@@ -354,13 +354,13 @@ class TestExtractContainerStorePaths:
         assert Path(store_arm) in result_arm
         assert Path(store_x86) not in result_arm
 
-    def test_other_container_annotation_ignored(self):
+    def test_other_container_annotation_ignored(self) -> None:
         """Annotations for a different container are not extracted."""
         req = _make_req("myapp", {"nixkube/otherapp": self.STORE_PATH})
         result = extract_container_store_paths(req, "x86_64-linux")
         assert result == set()
 
-    def test_deduplication(self):
+    def test_deduplication(self) -> None:
         """Same store path appearing in env and annotation is deduplicated."""
         req = _make_req(
             "myapp",

@@ -15,15 +15,15 @@ HOST = """\
 """
 
 
-def test_locate_takes_the_longest_mount_point():
+def test_locate_takes_the_longest_mount_point() -> None:
     assert locate("/var/lib/nix-csi", HOST) == Located("8:2", "/lib/nix-csi")
 
 
-def test_locate_on_the_root_filesystem():
+def test_locate_on_the_root_filesystem() -> None:
     assert locate("/srv/nix-csi", HOST) == Located("8:1", "/srv/nix-csi")
 
 
-def test_locate_through_a_bind_mount():
+def test_locate_through_a_bind_mount() -> None:
     # /var/lib/kubelet is a bind of /data/kubelet on 8:2.
     host = HOST + "40 23 8:2 /data/kubelet /var/lib/kubelet rw shared:4 - xfs /dev/sda2 rw\n"
     assert locate("/var/lib/kubelet/nix-csi", host) == Located("8:2", "/data/kubelet/nix-csi")
@@ -53,11 +53,11 @@ OLD = Located("8:2", "/lib/nix-csi")
         ("96 80 8:1 /lib/nix-csi/nix /y rw - ext4 x rw", False),
     ],
 )
-def test_only_a_mount_from_inside_the_old_store_holds_it(line: str, holds: bool):
+def test_only_a_mount_from_inside_the_old_store_holds_it(line: str, holds: bool) -> None:
     assert bool(users(OLD, [line + "\n"])) is holds
 
 
-def test_users_reads_every_namespace():
+def test_users_reads_every_namespace() -> None:
     one = "90 80 8:2 / /host rw - xfs x rw\n"
     two = "91 80 8:2 /lib/nix-csi/nix /nix rw - xfs x rw\n"
     assert users(OLD, [one, two]) == ["/nix"]
@@ -75,11 +75,11 @@ def test_users_reads_every_namespace():
         ("/nixkube", False),
     ],
 )
-def test_never_the_root_or_the_host_store(path: str, refused: bool):
+def test_never_the_root_or_the_host_store(path: str, refused: bool) -> None:
     assert unsafe(path) is refused
 
 
-def test_disk_usage_counts_a_hardlinked_inode_once(tmp_path: Path):
+def test_disk_usage_counts_a_hardlinked_inode_once(tmp_path: Path) -> None:
     (tmp_path / "a").write_bytes(b"x" * 8192)
     os.link(tmp_path / "a", tmp_path / "b")
     once = disk_usage(tmp_path)
