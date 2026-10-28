@@ -233,12 +233,18 @@ ARCH_SYSTEMS: Final = {"amd64": "x86_64-linux", "arm64": "aarch64-linux"}
 
 # Every value arrives with --argstr, so nothing from the CR is spliced into
 # Nix source. `allRefs`: a rev on any branch, not only the default one.
+# To select `attribute`, a root that is a function is called with `{ }`, as
+# `nix-build --file` does: many repositories have
+# `{ inputs ? ..., pkgs ? ... }: { ... }`. With no attribute the root is the
+# node function itself, and is called with the node.
 BUILD_EXPR: Final = r"""
 { url, rev, attribute, name, labels, system }:
 let
   src = builtins.fetchGit { inherit url rev; allRefs = true; };
+  imported = import src;
+  root = if attribute != "" && builtins.isFunction imported then imported { } else imported;
   path = builtins.filter builtins.isString (builtins.split "\\." attribute);
-  f = builtins.foldl' (v: k: v.${k}) (import src) (if attribute == "" then [ ] else path);
+  f = builtins.foldl' (v: k: v.${k}) root (if attribute == "" then [ ] else path);
 in
 (f { inherit name system; labels = builtins.fromJSON labels; }).config.system.build.toplevel
 """
