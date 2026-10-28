@@ -28,7 +28,7 @@ rec {
   inherit (pkgs) pythonSet;
   pythonTests = import ./nix/tests.nix { inherit lib pkgs pythonSet; };
 
-  easykubenix = import sources.easykubenix;
+  inherit ((import sources.easykubenix { inherit pkgs sources; }).lib) easykubenix;
 
   kubenixApply = kubenixInstance { };
 

@@ -35,7 +35,7 @@ let
     };
 
   # You can use flakes, npins, niv, fetchTree, fetchFromGitHub or whatever.
-  ekn = import sources.easykubenix {
+  ekn = (import sources.easykubenix { }).lib.easykubenix {
     inherit pkgs;
     modules = [
       (
