@@ -1,0 +1,39 @@
+# The ruff base plus the anyio vocabulary, for a source whose async code is
+# anyio. Copied beside `ruff.toml`, as that file says.
+#
+# Not a name ruff discovers: a source reaches it only through `extend`.
+#
+# TID251 alone, not TID: TID252 bans relative imports, which several sources
+# use. `kr8s.asyncio.api` is not `asyncio.api`, so kr8s passes.
+#
+# A source cannot add one entry: ruff replaces an extended `banned-api` table
+# instead of merging it. A ban any source needs goes here.
+
+extend = "ruff.toml"
+
+[lint]
+extend-select = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+"asyncio.get_event_loop".msg = "Use asyncio.get_running_loop() inside async code."
+"asyncio.set_event_loop".msg = "anyio.run() owns the event loop; do not install a process-global default underneath it."
+"asyncio.new_event_loop".msg = "Use anyio.run(), which creates and owns the loop."
+"asyncio.run".msg = "Use anyio.run(func, backend=\"asyncio\")."
+"asyncio.to_thread".msg = "Use anyio.to_thread.run_sync(fn, *args) -- bounded by a CapacityLimiter, unlike asyncio's unbounded spawn. It does NOT forward **kwargs: wrap keyword args in functools.partial."
+"asyncio.create_subprocess_exec".msg = "Use anyio.run_process or anyio.open_process."
+"asyncio.create_subprocess_shell".msg = "Use anyio.run_process or anyio.open_process."
+"asyncio.sleep".msg = "Use anyio.sleep(), or anyio.lowlevel.checkpoint() for a bare yield."
+"asyncio.Lock".msg = "Use anyio.Lock()."
+"asyncio.Event".msg = "Use anyio.Event(). Note it has no clear(): make a new one to re-arm."
+"asyncio.Semaphore".msg = "Use anyio.Semaphore(initial_value), or anyio.Lock() where the count is one."
+"asyncio.BoundedSemaphore".msg = "Use anyio.Semaphore(n, max_value=n)."
+"asyncio.Condition".msg = "Use anyio.Condition()."
+"asyncio.Queue".msg = "Use anyio.create_memory_object_stream."
+"asyncio.TaskGroup".msg = "Use `async with anyio.create_task_group() as tg:`, and `tg.start_soon(fn, *args)`."
+"asyncio.create_task".msg = "Use tg.start_soon(fn, *args) on a task group."
+"asyncio.gather".msg = "Use `async with anyio.create_task_group() as tg:`. Note gather leaves siblings running on the first exception and a task group cancels them."
+"asyncio.wait_for".msg = "Use `with anyio.fail_after(seconds):` (or move_on_after to expire silently)."
+"asyncio.timeout".msg = "Use `with anyio.fail_after(seconds):` (or move_on_after to expire silently)."
+"asyncio.timeout_at".msg = "Use `with anyio.CancelScope(deadline=...):`, against anyio.current_time()."
+"asyncio.CancelledError".msg = "Use anyio.get_cancelled_exc_class(), which is right on either backend."
+"shellous.sh".msg = "Use anyio.run_process / anyio.open_process. shellous cannot finish its cleanup under an anyio cancel scope: measured, a deadline around one answers TypeError rather than TimeoutError and leaves the child running."

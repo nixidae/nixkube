@@ -1,0 +1,36 @@
+# The ruff base of every Python source in nixidae. nixidae/nixidae#1104.
+#
+# `nix run --file . shared-config-update` copies this file to
+# `<source>/nix/shared/ruff.toml`, and `checks.sharedConfig` fails when a copy
+# differs. A copy, not `extend = "../ruff.toml"`: josh exports each source
+# alone, and a sandboxed check sees only the source's own store path.
+#
+# A source's `ruff.toml` extends its copy, or `ruff-anyio.toml` beside it, and
+# adds to this with `extend-select` and `ignore`. `select` there replaces this
+# list instead of adding to it.
+
+target-version = "py313"
+line-length = 120
+
+[lint]
+select = [
+  "E",
+  "W",
+  "F",
+  "I",
+  "UP",
+  "B",
+  "SIM",
+  "PIE",
+  "RUF",
+]
+ignore = [
+  # ruff format sets the length. What it cannot wrap is a string or a URL.
+  "E501",
+  # A `noqa` for a rule that only a source's stricter config selects (its
+  # `ruff-strict.toml`) is not unused. That config reports RUF100 itself.
+  "RUF100",
+]
+
+[lint.isort]
+combine-as-imports = true
