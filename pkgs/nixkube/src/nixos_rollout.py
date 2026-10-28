@@ -287,8 +287,13 @@ def build_argv(source: RolloutSource, node: str, labels: Mapping[str, str], stor
     return argv
 
 
-def git_env(kind: str, data: Mapping[str, bytes], directory: Path) -> dict[str, str]:
-    """The environment that makes git, run by Nix's fetcher, use a Secret."""
+def git_env(kind: str, data: Mapping[str, bytes], directory: Path, url: str) -> dict[str, str]:
+    """The environment that makes git, run by Nix's fetcher, use a Secret.
+
+    A password goes only to `url`: the evaluation after the fetch reaches
+    other repositories through the same git, and a bare `http.extraHeader`
+    would hand them the token too.
+    """
     match kind:
         case "kubernetes.io/ssh-auth":
             if "known_hosts" not in data:
@@ -313,7 +318,7 @@ def git_env(kind: str, data: Mapping[str, bytes], directory: Path) -> dict[str, 
             token = base64.b64encode(data["username"] + b":" + data["password"])
             return {
                 "GIT_CONFIG_COUNT": "1",
-                "GIT_CONFIG_KEY_0": "http.extraHeader",
+                "GIT_CONFIG_KEY_0": f"http.{url}.extraHeader",
                 "GIT_CONFIG_VALUE_0": f"Authorization: Basic {token.decode()}",
             }
         case _:
@@ -498,7 +503,7 @@ class Controller:
                         secret = await Secret.get(ref["name"], namespace=self.namespace)
                         doc = secret_doc(secret)
                         data = {k: base64.b64decode(v) for k, v in (doc.get("data") or {}).items()}
-                        env |= git_env(doc.get("type", ""), data, Path(tmp))
+                        env |= git_env(doc.get("type", ""), data, Path(tmp), source["url"])
                     result = await anyio.run_process(
                         build_argv(source, node, labels, self.store),
                         env=env,
