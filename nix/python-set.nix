@@ -35,7 +35,7 @@
 }:
 
 let
-  inherit (import sources.nixvenv { inherit pkgs sources; }) ps;
+  inherit ((import sources.nixvenv { inherit pkgs sources; }).lib) ps;
 
   protoGenerated = pkgs.callPackage ../pkgs/proto-generated.nix { python3 = python; };
 

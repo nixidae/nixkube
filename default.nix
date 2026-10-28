@@ -1145,7 +1145,7 @@ rec {
 
   # `graphviz` by name, or python3Packages' library of that name arrives
   # and Sphinx finds no `dot`.
-  inherit (import sources.nixvenv { inherit pkgs; }) nixvenv;
+  inherit ((import sources.nixvenv { inherit pkgs; }).lib) nixvenv;
   nixkube-docs = pkgs.python3Packages.callPackage ./nix/docs.nix {
     inherit (pkgs) graphviz;
     inherit nixvenv;
