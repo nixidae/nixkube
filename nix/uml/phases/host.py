@@ -27,6 +27,7 @@ finds the old system, and the rollout halts with worker cordoned.
 import base64
 import hashlib
 import json
+from typing import Any, TypedDict
 
 from nixkube_uml import READY_TIMEOUT
 from vivarium_runner import Machine, MachineError, Machines
@@ -58,6 +59,22 @@ BOOT_ID = "cat /proc/sys/kernel/random/boot_id"
 # boot of the old system.
 FALLBACK_TIMEOUT = 30 * 60
 
+type Settings = dict[str, Any]
+"""The spec's settings: values Nix wrote, of more than one type."""
+
+
+class NodeStatus(TypedDict, total=False):
+    phase: str
+    target: str
+    failedSystem: str
+    leaseRenewTime: str
+
+
+class RolloutStatus(TypedDict, total=False):
+    phase: str
+    observedGeneration: int
+    nodes: dict[str, NodeStatus]
+
 
 async def running(vm: Machine) -> str:
     return (await vm.succeed("readlink /run/current-system")).strip()
@@ -72,7 +89,7 @@ async def armed(vm: Machine) -> bool:
     return rc == 0
 
 
-async def apply(cp: Machine, obj: dict) -> None:
+async def apply(cp: Machine, obj: dict[str, object]) -> None:
     encoded = base64.b64encode(json.dumps(obj).encode()).decode()
     await cp.succeed(f"echo {encoded} | base64 --decode | kubectl apply --filename -")
 
@@ -80,16 +97,17 @@ async def apply(cp: Machine, obj: dict) -> None:
 async def roll_to(
     cp: Machine,
     systems: dict[str, str],
-    source: dict | None = None,
+    source: dict[str, object] | None = None,
     timeout: int | None = None,
     reboot_timeout: int | None = None,
-) -> tuple[dict, list[str]]:
+) -> tuple[RolloutStatus, list[str]]:
     """Point the rollout at `systems`, or at `source`, and wait until it settles.
 
     `systems` are the targets either way. Returns the status and the order in
     which the nodes left Pending. Fails as soon as two nodes are in flight at
     once, or one is in flight while another builds.
     """
+    target: dict[str, object] = {"source": source} if source else {"systems": systems}
     await apply(
         cp,
         {
@@ -106,7 +124,7 @@ async def roll_to(
                         }
                     ]
                 },
-                **({"source": source} if source else {"systems": systems}),
+                **target,
                 "maxUnavailable": 1,
                 "confirmTimeout": CONFIRM_TIMEOUT,
                 **({"rebootTimeout": reboot_timeout} if reboot_timeout else {}),
@@ -117,7 +135,7 @@ async def roll_to(
     started: list[str] = []
 
     async def settled() -> tuple[bool, str]:
-        status = (await get_json(cp, f"get nixosrollout {ROLLOUT}")).get("status", {})
+        status: RolloutStatus = (await get_json(cp, f"get nixosrollout {ROLLOUT}")).get("status", {})
         if status.get("observedGeneration") != generation:
             return False, json.dumps(status)
         nodes = status.get("nodes", {})
@@ -143,7 +161,7 @@ async def roll_to(
 async def switch_to(
     vms: dict[str, Machine],
     systems: dict[str, str],
-    source: dict | None = None,
+    source: dict[str, object] | None = None,
     timeout: int | None = None,
 ) -> None:
     status, started = await roll_to(vms["cp"], systems, source, timeout)
@@ -200,7 +218,7 @@ async def test(vms: Machines) -> None:
     await kubectl(cp, f"delete nixosrollout {ROLLOUT}")
 
 
-async def reboots(hosts: dict[str, Machine], settings: dict) -> None:
+async def reboots(hosts: dict[str, Machine], settings: Settings) -> None:
     """worker's initrd changes: drained, rebooted, uncordoned. cp switches in place."""
     cp, worker = hosts["cp"], hosts["worker"]
     target: dict[str, str] = settings["hostReboot"]
@@ -249,7 +267,7 @@ async def reboots(hosts: dict[str, Machine], settings: dict) -> None:
     )
 
 
-async def falls_back(hosts: dict[str, Machine], settings: dict) -> None:
+async def falls_back(hosts: dict[str, Machine], settings: Settings) -> None:
     """worker boots a system with no kubelet, twice, then its old one."""
     cp, worker = hosts["cp"], hosts["worker"]
     old: dict[str, str] = settings["hostReboot"]
@@ -282,7 +300,7 @@ async def falls_back(hosts: dict[str, Machine], settings: dict) -> None:
     )
 
 
-async def from_source(hosts: dict[str, Machine], cache: Machine, settings: dict) -> None:
+async def from_source(hosts: dict[str, Machine], cache: Machine, settings: Settings) -> None:
     """The controller evaluates the git source, pynixd builds, the hosts fetch."""
     cp = hosts["cp"]
     built: dict[str, str] = settings["hostBuilt"]

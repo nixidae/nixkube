@@ -16,8 +16,8 @@ from vivarium_runner import Machine, Machines
 
 @pytest.mark.parametrize(
     "name",
-    [name for name, _, _ in SCENARIOS],
-    ids=[name.replace(" ", "-") for name, _, _ in SCENARIOS],
+    [scenario[0] for scenario in SCENARIOS],
+    ids=[scenario[0].replace(" ", "-") for scenario in SCENARIOS],
 )
 async def test_a_pod_still_starts_after(cp: Machine, vms: Machines, name: str) -> None:
     await break_and_recover(cp, vms.settings, name)

@@ -5,6 +5,8 @@ runc does. A VM runtime gets both read-only, through virtio-fs. A sandboxed
 one gets CSI, and NRI refuses it by name.
 """
 
+from typing import Any
+
 from nixkube_uml import NAMESPACE, READY_TIMEOUT, check_sandboxed, check_vm, probe
 from vivarium_runner import Machine, MachineError, Machines
 from vivarium_runner.cluster import kubectl, until
@@ -58,7 +60,7 @@ async def test(vms: Machines) -> None:
     )
 
 
-async def check_user_namespace_refused(cp: Machine, settings: dict) -> None:
+async def check_user_namespace_refused(cp: Machine, settings: dict[str, Any]) -> None:
     """On a host-store node a pod with hostUsers false gets no CSI volume,
     and its publish says why: the kernel cannot idmap the composefs overlay,
     and the host's store has no hardlink tree. Issues #25 and #68."""

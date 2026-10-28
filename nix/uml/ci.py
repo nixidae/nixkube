@@ -122,7 +122,7 @@ async def test(vms: Machines) -> None:
         run(settings["deploy"], kubeconfig, "--yes")
         print("[test] nixkube deployed through kubenixDeploy")
 
-        async def rolled_out():
+        async def rolled_out() -> tuple[bool, list[str]]:
             rc, out = await cp.execute(
                 "kubectl rollout status daemonset"
                 " --selector app.kubernetes.io/component=node"
@@ -169,7 +169,7 @@ async def test(vms: Machines) -> None:
                 if len(row.split()) > 1 and row.split()[1] not in ("<none>", "0")
             }
 
-        async def complete():
+        async def complete() -> tuple[bool, str]:
             done = await succeeded()
             missing = [job for job in asserted if job not in done]
             return (
