@@ -229,16 +229,16 @@ class TtrpcProtocol(asyncio.Protocol):
                 raw_stream.feed_eof()
 
         elif msg_type == MSG_TYPE_DATA:
-            raw_stream = self._streams.get(stream_id)
-            if raw_stream is None:
+            data_stream = self._streams.get(stream_id)
+            if data_stream is None:
                 log.warning("data_frame_unknown_stream", stream_id=stream_id)
                 return
             if flags & FLAG_REMOTE_CLOSED:
                 if payload and not (flags & FLAG_NO_DATA):
-                    raw_stream.feed_data(payload)
-                raw_stream.feed_eof()
+                    data_stream.feed_data(payload)
+                data_stream.feed_eof()
             else:
-                raw_stream.feed_data(payload)
+                data_stream.feed_data(payload)
 
         else:
             log.warning("unknown_message_type", msg_type=hex(msg_type))

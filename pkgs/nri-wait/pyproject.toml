@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "OCI hook that waits for NRI build completion"
 license = "Apache-2.0"
 authors = [{ name = "nixkube contributors" }]
+# The oldest CPython in nixpkgs.
+requires-python = ">=3.11"
 
 dependencies = [
   "pyzmq",

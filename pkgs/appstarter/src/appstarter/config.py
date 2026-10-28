@@ -43,7 +43,7 @@ def store_path_for(value: str) -> str:
     if not value.startswith("{"):
         return value
 
-    by_system = json.loads(value)
+    by_system: dict[str, str] = json.loads(value)
     system = nix_system()
     if system not in by_system:
         raise KeyError(f"no store path for {system} in APPSTARTER_WANTED")

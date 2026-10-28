@@ -17,4 +17,6 @@ def build_response(
         status=ttrpc_status,
         payload=payload,
     )
-    return response.SerializeToString()
+    # Generated protobuf code is untyped, so SerializeToString() returns Any.
+    serialized: bytes = response.SerializeToString()
+    return serialized

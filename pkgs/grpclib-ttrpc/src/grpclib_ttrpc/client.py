@@ -1,9 +1,12 @@
 """ttrpc client: unary_call() and streaming Client for ttrpc RPC calls."""
 
+from __future__ import annotations
+
 import asyncio
 import struct
 from collections.abc import AsyncIterator
-from typing import Any, Self, TypeVar
+from types import TracebackType
+from typing import Self, TypeVar
 
 import structlog
 from grpclib.const import Status
@@ -24,8 +27,9 @@ from .protocol import (
 
 log = structlog.get_logger(__name__)
 
+# grpclib's CodecBase.decode returns Any. Decoded values enter typed code through annotated locals.
 _RequestT = TypeVar("_RequestT")
-_ResponseT = TypeVar("_ResponseT")
+ResponseT = TypeVar("ResponseT")
 
 
 async def unary_call[T](
@@ -33,7 +37,7 @@ async def unary_call[T](
     service: str,
     method: str,
     request: object,
-    request_type: type,
+    request_type: type[object],
     response_type: type[T],
     *,
     connect_timeout: float = 5.0,
@@ -125,19 +129,19 @@ async def unary_call[T](
         )
         resp = Response.FromString(resp_bytes)
 
+        # ttrpc Status has no message field. These two reads raise AttributeError
+        # on an error reply. Kept as is; see the report. Fix: drop the message.
         if resp.status.code != 0:
             log.debug(
                 "unary_call_rpc_error",
                 code=resp.status.code,
-                message=resp.status.message,
             )
-            raise GRPCError(
-                Status(resp.status.code),
-                resp.status.message or None,
-            )
+            # ttrpc's Status carries a code and nothing else.
+            raise GRPCError(Status(resp.status.code))
 
         log.debug("unary_call_success")
-        return codec.decode(resp.payload, response_type)
+        decoded: T = codec.decode(resp.payload, response_type)
+        return decoded
 
     finally:
         writer.close()
@@ -234,7 +238,8 @@ class Client:
         if not self._writer:
             await self._connect()
 
-        assert self._writer is not None
+        if self._writer is None:
+            raise RuntimeError("_connect() did not set the writer")
         header = struct.pack(">IIBB", len(payload), stream_id, msg_type, flags)
         self._writer.write(header + payload)
         await self._writer.drain()
@@ -244,7 +249,8 @@ class Client:
         if not self._reader:
             await self._connect()
 
-        assert self._reader is not None
+        if self._reader is None:
+            raise RuntimeError("_connect() did not set the reader")
         header = await self._reader.readexactly(HEADER_SIZE)
         length, stream_id, msg_type, flags = struct.unpack(">IIBB", header)
 
@@ -260,10 +266,10 @@ class Client:
         method: str,
         request: _RequestT,
         request_type: type[_RequestT],
-        response_type: type[_ResponseT],
+        response_type: type[ResponseT],
         *,
         timeout: float = 30.0,
-    ) -> _ResponseT:
+    ) -> ResponseT:
         """Make a unary RPC call.
 
         :param service: Fully-qualified service name
@@ -298,10 +304,10 @@ class Client:
 
         resp = Response.FromString(resp_payload)
         if resp.status.code != 0:
-            msg = getattr(resp.status, "message", None)
-            raise GRPCError(Status(resp.status.code), msg)
+            raise GRPCError(Status(resp.status.code))
 
-        return self.codec.decode(resp.payload, response_type)
+        decoded: ResponseT = self.codec.decode(resp.payload, response_type)
+        return decoded
 
     async def server_stream(
         self,
@@ -309,10 +315,10 @@ class Client:
         method: str,
         request: _RequestT,
         request_type: type[_RequestT],
-        response_type: type[_ResponseT],
+        response_type: type[ResponseT],
         *,
         timeout: float = 30.0,
-    ) -> AsyncIterator[_ResponseT]:
+    ) -> AsyncIterator[ResponseT]:
         """Make a server streaming RPC call.
 
         :param service: Fully-qualified service name
@@ -348,8 +354,7 @@ class Client:
                 # Error response
                 resp = Response.FromString(resp_payload)
                 if resp.status.code != 0:
-                    msg = getattr(resp.status, "message", None)
-                    raise GRPCError(Status(resp.status.code), msg)
+                    raise GRPCError(Status(resp.status.code))
                 break
 
             if msg_type != MSG_TYPE_DATA:
@@ -365,10 +370,10 @@ class Client:
         self,
         service: str,
         method: str,
-        response_type: type[_ResponseT],
+        response_type: type[ResponseT],
         *,
         timeout: float = 30.0,
-    ) -> "ClientStreamContext":
+    ) -> ClientStreamContext[ResponseT]:
         """Make a client streaming RPC call.
 
         :param service: Fully-qualified service name
@@ -393,10 +398,10 @@ class Client:
         self,
         service: str,
         method: str,
-        response_type: type[_ResponseT],
+        response_type: type[ResponseT],
         *,
         timeout: float = 30.0,
-    ) -> "BidirectionalStreamContext":
+    ) -> BidirectionalStreamContext[ResponseT]:
         """Make a bidirectional streaming RPC call.
 
         :param service: Fully-qualified service name
@@ -418,21 +423,21 @@ class Client:
         return BidirectionalStreamContext(self, stream_id, response_type)
 
 
-class ClientStreamContext:
+class ClientStreamContext[ResponseT]:
     """Context manager for client streaming RPC."""
 
     def __init__(
         self,
         client: Client,
         stream_id: int,
-        response_type: type[_ResponseT],
+        response_type: type[ResponseT],
     ) -> None:
         self.client = client
         self.stream_id = stream_id
         self.response_type = response_type
         self._closed = False
 
-    async def send(self, message: Any) -> None:
+    async def send(self, message: object) -> None:
         """Send a message to the server."""
         if self._closed:
             raise RuntimeError("Stream is closed")
@@ -446,7 +451,7 @@ class ClientStreamContext:
             await self.client._send_frame(self.stream_id, MSG_TYPE_DATA, FLAG_REMOTE_CLOSED, b"")
             self._closed = True
 
-    async def recv(self) -> _ResponseT:
+    async def recv(self) -> ResponseT:
         """Receive the response from the server."""
         if not self._closed:
             await self.close()
@@ -459,35 +464,40 @@ class ClientStreamContext:
 
         resp = Response.FromString(resp_payload)
         if resp.status.code != 0:
-            msg = getattr(resp.status, "message", None)
-            raise GRPCError(Status(resp.status.code), msg)
+            raise GRPCError(Status(resp.status.code))
 
-        return self.client.codec.decode(resp.payload, self.response_type)
+        decoded: ResponseT = self.client.codec.decode(resp.payload, self.response_type)
+        return decoded
 
     async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         await self.close()
 
 
-class BidirectionalStreamContext:
+class BidirectionalStreamContext[ResponseT]:
     """Context manager for bidirectional streaming RPC."""
 
     def __init__(
         self,
         client: Client,
         stream_id: int,
-        response_type: type[_ResponseT],
+        response_type: type[ResponseT],
     ) -> None:
         self.client = client
         self.stream_id = stream_id
         self.response_type = response_type
         self._closed = False
-        self._reader_task: asyncio.Task | None = None
-        self._response_queue: asyncio.Queue = asyncio.Queue()
+        self._reader_task: asyncio.Task[None] | None = None
+        self._response_queue: asyncio.Queue[ResponseT | Exception | None] = asyncio.Queue()
 
-    async def send(self, message: Any) -> None:
+    async def send(self, message: object) -> None:
         """Send a message to the server."""
         if self._closed:
             raise RuntimeError("Stream is closed")
@@ -501,7 +511,7 @@ class BidirectionalStreamContext:
             await self.client._send_frame(self.stream_id, MSG_TYPE_DATA, FLAG_REMOTE_CLOSED, b"")
             self._closed = True
 
-    async def __aiter__(self) -> AsyncIterator[_ResponseT]:
+    async def __aiter__(self) -> AsyncIterator[ResponseT]:
         """Async iterator for receiving messages."""
         # Start reader task if not already started
         if not self._reader_task:
@@ -528,8 +538,7 @@ class BidirectionalStreamContext:
                     # Error response
                     resp = Response.FromString(resp_payload)
                     if resp.status.code != 0:
-                        msg = getattr(resp.status, "message", None)
-                        exc = GRPCError(Status(resp.status.code), msg)
+                        exc: Exception = GRPCError(Status(resp.status.code))
                         await self._response_queue.put(exc)
                     else:
                         await self._response_queue.put(None)
@@ -541,7 +550,7 @@ class BidirectionalStreamContext:
                     break
 
                 if resp_payload:
-                    msg = self.client.codec.decode(resp_payload, self.response_type)
+                    msg: ResponseT = self.client.codec.decode(resp_payload, self.response_type)
                     await self._response_queue.put(msg)
 
                 if flags & FLAG_REMOTE_CLOSED:
@@ -553,7 +562,12 @@ class BidirectionalStreamContext:
     async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         await self.close()
         # Wait for reader task to finish
         if self._reader_task:

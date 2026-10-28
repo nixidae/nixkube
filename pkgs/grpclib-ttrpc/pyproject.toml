@@ -7,7 +7,8 @@ name = "grpclib-ttrpc"
 version = "0.1.0"
 description = "ttrpc server and client built on grpclib primitives"
 authors = [{ name = "lillecarl", email = "github@lillecarl.com" }]
-requires-python = ">=3.11"
+# PEP 695 generics are 3.12.
+requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
   "grpclib",

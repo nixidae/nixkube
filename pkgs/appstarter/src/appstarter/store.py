@@ -71,7 +71,8 @@ def _run_streaming(*args: str, timeout: float | None = None) -> subprocess.Compl
     log.debug("running %s", " ".join(args))
     tail: deque[str] = deque(maxlen=_TAIL_LINES)
     with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
-        assert proc.stderr is not None
+        if proc.stderr is None:
+            raise RuntimeError("Popen was given stderr=PIPE but returned no stderr pipe")
         for line in proc.stderr:
             sys.stderr.write(line)
             tail.append(line)

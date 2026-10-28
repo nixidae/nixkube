@@ -1,15 +1,17 @@
 """ttrpc server: Stream, request_handler, TtrpcHandler, Server."""
 
+from __future__ import annotations
+
 import asyncio
 import socket
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterable, Mapping
 from contextlib import nullcontext
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Optional, Self
+from typing import TYPE_CHECKING, Any, Self
 
 import structlog
 from grpclib._typing import IServable
-from grpclib.const import Cardinality, Status
+from grpclib.const import Cardinality, Handler, Status
 from grpclib.encoding.base import CodecBase
 from grpclib.encoding.proto import ProtoCodec
 from grpclib.exceptions import GRPCError, ProtocolError, StreamTerminatedError
@@ -34,10 +36,12 @@ from .protocol import (
 if TYPE_CHECKING:
     import ssl as _ssl
 
-    from grpclib import const
+    from ttrpc.ttrpc_pb2 import KeyValue
 
 
 log = structlog.get_logger(__name__)
+
+type _HandlerMap = Mapping[str, Handler]
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +49,7 @@ log = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _decode_ttrpc_metadata(kv_list: Any) -> _Metadata:
+def _decode_ttrpc_metadata(kv_list: Iterable[KeyValue]) -> _Metadata:
     """Convert a repeated KeyValue list from a ttrpc Request into _Metadata."""
     md: _Metadata = _Metadata(MultiDict())
     for kv in kv_list:
@@ -101,10 +105,13 @@ class Stream[RecvT, SendT](StreamIterator[RecvT]):
         payload = await self._raw_stream.read_payload()
         if payload is None:
             return None
-        return self._codec.decode(payload, self._recv_type)
+        # grpclib's CodecBase.decode returns Any.
+        message: RecvT = self._codec.decode(payload, self._recv_type)
+        return message
 
     # --- sending -------------------------------------------------------------
 
+    # Untyped to match grpclib's Stream API, which takes any metadata and kwargs.
     async def send_initial_metadata(
         self,
         *,
@@ -138,6 +145,7 @@ class Stream[RecvT, SendT](StreamIterator[RecvT]):
         *,
         status: Status = Status.OK,
         status_message: str | None = None,
+        # Untyped to match grpclib's Stream API, which takes extra kwargs.
         **_kwargs: Any,
     ) -> None:
         """Send the final frame for this RPC call.
@@ -163,7 +171,7 @@ class Stream[RecvT, SendT](StreamIterator[RecvT]):
 
     # --- context manager -----------------------------------------------------
 
-    async def __aenter__(self) -> "Stream[RecvT, SendT]":
+    async def __aenter__(self) -> Stream[RecvT, SendT]:
         return self
 
     async def __aexit__(
@@ -207,12 +215,12 @@ class Stream[RecvT, SendT](StreamIterator[RecvT]):
 
 
 async def request_handler(
-    mapping: dict[str, "const.Handler"],
+    mapping: _HandlerMap,
     raw_stream: TtrpcRawStream,
     method_name: str,
     flags: int,
     timeout_nano: int,
-    kv_metadata: Any,
+    kv_metadata: Iterable[KeyValue],
     codec: CodecBase,
     release_stream: Callable[[], None],
 ) -> None:
@@ -249,6 +257,7 @@ async def request_handler(
             deadline=deadline,
             metadata=metadata,
         ) as stream:
+            # Wrapper and DeadlineWrapper expose different methods, and this block uses both.
             wrapper: Any
             deadline_ctx: Any
             if deadline is None:
@@ -278,7 +287,8 @@ async def request_handler(
                     log.exception("cancellation_failed")
                     raise
                 else:
-                    assert wrapper.cancelled
+                    if not wrapper.cancelled:
+                        raise RuntimeError("stream terminated, but the wrapper did not cancel") from err
                     log.info("request_cancelled", error=str(err))
                     raise
             except Exception:
@@ -305,7 +315,7 @@ class TtrpcHandler(_GC, AbstractTtrpcHandler):
 
     def __init__(
         self,
-        mapping: dict[str, "const.Handler"],
+        mapping: _HandlerMap,
         codec: CodecBase,
     ) -> None:
         self.mapping = mapping
@@ -405,11 +415,11 @@ class Server(_GC):
         *,
         codec: CodecBase | None = None,
     ) -> None:
-        mapping: dict[str, const.Handler] = {}
+        mapping: dict[str, Handler] = {}
         for handler in handlers:
             mapping.update(handler.__mapping__())
 
-        self._mapping = mapping
+        self._mapping: _HandlerMap = mapping
         self._codec = codec if codec is not None else ProtoCodec()
 
         self._server: asyncio.AbstractServer | None = None
@@ -421,7 +431,7 @@ class Server(_GC):
 
     def _protocol_factory(self) -> TtrpcProtocol:
         self.__gc_step__()
-        handler = TtrpcHandler(self._mapping, self._codec)
+        handler = TtrpcHandler(self._mapping, self._codec)  # type: ignore[arg-type]  # zuban: grpclib's untyped namedtuple Handler is not one type across these two annotations
         self._handlers.add(handler)
         return TtrpcProtocol(handler)
 
@@ -431,11 +441,11 @@ class Server(_GC):
         port: int | None = None,
         *,
         path: str | None = None,
-        family: "socket.AddressFamily" = socket.AF_UNSPEC,
-        flags: "socket.AddressInfo" = socket.AI_PASSIVE,
+        family: socket.AddressFamily = socket.AF_UNSPEC,
+        flags: socket.AddressInfo = socket.AI_PASSIVE,
         sock: socket.socket | None = None,
         backlog: int = 100,
-        ssl: Optional["_ssl.SSLContext"] = None,
+        ssl: _ssl.SSLContext | None = None,
         reuse_address: bool | None = None,
         reuse_port: bool | None = None,
     ) -> None:
@@ -464,7 +474,8 @@ class Server(_GC):
                 ssl=ssl,
             )
         else:
-            self._server = await loop.create_server(  # type: ignore[no-matching-overload]
+            # typeshed types port as int, but asyncio passes None on to getaddrinfo.
+            self._server = await loop.create_server(  # type: ignore[call-overload, misc]
                 self._protocol_factory,
                 host,
                 port,

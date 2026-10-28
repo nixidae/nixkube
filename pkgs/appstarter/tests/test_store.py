@@ -1,43 +1,46 @@
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import subprocess
+from pathlib import Path
 
 import pytest
 from appstarter import store
 
 
-def _completed(returncode: int, stdout: str = "", stderr: str = ""):
+def _completed(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
-def test_link_replaces_an_existing_pointer(tmp_path):
+def test_link_replaces_an_existing_pointer(tmp_path: Path) -> None:
     link = tmp_path / "result"
     store.link("/nix/store/first", link)
     store.link("/nix/store/second", link)
     assert link.readlink().as_posix() == "/nix/store/second"
 
 
-def test_link_leaves_no_staging_file_behind(tmp_path):
+def test_link_leaves_no_staging_file_behind(tmp_path: Path) -> None:
     link = tmp_path / "nested" / "result"
     store.link("/nix/store/first", link)
     assert [p.name for p in link.parent.iterdir()] == ["result"]
 
 
-def test_verify_accepts_a_closure_that_is_on_disk(tmp_path, monkeypatch):
+def test_verify_accepts_a_closure_that_is_on_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "nix" / "store").mkdir(parents=True)
     (tmp_path / "nix" / "store" / "aaa").write_text("")
     monkeypatch.setattr(store, "_run", lambda *a, **k: _completed(0, "/nix/store/aaa\n"))
     store.verify("/nix/store/aaa", tmp_path)
 
 
-def test_verify_rejects_a_path_that_is_registered_and_absent(tmp_path, monkeypatch):
+def test_verify_rejects_a_path_that_is_registered_and_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Issue #8. `nix path-info` answers from the database, so it passes."""
     monkeypatch.setattr(store, "_run", lambda *a, **k: _completed(0, "/nix/store/gone\n"))
     with pytest.raises(store.StoreError, match="absent"):
         store.verify("/nix/store/gone", tmp_path)
 
 
-def test_verify_accepts_a_dangling_symlink(tmp_path, monkeypatch):
+def test_verify_accepts_a_dangling_symlink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`nix-*-man` points at an absolute path that resolves only under /nix."""
     (tmp_path / "nix" / "store").mkdir(parents=True)
     (tmp_path / "nix" / "store" / "man").symlink_to("/nix/store/elsewhere")
@@ -45,7 +48,7 @@ def test_verify_accepts_a_dangling_symlink(tmp_path, monkeypatch):
     store.verify("/nix/store/man", tmp_path)
 
 
-def test_build_reports_what_nix_said(tmp_path, monkeypatch):
+def test_build_reports_what_nix_said(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_run_streaming`, because a fetch shows its stderr as it arrives.
 
     The message still carries what nix said -- that is what a caller which
@@ -60,7 +63,7 @@ def test_build_reports_what_nix_said(tmp_path, monkeypatch):
         store.build("/nix/store/aaa", tmp_path, ["local"], tmp_path / "result")
 
 
-def test_build_falls_back_when_nothing_answers_in_time(tmp_path, monkeypatch):
+def test_build_falls_back_when_nothing_answers_in_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A fetch that never returns has to become a `StoreError`, not a hang.
 
     `seed.run` seeds from the image when `build` raises. With no bound on
@@ -69,7 +72,7 @@ def test_build_falls_back_when_nothing_answers_in_time(tmp_path, monkeypatch):
     and the fallback that exists for exactly this never ran.
     """
 
-    def never_returns(*_a, **_k):
+    def never_returns(*_a: object, **_k: object) -> None:
         raise subprocess.TimeoutExpired(cmd="nix", timeout=store.BUILD_TIMEOUT)
 
     monkeypatch.setattr(store, "_run_streaming", never_returns)
@@ -77,7 +80,7 @@ def test_build_falls_back_when_nothing_answers_in_time(tmp_path, monkeypatch):
         store.build("/nix/store/aaa", tmp_path, ["local"], tmp_path / "result")
 
 
-def test_copy_reads_and_writes_local_stores(tmp_path, monkeypatch):
+def test_copy_reads_and_writes_local_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Both ends are local, because `appstarter init` runs no Nix daemon.
 
     Without `--from`, `nix copy` reads the default store and goes through
@@ -95,14 +98,14 @@ def test_copy_reads_and_writes_local_stores(tmp_path, monkeypatch):
     assert args[args.index("--to") + 1] == str(tmp_path)
 
 
-def test_copy_reports_what_nix_said(tmp_path, monkeypatch):
+def test_copy_reports_what_nix_said(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(store, "_run", lambda *a, **k: _completed(1, stderr="cannot connect\n"))
     with pytest.raises(store.StoreError, match="cannot connect"):
         store.copy("/nix/store/aaa", tmp_path, tmp_path / "result")
 
 
-def test_ping_treats_a_timeout_as_no_answer(monkeypatch):
-    def timeout(*_args, **_kwargs):
+def test_ping_treats_a_timeout_as_no_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    def timeout(*_args: object, **_kwargs: object) -> None:
         raise subprocess.TimeoutExpired(cmd="nix", timeout=1)
 
     monkeypatch.setattr(store, "_run", timeout)

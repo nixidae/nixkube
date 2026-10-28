@@ -4,10 +4,34 @@ import json
 import sys
 import time
 from collections.abc import Callable
+from typing import TypedDict
 
 import zmq
 
 __version__ = "0.1.0"
+
+
+class OciState(TypedDict, total=False):
+    """The fields of the OCI state on stdin that this hook reads."""
+
+    id: str
+    pid: int
+    bundle: str
+
+
+class QueryReply(TypedDict, total=False):
+    """The REP socket's answer to a status query."""
+
+    status: str
+    reason: str
+
+
+class BuildMessage(TypedDict, total=False):
+    """One PUB socket message from the build daemon."""
+
+    container_id: str
+    status: str
+    reason: str
 
 
 def fail_build(container_id: str, reason: str) -> None:
@@ -20,9 +44,9 @@ def fail_build(container_id: str, reason: str) -> None:
 
 
 def check_build_status(
-    context: zmq.Context,
+    context: zmq.Context[zmq.Socket[bytes]],
     query_socket_path: str,
-    oci_state: dict,
+    oci_state: OciState,
     timeout: int,
 ) -> bool:
     """Query REP socket to check if build is already done.
@@ -69,7 +93,7 @@ def check_build_status(
 
     # Parse response
     try:
-        response = json.loads(response_bytes.decode())
+        response: QueryReply = json.loads(response_bytes.decode())
         print(f"[nri-wait] Query response: {response}", file=sys.stderr)
 
         if response.get("status") == "done":
@@ -82,7 +106,7 @@ def check_build_status(
     return False
 
 
-def connect_updates(context: zmq.Context, pub_socket_path: str) -> zmq.Socket:
+def connect_updates(context: zmq.Context[zmq.Socket[bytes]], pub_socket_path: str) -> zmq.Socket[bytes]:
     """Subscribe to the PUB socket.
 
     The caller does this *before* it queries the REP socket. ZeroMQ drops a
@@ -112,7 +136,7 @@ def connect_updates(context: zmq.Context, pub_socket_path: str) -> zmq.Socket:
 
 
 def wait_for_completion(
-    sub: zmq.Socket,
+    sub: zmq.Socket[bytes],
     container_id: str,
     timeout: int,
     recheck: Callable[[], bool],
@@ -173,7 +197,7 @@ def wait_for_completion(
             sys.exit(1)
 
         try:
-            msg = json.loads(msg_bytes.decode())
+            msg: BuildMessage = json.loads(msg_bytes.decode())
         except (json.JSONDecodeError, UnicodeDecodeError):
             continue  # Ignore unparsable messages.
 

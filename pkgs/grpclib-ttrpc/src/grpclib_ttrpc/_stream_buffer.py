@@ -1,11 +1,16 @@
 """Per-stream async byte buffer for ttrpc."""
 
 import asyncio
+from typing import Final
 
 from grpclib.exceptions import StreamTerminatedError
 
-# Sentinel object to distinguish EOF from error (both would be None otherwise)
-_EOF_SENTINEL = object()
+
+class _Eof:
+    """Marks end of stream in the queue. Distinct from None, which marks an error."""
+
+
+_EOF_SENTINEL: Final = _Eof()
 
 
 class StreamBuffer:
@@ -18,7 +23,7 @@ class StreamBuffer:
 
     def __init__(self) -> None:
         # Queue contains: bytes (data), _EOF_SENTINEL (end-of-stream), or None (error marker)
-        self._queue: asyncio.Queue = asyncio.Queue()
+        self._queue: asyncio.Queue[bytes | _Eof | None] = asyncio.Queue()
         self._error: Exception | None = None
 
     def feed_data(self, data: bytes) -> None:
@@ -49,7 +54,7 @@ class StreamBuffer:
         if self._error is not None:
             raise StreamTerminatedError(str(self._error)) from self._error
         # EOF sentinel means end of stream
-        if item is _EOF_SENTINEL:
+        if isinstance(item, _Eof):
             return None
         # Otherwise it's bytes data
         return item

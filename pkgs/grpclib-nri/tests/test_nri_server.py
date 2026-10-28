@@ -10,6 +10,7 @@ connection once Configure answers, so nothing here can reach them.
 """
 
 import asyncio
+from pathlib import Path
 
 import pytest
 import structlog
@@ -36,8 +37,8 @@ async def test_plugin_configure_called(nri_server: NriServer) -> None:
 
 @pytest.mark.asyncio
 async def test_nri_server_lifecycle(
-    test_server_bin,
-    socket_path,
+    test_server_bin: Path,
+    socket_path: Path,
 ) -> None:
     """Test that NriServer can be started and stopped cleanly."""
     logger = structlog.get_logger("test.nri_lifecycle")

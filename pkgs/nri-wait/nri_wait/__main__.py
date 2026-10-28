@@ -6,13 +6,13 @@ import sys
 
 import zmq
 
-from . import check_build_status, connect_updates, wait_for_completion
+from . import OciState, check_build_status, connect_updates, wait_for_completion
 
 
 def main() -> None:
     """Main entry point - orchestrates query and wait phases."""
     # OCI runtime passes container state as JSON on stdin for createRuntime hooks.
-    oci_state: dict = {}
+    oci_state: OciState = {}
     try:
         oci_state = json.load(sys.stdin)
         print(
@@ -42,7 +42,7 @@ def main() -> None:
         sys.exit(1)
 
     # Create ZeroMQ context
-    context = zmq.Context()
+    context: zmq.Context[zmq.Socket[bytes]] = zmq.Context()
 
     def ask() -> bool:
         """Ask the daemon whether the build is done, and report our PID and bundle."""

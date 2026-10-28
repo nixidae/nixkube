@@ -108,7 +108,7 @@ async def _register_plugin(
         resp_bytes = bytes(buf[HEADER_SIZE : HEADER_SIZE + payload_len])
         resp = Response.FromString(resp_bytes)
         if resp.status.code != 0:
-            raise GRPCError(Status(resp.status.code), resp.status.message or None)
+            raise GRPCError(Status(resp.status.code))
         logger.debug("register_plugin_ok")
         return
 
@@ -149,8 +149,8 @@ class NriServer:
         self._handler: TtrpcHandler | None = None
         self._protocol: TtrpcProtocol | None = None
 
-        self._read_task: asyncio.Task | None = None
-        self._serve_task: asyncio.Task | None = None
+        self._read_task: asyncio.Task[None] | None = None
+        self._serve_task: asyncio.Task[None] | None = None
         self._is_closed = False
 
     async def start(self) -> None:
@@ -222,14 +222,13 @@ class NriServer:
         logger = structlog.get_logger("grpclib_nri.server.run")
 
         logger.info("connecting", socket=str(self.socket_path))
-        self._reader, self._writer = await asyncio.wait_for(
-            asyncio.open_unix_connection(str(self.socket_path)), timeout=5.0
-        )
+        reader, writer = await asyncio.wait_for(asyncio.open_unix_connection(str(self.socket_path)), timeout=5.0)
+        self._reader, self._writer = reader, writer
 
-        mux = NriMux(self._reader, self._writer)
+        mux = NriMux(reader, writer)
         self._mux = mux
         mapping = self.plugin.__mapping__()
-        self._handler = TtrpcHandler(mapping, self.codec)
+        self._handler = TtrpcHandler(mapping, self.codec)  # type: ignore[arg-type]  # zuban-bug: grpclib's namedtuple Handler is two types
         self._protocol = TtrpcProtocol(self._handler)
         self._protocol.connection_made(mux.channel_transport(PLUGIN_SERVICE_CONN))
 

@@ -12,32 +12,45 @@ The Go server implements the Streaming service:
 - DivideStream (bidirectional streaming)
 """
 
+from __future__ import annotations
+
 import asyncio
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import pytest
 import pytest_asyncio
 import structlog
 from google.protobuf.empty_pb2 import Empty
+from grpclib.const import Status
 from grpclib.encoding.proto import ProtoCodec
 from grpclib_ttrpc import Client
+from grpclib_ttrpc.protocol import FLAG_REMOTE_CLOSED
 from ttrpc.streaming_pb2 import EchoPayload, Part, Sum
+from ttrpc.ttrpc_pb2 import Response
 
-from .helpers import FLAG_REMOTE_CLOSED, TtrpcClient
+from .helpers import TtrpcClient
+
+if TYPE_CHECKING:
+    from grpclib._typing import IProtoMessage
 
 CODEC = ProtoCodec()
 
 
-def enc(msg):
+def enc(msg: IProtoMessage) -> bytes:
     return CODEC.encode(msg, type(msg))
 
 
-def dec(payload: bytes, msg_type):
-    return CODEC.decode(payload, msg_type)
+def dec[M: IProtoMessage](payload: bytes, msg_type: type[M]) -> M:
+    # grpclib types decode as IProtoMessage, whatever message class it was given.
+    return cast("M", CODEC.decode(payload, msg_type))
 
 
 @pytest_asyncio.fixture
-async def streaming_client(test_server_process, socket_path: Path):
+async def streaming_client(
+    test_server_process: asyncio.subprocess.Process, socket_path: Path
+) -> AsyncGenerator[TtrpcClient]:
     """Create a raw TtrpcClient connected to the Go test server via Unix socket."""
     logger = structlog.get_logger("test.streaming_client")
     logger.info("connecting_client", socket=str(socket_path))
@@ -62,7 +75,6 @@ async def test_unary_echo(streaming_client: TtrpcClient) -> None:
         "Echo",
         enc(req),
     )
-    from ttrpc.ttrpc_pb2 import Response
 
     resp = Response.FromString(resp_bytes)
     reply = dec(resp.payload, EchoPayload)
@@ -80,7 +92,6 @@ async def test_unary_echo_multiple(streaming_client: TtrpcClient) -> None:
             "Echo",
             enc(req),
         )
-        from ttrpc.ttrpc_pb2 import Response
 
         resp = Response.FromString(resp_bytes)
         reply = dec(resp.payload, EchoPayload)
@@ -135,7 +146,6 @@ async def test_sum_stream(streaming_client: TtrpcClient) -> None:
 
     # Read response
     resp_bytes = await streaming_client._read_response()
-    from ttrpc.ttrpc_pb2 import Response
 
     resp = Response.FromString(resp_bytes)
     result = dec(resp.payload, Sum)
@@ -163,7 +173,7 @@ async def test_divide_stream(streaming_client: TtrpcClient) -> None:
     await streaming_client.send_data_frame(sid, b"", close=True)
 
     # Collect all Part responses
-    parts = []
+    parts: list[Part] = []
     while True:
         flags, payload = await streaming_client.read_data_frame()
         if payload:
@@ -188,8 +198,6 @@ async def test_echo_null(streaming_client: TtrpcClient) -> None:
 
     Server receives multiple EchoPayload messages but returns google.protobuf.Empty.
     """
-    from ttrpc.ttrpc_pb2 import Response
-
     sid = await streaming_client.open_request(
         "ttrpc.integration.streaming.Streaming",
         "EchoNull",
@@ -197,8 +205,8 @@ async def test_echo_null(streaming_client: TtrpcClient) -> None:
 
     # Send multiple EchoPayload messages
     for i in range(3):
-        payload = EchoPayload(seq=i, msg=f"msg{i}")
-        await streaming_client.send_data_frame(sid, enc(payload))
+        request = EchoPayload(seq=i, msg=f"msg{i}")
+        await streaming_client.send_data_frame(sid, enc(request))
 
     # Close stream
     await streaming_client.send_data_frame(sid, b"", close=True)
@@ -224,8 +232,8 @@ async def test_echo_null_stream(streaming_client: TtrpcClient) -> None:
 
     # Send EchoPayload messages
     for i in range(2):
-        payload = EchoPayload(seq=i, msg=f"msg{i}")
-        await streaming_client.send_data_frame(sid, enc(payload))
+        request = EchoPayload(seq=i, msg=f"msg{i}")
+        await streaming_client.send_data_frame(sid, enc(request))
 
     # Close stream
     await streaming_client.send_data_frame(sid, b"", close=True)
@@ -262,7 +270,7 @@ async def test_empty_payload_stream(streaming_client: TtrpcClient) -> None:
     await streaming_client.send_data_frame(sid, b"", close=True)
 
     # Collect EchoPayload responses (should get 5)
-    payloads = []
+    payloads: list[EchoPayload] = []
     while True:
         flags, payload = await streaming_client.read_data_frame()
         if payload:
@@ -287,9 +295,6 @@ async def test_empty_payload_stream(streaming_client: TtrpcClient) -> None:
 @pytest.mark.asyncio
 async def test_request_with_long_timeout(streaming_client: TtrpcClient) -> None:
     """Test request with generous timeout completes successfully."""
-    from grpclib.const import Status
-    from ttrpc.ttrpc_pb2 import Response
-
     req = EchoPayload(seq=1, msg="hello")
     # Send with 5 second timeout (plenty of time)
     timeout_nano = int(5 * 1e9)  # 5 seconds in nanoseconds
@@ -314,9 +319,6 @@ async def test_request_with_very_short_timeout(streaming_client: TtrpcClient) ->
     timeout on fast systems. We check that if it times out, the status
     is DEADLINE_EXCEEDED.
     """
-    from grpclib.const import Status
-    from ttrpc.ttrpc_pb2 import Response
-
     req = EchoPayload(seq=1, msg="test")
     # 1 millisecond timeout (very tight, server unlikely to respond in time)
     timeout_nano = int(0.001 * 1e9)  # 1ms in nanoseconds
@@ -373,9 +375,6 @@ async def test_client_side_timeout_on_slow_operation(
 @pytest.mark.asyncio
 async def test_streaming_with_timeout(streaming_client: TtrpcClient) -> None:
     """Test client streaming respects timeout."""
-    from grpclib.const import Status
-    from ttrpc.ttrpc_pb2 import Response
-
     sid = await streaming_client.open_request(
         "ttrpc.integration.streaming.Streaming",
         "SumStream",
@@ -410,9 +409,6 @@ async def test_streaming_with_timeout(streaming_client: TtrpcClient) -> None:
 @pytest.mark.asyncio
 async def test_method_not_found(streaming_client: TtrpcClient) -> None:
     """Test calling non-existent method returns UNIMPLEMENTED error."""
-    from grpclib.const import Status
-    from ttrpc.ttrpc_pb2 import Response
-
     req = EchoPayload(seq=1, msg="test")
     resp_bytes = await streaming_client.send_unary_request(
         "ttrpc.integration.streaming.Streaming",
@@ -426,9 +422,6 @@ async def test_method_not_found(streaming_client: TtrpcClient) -> None:
 @pytest.mark.asyncio
 async def test_service_not_found(streaming_client: TtrpcClient) -> None:
     """Test calling non-existent service returns UNIMPLEMENTED error."""
-    from grpclib.const import Status
-    from ttrpc.ttrpc_pb2 import Response
-
     req = EchoPayload(seq=1, msg="test")
     resp_bytes = await streaming_client.send_unary_request(
         "com.example.NonExistent",
@@ -442,8 +435,6 @@ async def test_service_not_found(streaming_client: TtrpcClient) -> None:
 @pytest.mark.asyncio
 async def test_malformed_payload(streaming_client: TtrpcClient) -> None:
     """Test sending malformed payload returns error."""
-    from ttrpc.ttrpc_pb2 import Response
-
     # Send garbage bytes instead of valid protobuf
     malformed = b"\x00\x01\x02\x03\xff\xfe\xfd"
     resp_bytes = await streaming_client.send_unary_request(
@@ -459,8 +450,6 @@ async def test_malformed_payload(streaming_client: TtrpcClient) -> None:
 @pytest.mark.asyncio
 async def test_streaming_with_invalid_message(streaming_client: TtrpcClient) -> None:
     """Test server streaming with malformed input message."""
-    from ttrpc.ttrpc_pb2 import Response
-
     # Send garbage as initial payload
     malformed = b"\xff\xfe\xfd\xfc"
     sid = await streaming_client.open_request(
@@ -482,7 +471,7 @@ async def test_streaming_with_invalid_message(streaming_client: TtrpcClient) -> 
 
 
 @pytest.mark.asyncio
-async def test_server_starts(test_server_process, socket_path: Path) -> None:
+async def test_server_starts(test_server_process: asyncio.subprocess.Process, socket_path: Path) -> None:
     """Smoke test: Verify Go test server starts and creates socket."""
     logger = structlog.get_logger("test.server_starts")
 
@@ -498,7 +487,7 @@ async def test_server_starts(test_server_process, socket_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_unary(socket_path: Path, test_server_process) -> None:
+async def test_client_unary(socket_path: Path, test_server_process: asyncio.subprocess.Process) -> None:
     """Test Client API for unary RPC."""
     client = Client(path=str(socket_path))
     try:
@@ -517,12 +506,12 @@ async def test_client_unary(socket_path: Path, test_server_process) -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_server_streaming(socket_path: Path, test_server_process) -> None:
+async def test_client_server_streaming(socket_path: Path, test_server_process: asyncio.subprocess.Process) -> None:
     """Test Client API for server streaming RPC."""
     client = Client(path=str(socket_path))
     try:
         req = Sum(sum=100, num=5)
-        results = []
+        results: list[Part] = []
         async for resp in client.server_stream(
             "ttrpc.integration.streaming.Streaming",
             "DivideStream",
@@ -539,7 +528,7 @@ async def test_client_server_streaming(socket_path: Path, test_server_process) -
 
 
 @pytest.mark.asyncio
-async def test_client_client_streaming(socket_path: Path, test_server_process) -> None:
+async def test_client_client_streaming(socket_path: Path, test_server_process: asyncio.subprocess.Process) -> None:
     """Test Client API for client streaming RPC."""
     client = Client(path=str(socket_path))
     try:
@@ -559,7 +548,9 @@ async def test_client_client_streaming(socket_path: Path, test_server_process) -
 
 
 @pytest.mark.asyncio
-async def test_client_bidirectional_streaming(socket_path: Path, test_server_process) -> None:
+async def test_client_bidirectional_streaming(
+    socket_path: Path, test_server_process: asyncio.subprocess.Process
+) -> None:
     """Test Client API for bidirectional streaming RPC."""
     client = Client(path=str(socket_path))
     try:
@@ -575,7 +566,7 @@ async def test_client_bidirectional_streaming(socket_path: Path, test_server_pro
             await stream.close()
 
             # Receive echoes
-            results = []
+            results: list[EchoPayload] = []
             async for resp in stream:
                 results.append(resp)
 

@@ -83,7 +83,8 @@ class NriMux:
         self._writer = writer
         # Pre-create queues for both channels so read_loop and consumers
         # always share the same queue object regardless of start order.
-        self._channels: dict[int, asyncio.Queue] = {
+        # Items are payload chunks; None marks EOF.
+        self._channels: dict[int, asyncio.Queue[bytes | None]] = {
             PLUGIN_SERVICE_CONN: asyncio.Queue(),
             RUNTIME_SERVICE_CONN: asyncio.Queue(),
         }
