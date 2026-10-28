@@ -1137,7 +1137,6 @@ rec {
   treefmt = (import sources.treefmt-nix).mkWrapper pkgs {
     projectRootFile = "default.nix";
     programs.fish_indent.enable = true;
-    programs.isort.enable = true;
     programs.nixfmt.enable = true;
     programs.ruff-check.enable = true;
     programs.ruff-format.enable = true;

@@ -106,7 +106,7 @@ def test_the_same_closure_writes_the_same_dump(store: Path):
 
 def test_a_primary_with_a_nix_of_its_own_is_refused(store: Path):
     (store / "bbb-app" / "nix").mkdir()
-    with pytest.raises(ValueError, match="twice|/nix of its own"):
+    with pytest.raises(ValueError, match=r"twice|/nix of its own"):
         dump(store)
 
 

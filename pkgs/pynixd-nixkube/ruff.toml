@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-# The anyio vocabulary, shared with the other ported package.
-extend = "../ruff-anyio.toml"
-
-# `BaseExceptionGroup` is a builtin from 3.11. Without this ruff assumes an
-# older Python and reports F821 for it.
-target-version = "py313"
+# This package writes concurrency in anyio. grpclib-nri and grpclib-ttrpc do
+# not: they implement wire protocols on asyncio.Protocol and
+# asyncio.Transport, which anyio has no equivalent for.
+extend = "../../nix/shared/ruff-anyio.toml"

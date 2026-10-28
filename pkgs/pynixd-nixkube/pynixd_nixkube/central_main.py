@@ -70,7 +70,5 @@ async def _main() -> None:
 
 
 def main() -> None:
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         anyio.run(_main, backend="asyncio")
-    except KeyboardInterrupt:
-        pass

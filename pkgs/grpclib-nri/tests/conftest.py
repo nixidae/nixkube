@@ -53,7 +53,7 @@ def test_server_bin() -> Path:
 
 
 @pytest.fixture
-def socket_path() -> Generator[Path, None, None]:
+def socket_path() -> Generator[Path]:
     """Create a unique socket path for each test.
 
     Uses /tmp directly instead of pytest's tmp_path because Unix sockets have
@@ -70,7 +70,7 @@ def socket_path() -> Generator[Path, None, None]:
 @pytest_asyncio.fixture
 async def test_server_process(
     test_server_bin: Path, socket_path: Path
-) -> AsyncGenerator[asyncio.subprocess.Process, None]:
+) -> AsyncGenerator[asyncio.subprocess.Process]:
     """Start the Go NRI test server and yield the process.
 
     Waits for the server to be ready by checking if the socket exists.
@@ -124,7 +124,7 @@ async def test_server_process(
         proc.terminate()
         try:
             await asyncio.wait_for(proc.wait(), timeout=2)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("server_terminate_timeout")
             proc.kill()
             await proc.wait()
@@ -133,7 +133,7 @@ async def test_server_process(
 @pytest_asyncio.fixture
 async def nri_server(
     test_server_process: asyncio.subprocess.Process, socket_path: Path
-) -> AsyncGenerator[NriServer, None]:
+) -> AsyncGenerator[NriServer]:
     """Create and start an NriServer connected to the test server.
 
     The test server is already running and listening on socket_path.
@@ -169,5 +169,5 @@ async def nri_server(
         # Give background task time to exit
         try:
             await asyncio.wait_for(server_task, timeout=2)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except (TimeoutError, asyncio.CancelledError):
             logger.warning("server_task_exit_timeout")

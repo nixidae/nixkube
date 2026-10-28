@@ -34,7 +34,7 @@ def test_server_bin() -> Path:
 
 
 @pytest.fixture
-def socket_path() -> Generator[Path, None, None]:
+def socket_path() -> Generator[Path]:
     """Create a unique socket path for each test.
 
     Uses /tmp to avoid "AF_UNIX path too long" error when running in Nix build
@@ -55,7 +55,7 @@ def socket_path() -> Generator[Path, None, None]:
 @pytest_asyncio.fixture
 async def test_server_process(
     test_server_bin: Path, socket_path: Path
-) -> AsyncGenerator[asyncio.subprocess.Process, None]:
+) -> AsyncGenerator[asyncio.subprocess.Process]:
     """Start the Go TTRPC test server and yield the process.
 
     Waits for the server to be ready by checking if the socket exists.
@@ -111,7 +111,7 @@ async def test_server_process(
         proc.terminate()
         try:
             await asyncio.wait_for(proc.wait(), timeout=2)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("server_terminate_timeout")
             proc.kill()
             await proc.wait()

@@ -151,7 +151,7 @@ def csi_error_handler(
             # Re-raise as GRPCError
             if isinstance(e, GRPCError):
                 raise
-            raise GRPCError(Status.INTERNAL, f"{type(e).__name__}: {e}")
+            raise GRPCError(Status.INTERNAL, f"{type(e).__name__}: {e}") from e
 
     return wrapper
 

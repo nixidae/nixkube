@@ -24,23 +24,22 @@ from .protocol import (
 
 log = structlog.get_logger(__name__)
 
-_T = TypeVar("_T")
 _RequestT = TypeVar("_RequestT")
 _ResponseT = TypeVar("_ResponseT")
 
 
-async def unary_call(
+async def unary_call[T](
     path: str,
     service: str,
     method: str,
     request: object,
     request_type: type,
-    response_type: type[_T],
+    response_type: type[T],
     *,
     connect_timeout: float = 5.0,
     response_timeout: float = 30.0,
     codec: CodecBase | None = None,
-) -> _T:
+) -> T:
     """Make a single unary ttrpc RPC call over a Unix socket.
 
     Connects to *path*, sends one Request frame with stream_id=1,
@@ -533,8 +532,8 @@ class BidirectionalStreamContext:
                 if isinstance(msg, Exception):
                     raise msg
                 yield msg
-            except asyncio.TimeoutError:
-                raise ProtocolError("Timeout waiting for response")
+            except TimeoutError:
+                raise ProtocolError("Timeout waiting for response") from None
 
     async def _read_responses(self) -> None:
         """Background task to read responses from server."""
@@ -577,5 +576,5 @@ class BidirectionalStreamContext:
         if self._reader_task:
             try:
                 await asyncio.wait_for(self._reader_task, timeout=2.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._reader_task.cancel()

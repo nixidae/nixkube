@@ -11,7 +11,6 @@ invented.
 
 from __future__ import annotations
 
-import asyncio
 import io
 import json
 import subprocess
@@ -319,9 +318,9 @@ class TestLastSuccess:
         before = gc_task.GC_LAST_SUCCESS._value.get()
         # One pass of the loop body, then stop it at the sleep.
         monkeypatch.setattr(
-            gc_task.anyio, "sleep", AsyncMock(side_effect=asyncio.CancelledError)
+            gc_task.anyio, "sleep", AsyncMock(side_effect=anyio.get_cancelled_exc_class())
         )
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(anyio.get_cancelled_exc_class()):
             await gc_task.gc_loop()
 
         assert gc_task.GC_LAST_SUCCESS._value.get() > before
@@ -336,9 +335,9 @@ class TestLastSuccess:
         monkeypatch.setattr(gc_task, "_run_gc_cycle", cycle)
         gc_task.GC_LAST_SUCCESS.set(1000.0)
         monkeypatch.setattr(
-            gc_task.anyio, "sleep", AsyncMock(side_effect=asyncio.CancelledError)
+            gc_task.anyio, "sleep", AsyncMock(side_effect=anyio.get_cancelled_exc_class())
         )
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(anyio.get_cancelled_exc_class()):
             await gc_task.gc_loop()
 
         assert gc_task.GC_LAST_SUCCESS._value.get() == 1000.0

@@ -335,7 +335,7 @@ async def test_request_with_very_short_timeout(streaming_client: TtrpcClient) ->
         # If we got a response, it might be OK or DEADLINE_EXCEEDED
         # depending on timing
         assert resp.status.code in (Status.OK.value, Status.DEADLINE_EXCEEDED.value)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         # Client-side timeout is also acceptable for this test
         pass
 
@@ -366,7 +366,7 @@ async def test_client_side_timeout_on_slow_operation(
         if payload:
             reply = dec(payload, EchoPayload)
             assert reply.seq == 2
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail("Response took longer than 1 second")
 
 
@@ -398,7 +398,7 @@ async def test_streaming_with_timeout(streaming_client: TtrpcClient) -> None:
         assert resp.status.code == Status.OK.value
         result = dec(resp.payload, Sum)
         assert result.sum == sum([5, 10, 15])
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail("Streaming operation timed out")
 
 

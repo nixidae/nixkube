@@ -91,7 +91,7 @@ async def _register_plugin(
     while True:
         remaining = deadline - loop.time()
         if remaining <= 0:
-            raise asyncio.TimeoutError("Timed out waiting for RegisterPlugin response")
+            raise TimeoutError("Timed out waiting for RegisterPlugin response")
         chunk: bytes | None = await asyncio.wait_for(
             mux.read_channel(RUNTIME_SERVICE_CONN), timeout=remaining
         )

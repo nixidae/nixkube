@@ -5,7 +5,7 @@ import socket
 from collections.abc import Callable, Collection
 from contextlib import nullcontext
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Optional, Self
+from typing import TYPE_CHECKING, Any, Optional, Self
 
 import structlog
 from grpclib._typing import IServable
@@ -15,7 +15,7 @@ from grpclib.encoding.proto import ProtoCodec
 from grpclib.exceptions import GRPCError, ProtocolError, StreamTerminatedError
 from grpclib.metadata import Deadline, _Metadata
 from grpclib.server import _GC
-from grpclib.stream import StreamIterator, _RecvType, _SendType
+from grpclib.stream import StreamIterator
 from grpclib.utils import DeadlineWrapper, Wrapper
 from multidict import MultiDict
 from ttrpc.ttrpc_pb2 import Request
@@ -58,7 +58,7 @@ def _decode_ttrpc_metadata(kv_list: Any) -> _Metadata:
 # ---------------------------------------------------------------------------
 
 
-class Stream(StreamIterator[_RecvType], Generic[_RecvType, _SendType]):
+class Stream[RecvT, SendT](StreamIterator[RecvT]):
     """Handler-facing stream for a single ttrpc RPC call.
 
     The API mirrors :py:class:`grpclib.server.Stream`; most handlers written
@@ -74,8 +74,8 @@ class Stream(StreamIterator[_RecvType], Generic[_RecvType, _SendType]):
         raw_stream: TtrpcRawStream,
         method_name: str,
         cardinality: Cardinality,
-        recv_type: type[_RecvType],
-        send_type: type[_SendType],
+        recv_type: type[RecvT],
+        send_type: type[SendT],
         *,
         codec: CodecBase,
         deadline: Deadline | None = None,
@@ -96,7 +96,7 @@ class Stream(StreamIterator[_RecvType], Generic[_RecvType, _SendType]):
 
     # --- receiving -----------------------------------------------------------
 
-    async def recv_message(self) -> _RecvType | None:
+    async def recv_message(self) -> RecvT | None:
         """Receive the next message from the client."""
         payload = await self._raw_stream.read_payload()
         if payload is None:
@@ -112,7 +112,7 @@ class Stream(StreamIterator[_RecvType], Generic[_RecvType, _SendType]):
     ) -> None:
         """No-op: ttrpc has no HTTP/2 initial metadata frame."""
 
-    async def send_message(self, message: _SendType) -> None:
+    async def send_message(self, message: SendT) -> None:
         """Send one message to the client.
 
         For unary server responses the encoded bytes are buffered until
@@ -167,7 +167,7 @@ class Stream(StreamIterator[_RecvType], Generic[_RecvType, _SendType]):
 
     # --- context manager -----------------------------------------------------
 
-    async def __aenter__(self) -> "Stream[_RecvType, _SendType]":
+    async def __aenter__(self) -> "Stream[RecvT, SendT]":
         return self
 
     async def __aexit__(
@@ -271,13 +271,13 @@ async def request_handler(
                     await method.func(stream)
             except GRPCError:
                 raise
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if wrapper.cancel_failed:
                     log.exception("deadline_cancellation_failed")
-                    raise GRPCError(Status.DEADLINE_EXCEEDED)
+                    raise GRPCError(Status.DEADLINE_EXCEEDED) from None
                 elif wrapper.cancelled:
                     log.info("deadline_exceeded")
-                    raise GRPCError(Status.DEADLINE_EXCEEDED)
+                    raise GRPCError(Status.DEADLINE_EXCEEDED) from None
                 else:
                     log.exception("timeout_error")
                     raise

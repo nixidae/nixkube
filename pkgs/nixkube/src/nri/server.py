@@ -9,8 +9,7 @@ from typing import Any
 import anyio
 import anyio.abc
 import structlog
-from grpclib_nri import NriPlugin as NriPluginBase
-from grpclib_nri import NriServer
+from grpclib_nri import NriPlugin as NriPluginBase, NriServer
 from kr8s.asyncio.objects import Pod
 
 from nri import nri_pb2

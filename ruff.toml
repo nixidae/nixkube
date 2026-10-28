@@ -1,0 +1,1 @@
+extend = "nix/shared/ruff.toml"

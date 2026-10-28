@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 from pathlib import Path
 
 import anyio
@@ -35,7 +36,5 @@ async def _main():
 
 
 def main():
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         anyio.run(_main, backend="asyncio")
-    except KeyboardInterrupt:
-        pass

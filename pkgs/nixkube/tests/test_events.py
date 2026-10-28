@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-from hypothesis import assume, given
-from hypothesis import strategies as st
+from hypothesis import assume, given, strategies as st
 
 from src.events import _format_event_note
 
@@ -77,7 +76,7 @@ class TestFormatEventNote:
         try:
             result.encode().decode()  # Should not raise
         except UnicodeDecodeError:
-            raise AssertionError("Result contains invalid UTF-8")
+            raise AssertionError("Result contains invalid UTF-8") from None
 
     def test_large_message_small_logs(self):
         """Large message with small logs."""

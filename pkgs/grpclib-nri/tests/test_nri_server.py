@@ -96,14 +96,14 @@ async def test_nri_server_lifecycle(
     # Wait for task to complete
     try:
         await asyncio.wait_for(server_task, timeout=2)
-    except (asyncio.TimeoutError, asyncio.CancelledError):
+    except (TimeoutError, asyncio.CancelledError):
         logger.warning("server_task_exit_timeout")
 
     # Cleanup subprocess
     proc.terminate()
     try:
         await asyncio.wait_for(proc.wait(), timeout=2)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         await proc.wait()
 
