@@ -149,9 +149,7 @@ class TestExtractStoreName:
     def test_full_path(self):
         """Extract name from full store path."""
         path = Path("/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-package-name")
-        assert (
-            extract_store_name(path) == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-package-name"
-        )
+        assert extract_store_name(path) == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-package-name"
 
     def test_string_input(self):
         """Extract name from string."""

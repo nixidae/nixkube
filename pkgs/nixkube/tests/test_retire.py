@@ -25,13 +25,8 @@ def test_locate_on_the_root_filesystem():
 
 def test_locate_through_a_bind_mount():
     # /var/lib/kubelet is a bind of /data/kubelet on 8:2.
-    host = (
-        HOST
-        + "40 23 8:2 /data/kubelet /var/lib/kubelet rw shared:4 - xfs /dev/sda2 rw\n"
-    )
-    assert locate("/var/lib/kubelet/nix-csi", host) == Located(
-        "8:2", "/data/kubelet/nix-csi"
-    )
+    host = HOST + "40 23 8:2 /data/kubelet /var/lib/kubelet rw shared:4 - xfs /dev/sda2 rw\n"
+    assert locate("/var/lib/kubelet/nix-csi", host) == Located("8:2", "/data/kubelet/nix-csi")
 
 
 OLD = Located("8:2", "/lib/nix-csi")

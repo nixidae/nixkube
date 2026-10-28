@@ -134,9 +134,7 @@ async def prepare_volume(
 
     # Asked before anything is prepared, because the fallback changes what
     # preparing means.
-    fallback = presentation.farm_fallback(
-        fits=affordable(len(store_paths)), host_store=not allow_hardlinks
-    )
+    fallback = presentation.farm_fallback(fits=affordable(len(store_paths)), host_store=not allow_hardlinks)
     if bind_farm and fallback is not Presentation.FARM:
         if fallback is Presentation.REFUSED:
             # A host-store node: a hardlink out of the host's store fails
@@ -231,9 +229,7 @@ async def mount_volume(
         # For readonly we use a bind mount, the benefit is that different
         # container stores using bindmounts will get the same inodes and
         # share page cache with others, reducing memory usage.
-        logger.debug(
-            "mounting_bind_readonly", src=str(volume_root), dst=str(target_path)
-        )
+        logger.debug("mounting_bind_readonly", src=str(volume_root), dst=str(target_path))
         #
         # MS_REC because a volume root may hold mounts of its own: a store
         # presented as one bind mount per path (issue #65). Without it the
@@ -274,9 +270,7 @@ async def mount_volume(
             # Do not leave a writable store exposed. MNT_DETACH because the
             # bind is recursive: a plain umount2 of a mount that carries
             # submounts fails with EBUSY.
-            _libc.umount2(
-                ctypes.c_char_p(os.fsencode(target_path)), ctypes.c_int(MNT_DETACH)
-            )
+            _libc.umount2(ctypes.c_char_p(os.fsencode(target_path)), ctypes.c_int(MNT_DETACH))
             raise
     else:
         # For readwrite we use an overlayfs mount, the benefit here is that
@@ -293,9 +287,7 @@ async def mount_volume(
                 logs="",
             )
 
-        options = (
-            f"lowerdir={volume_root},upperdir={upperdir},workdir={workdir}".encode()
-        )
+        options = f"lowerdir={volume_root},upperdir={upperdir},workdir={workdir}".encode()
         logger.debug("mounting_overlay", src=str(volume_root), dst=str(target_path))
         ret = _libc.mount(
             ctypes.c_char_p(b"overlay"),
@@ -340,9 +332,7 @@ def is_mount_source(path: Path, mountinfo_file: Path | None = None) -> bool:
         return False
     except (FileNotFoundError, OSError):
         # Unreadable means unknown, and unknown must not authorise a delete.
-        logger.warning(
-            "mountinfo_check_failed", mountinfo_file=str(mountinfo_file), exc_info=True
-        )
+        logger.warning("mountinfo_check_failed", mountinfo_file=str(mountinfo_file), exc_info=True)
         return True
 
 
@@ -402,9 +392,7 @@ def is_mount(path: Path, mounts_file: Path | None = None) -> bool:
                 return True
         return False
     except (FileNotFoundError, OSError):
-        logger.warning(
-            "mounts_check_failed", mounts_file=str(mounts_file), exc_info=True
-        )
+        logger.warning("mounts_check_failed", mounts_file=str(mounts_file), exc_info=True)
         return False
 
 

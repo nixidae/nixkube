@@ -27,18 +27,14 @@ def test_a_successful_fetch_records_no_skew(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("fetch_works", [True, False])
-def test_what_runs_is_rooted_by_a_link_the_host_can_resolve(
-    tmp_path, monkeypatch, fetch_works
-):
+def test_what_runs_is_rooted_by_a_link_the_host_can_resolve(tmp_path, monkeypatch, fetch_works):
     monkeypatch.setenv("PYNIXD_ENABLED", "false")
     monkeypatch.setenv("APPSTARTER_ROLE", "node")
 
     def refuse(*_args):
         raise store.StoreError("no substituter that can build it")
 
-    monkeypatch.setattr(
-        store, "build", (lambda *_args: None) if fetch_works else refuse
-    )
+    monkeypatch.setattr(store, "build", (lambda *_args: None) if fetch_works else refuse)
     monkeypatch.setattr(store, "copy", lambda *_args: None)
 
     assert seed.run("/nix/store/wanted", "/nix/store/image", tmp_path) == 0
@@ -116,11 +112,7 @@ def test_an_unreachable_pynixd_is_retried(tmp_path, monkeypatch):
 
 def _held(caplog) -> list[str]:
     """Every "store holds" line `seed.run` logged, rendered."""
-    return [
-        record.getMessage()
-        for record in caplog.records
-        if record.getMessage().startswith("store holds")
-    ]
+    return [record.getMessage() for record in caplog.records if record.getMessage().startswith("store holds")]
 
 
 def test_the_two_store_holds_lines_stay_distinguishable(tmp_path, monkeypatch, caplog):
@@ -147,9 +139,7 @@ def test_the_two_store_holds_lines_stay_distinguishable(tmp_path, monkeypatch, c
 
     monkeypatch.setattr(store, "build", refuse)
     seed.run("/nix/store/wanted", "/nix/store/image", tmp_path)
-    assert _held(caplog) == [
-        f"store holds /nix/store/image{fallback_mark}/nix/store/wanted"
-    ]
+    assert _held(caplog) == [f"store holds /nix/store/image{fallback_mark}/nix/store/wanted"]
 
 
 def test_a_retry_that_succeeds_stops_retrying(tmp_path, monkeypatch):

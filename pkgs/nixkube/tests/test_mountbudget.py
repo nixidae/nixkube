@@ -19,9 +19,7 @@ from src.mountbudget import Budget, measure
 
 def _mountinfo(tmp_path: Path, lines: int) -> Path:
     path = tmp_path / "mountinfo"
-    path.write_text(
-        "".join(f"{n} 1 0:1 / /m{n} rw - tmpfs tmpfs rw\n" for n in range(lines))
-    )
+    path.write_text("".join(f"{n} 1 0:1 / /m{n} rw - tmpfs tmpfs rw\n" for n in range(lines)))
     return path
 
 
@@ -95,9 +93,7 @@ class TestMeasure:
         assert said, f"stayed quiet about a farm that cannot be built: {logs}"
         assert said[0]["log_level"] == "error"
 
-    def test_a_request_that_fits_but_takes_the_headroom_is_refused_loudly(
-        self, tmp_path, limit
-    ):
+    def test_a_request_that_fits_but_takes_the_headroom_is_refused_loudly(self, tmp_path, limit):
         """The fallback case, which is silent otherwise.
 
         7500 held plus 2443 wanted is 99% of 10,000. It fits. Taking it leaves
@@ -119,12 +115,9 @@ class TestMeasure:
         with capture_logs() as logs:
             measure(2443, mountinfo=_mountinfo(tmp_path, 200))
 
-        said = next(
-            entry for entry in logs if entry["event"] == "mount_budget_exhausted"
-        )
+        said = next(entry for entry in logs if entry["event"] == "mount_budget_exhausted")
         assert said["needed"] == 2443 and said["limit"] == 1000, (
-            f"a reader needs the closure size and the limit, not the verdict alone:"
-            f" {said}"
+            f"a reader needs the closure size and the limit, not the verdict alone: {said}"
         )
 
 
@@ -135,9 +128,7 @@ class TestItNeverTakesTheCallerDown:
         assert mountbudget.mounts_used(tmp_path / "not-there") == 0
 
     def test_an_unreadable_limit_falls_back_to_the_kernel_default(self, monkeypatch):
-        monkeypatch.setattr(
-            mountbudget, "MOUNT_MAX_PATH", Path("/nonexistent/mount-max")
-        )
+        monkeypatch.setattr(mountbudget, "MOUNT_MAX_PATH", Path("/nonexistent/mount-max"))
         assert mountbudget.mount_limit() == 100_000
 
 
@@ -150,9 +141,7 @@ class TestTheVolumeFallsBackRatherThanFailing:
     """
 
     @pytest.mark.asyncio
-    async def test_an_unaffordable_farm_becomes_a_hardlink_tree(
-        self, tmp_path, monkeypatch
-    ):
+    async def test_an_unaffordable_farm_becomes_a_hardlink_tree(self, tmp_path, monkeypatch):
         from src import volume as volume_module
 
         linked: list[set[Path]] = []
@@ -180,9 +169,7 @@ class TestTheVolumeFallsBackRatherThanFailing:
         assert prepared.bind_farm is False, "asked for a farm it could not afford"
         assert linked, "fell back and then linked nothing"
         said = [e for e in logs if e["event"] == "farm_fell_back_to_hardlinks"]
-        assert said and said[0]["log_level"] == "error", (
-            f"fell back without saying so: {logs}"
-        )
+        assert said and said[0]["log_level"] == "error", f"fell back without saying so: {logs}"
 
     @pytest.mark.asyncio
     async def test_an_affordable_farm_copies_nothing(self, tmp_path, monkeypatch):
@@ -214,9 +201,7 @@ class TestTheVolumeFallsBackRatherThanFailing:
         assert prepared.paths == [Path("/nix/store/aaa-pkg")]
 
     @pytest.mark.asyncio
-    async def test_a_host_store_refuses_rather_than_falls_back(
-        self, tmp_path, monkeypatch
-    ):
+    async def test_a_host_store_refuses_rather_than_falls_back(self, tmp_path, monkeypatch):
         from src import volume as volume_module
         from src.errors import MountError
 

@@ -152,16 +152,12 @@ class Stream[RecvT, SendT](StreamIterator[RecvT]):
 
         if self._cardinality.server_streaming and status is Status.OK:
             # Normal end-of-stream for server streaming.
-            self._raw_stream.send_frame(
-                MSG_TYPE_DATA, FLAG_REMOTE_CLOSED | FLAG_NO_DATA, b""
-            )
+            self._raw_stream.send_frame(MSG_TYPE_DATA, FLAG_REMOTE_CLOSED | FLAG_NO_DATA, b"")
         else:
             # Unary response OR streaming error: use the Response frame.
             payload = self._pending_payload if status is Status.OK else b""
             response_bytes = build_response(status, status_message, payload)
-            self._raw_stream.send_frame(
-                MSG_TYPE_RESPONSE, FLAG_REMOTE_CLOSED, response_bytes
-            )
+            self._raw_stream.send_frame(MSG_TYPE_RESPONSE, FLAG_REMOTE_CLOSED, response_bytes)
 
         self._send_trailing_metadata_done = True
 
@@ -198,9 +194,7 @@ class Stream[RecvT, SendT](StreamIterator[RecvT]):
             status_message = None
 
         try:
-            await self.send_trailing_metadata(
-                status=status, status_message=status_message
-            )
+            await self.send_trailing_metadata(status=status, status_message=status_message)
         except Exception:
             log.exception("trailing_metadata_error")
 
@@ -230,9 +224,7 @@ async def request_handler(
     try:
         method = mapping.get(method_name)
         if method is None:
-            response_bytes = build_response(
-                Status.UNIMPLEMENTED, "Method not found", b""
-            )
+            response_bytes = build_response(Status.UNIMPLEMENTED, "Method not found", b"")
             raw_stream.send_frame(MSG_TYPE_RESPONSE, FLAG_REMOTE_CLOSED, response_bytes)
             return
 
@@ -425,9 +417,7 @@ class Server(_GC):
         self._handlers: set[TtrpcHandler] = set()
 
     def __gc_collect__(self) -> None:
-        self._handlers = {
-            h for h in self._handlers if not (h.closing and h.check_closed())
-        }
+        self._handlers = {h for h in self._handlers if not (h.closing and h.check_closed())}
 
     def _protocol_factory(self) -> TtrpcProtocol:
         self.__gc_step__()
@@ -459,9 +449,7 @@ class Server(_GC):
         :param ssl: SSL context for TLS.
         """
         if path is not None and (host is not None or port is not None):
-            raise ValueError(
-                "The 'path' parameter cannot be combined with 'host'/'port'."
-            )
+            raise ValueError("The 'path' parameter cannot be combined with 'host'/'port'.")
         if self._server is not None:
             raise RuntimeError("Server is already started")
 
@@ -508,9 +496,7 @@ class Server(_GC):
         await self._server.wait_closed()
         if self._handlers:
             loop = asyncio.get_event_loop()
-            await asyncio.wait(
-                {loop.create_task(h.wait_closed()) for h in self._handlers}
-            )
+            await asyncio.wait({loop.create_task(h.wait_closed()) for h in self._handlers})
 
     async def __aenter__(self) -> Self:
         return self

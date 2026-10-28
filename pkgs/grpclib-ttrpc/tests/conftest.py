@@ -53,9 +53,7 @@ def socket_path() -> Generator[Path]:
 
 
 @pytest_asyncio.fixture
-async def test_server_process(
-    test_server_bin: Path, socket_path: Path
-) -> AsyncGenerator[asyncio.subprocess.Process]:
+async def test_server_process(test_server_bin: Path, socket_path: Path) -> AsyncGenerator[asyncio.subprocess.Process]:
     """Start the Go TTRPC test server and yield the process.
 
     Waits for the server to be ready by checking if the socket exists.

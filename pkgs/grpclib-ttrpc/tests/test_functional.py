@@ -88,9 +88,7 @@ async def unix_client(unix_server):
 @pytest.mark.asyncio
 async def test_unary_unary_tcp(tcp_client):
     req_bytes = enc(DummyRequest(value="hi"))
-    resp_bytes = await tcp_client.send_unary_request(
-        "dummy.DummyService", "UnaryUnary", req_bytes
-    )
+    resp_bytes = await tcp_client.send_unary_request("dummy.DummyService", "UnaryUnary", req_bytes)
     resp = Response.FromString(resp_bytes)
     assert resp.status.code == Status.OK.value
     reply = dec_reply(resp.payload)
@@ -100,9 +98,7 @@ async def test_unary_unary_tcp(tcp_client):
 @pytest.mark.asyncio
 async def test_unary_unary_unix(unix_client):
     req_bytes = enc(DummyRequest(value="unix"))
-    resp_bytes = await unix_client.send_unary_request(
-        "dummy.DummyService", "UnaryUnary", req_bytes
-    )
+    resp_bytes = await unix_client.send_unary_request("dummy.DummyService", "UnaryUnary", req_bytes)
     resp = Response.FromString(resp_bytes)
     assert resp.status.code == Status.OK.value
     reply = dec_reply(resp.payload)
@@ -188,9 +184,7 @@ async def test_stream_stream_tcp(tcp_client):
 
 @pytest.mark.asyncio
 async def test_unimplemented_method(tcp_client):
-    resp_bytes = await tcp_client.send_unary_request(
-        "dummy.DummyService", "NonExistentMethod", b""
-    )
+    resp_bytes = await tcp_client.send_unary_request("dummy.DummyService", "NonExistentMethod", b"")
     resp = Response.FromString(resp_bytes)
     assert resp.status.code == Status.UNIMPLEMENTED.value
 

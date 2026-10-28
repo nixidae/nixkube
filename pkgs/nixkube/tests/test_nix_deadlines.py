@@ -36,11 +36,7 @@ RUNNERS = {
     "run",  # subprocess.run
 }
 
-MODULES = sorted(
-    path
-    for path in Path(src.nix.__file__).parent.glob("*.py")
-    if path.name != "__init__.py"
-)
+MODULES = sorted(path for path in Path(src.nix.__file__).parent.glob("*.py") if path.name != "__init__.py")
 
 
 def _calls_without_timeout(source: str) -> list[tuple[str, int]]:
@@ -78,7 +74,5 @@ def test_the_check_can_fail():
     Without it, a broken matcher -- a renamed runner, an AST change -- reports
     a clean sweep over calls it never recognised.
     """
-    assert _calls_without_timeout("await try_captured('nix', 'build')") == [
-        ("try_captured", 1)
-    ]
+    assert _calls_without_timeout("await try_captured('nix', 'build')") == [("try_captured", 1)]
     assert _calls_without_timeout("await try_captured('nix', timeout=1)") == []

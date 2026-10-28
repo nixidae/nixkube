@@ -58,9 +58,7 @@ def _cri(monkeypatch, active: set[str]) -> None:
 
 class TestRemovedId:
     @pytest.mark.asyncio
-    async def test_it_removes_the_container_it_was_told_about(
-        self, volumes, monkeypatch
-    ):
+    async def test_it_removes_the_container_it_was_told_about(self, volumes, monkeypatch):
         gone = _volume(volumes, "gone")
         _cri(monkeypatch, {"gone"})  # still listed: the removed_id rule is why
 
@@ -79,9 +77,7 @@ class TestRemovedId:
         _cri(monkeypatch, {"busy"})
         monkeypatch.setattr(cleanup, "NRI_BUILD_CANCEL_TIMEOUT", 0.05)
 
-        await cleanup.garbage_collect_stale_volumes(
-            Path("/cri.sock"), "busy", _building("busy")
-        )
+        await cleanup.garbage_collect_stale_volumes(Path("/cri.sock"), "busy", _building("busy"))
 
         assert stubborn.exists(), "deleted a volume a build task is writing into"
 
@@ -118,17 +114,13 @@ class TestRemovedId:
             async with anyio.create_task_group() as tg:
                 tg.start_soon(build)
                 await running.wait()
-                await cleanup.garbage_collect_stale_volumes(
-                    Path("/cri.sock"), "doomed", builds
-                )
+                await cleanup.garbage_collect_stale_volumes(Path("/cri.sock"), "doomed", builds)
                 tg.cancel_scope.cancel()
 
         assert not doomed.exists(), "left a volume whose build the sweep could stop"
 
     @pytest.mark.asyncio
-    async def test_a_removal_before_the_build_starts_still_stops_it(
-        self, volumes, monkeypatch
-    ):
+    async def test_a_removal_before_the_build_starts_still_stops_it(self, volumes, monkeypatch):
         """The window between registering an id and the task running.
 
         `CreateContainer` adds the id, then `detach` starts the task later.
@@ -166,9 +158,7 @@ class TestItNeverTakesThePluginDown:
     """
 
     @pytest.mark.asyncio
-    async def test_a_removal_that_cannot_be_deleted_is_logged_not_raised(
-        self, volumes, monkeypatch
-    ):
+    async def test_a_removal_that_cannot_be_deleted_is_logged_not_raised(self, volumes, monkeypatch):
         _volume(volumes, "stuck")
         _cri(monkeypatch, set())
         monkeypatch.setattr(
@@ -180,9 +170,7 @@ class TestItNeverTakesThePluginDown:
         await cleanup.garbage_collect_stale_volumes(Path("/cri.sock"), "stuck")
 
     @pytest.mark.asyncio
-    async def test_a_cri_that_will_not_answer_does_not_stop_the_removal(
-        self, volumes, monkeypatch
-    ):
+    async def test_a_cri_that_will_not_answer_does_not_stop_the_removal(self, volumes, monkeypatch):
         """`list_container_ids` raises RuntimeError on any socket trouble.
 
         The named removal happens before that call and must still stand: a
@@ -201,9 +189,7 @@ class TestItNeverTakesThePluginDown:
         assert not gone.exists()
 
     @pytest.mark.asyncio
-    async def test_a_farm_directory_that_does_not_exist_yet(
-        self, tmp_path, monkeypatch
-    ):
+    async def test_a_farm_directory_that_does_not_exist_yet(self, tmp_path, monkeypatch):
         """Before the first container, NRI_CONTAINERS is not there."""
         monkeypatch.setattr(cleanup, "NRI_CONTAINERS", tmp_path / "never-made")
         _cri(monkeypatch, set())
@@ -223,9 +209,7 @@ class TestItNeverTakesThePluginDown:
 
 class TestCriBackstop:
     @pytest.mark.asyncio
-    async def test_it_removes_a_volume_the_cri_no_longer_lists(
-        self, volumes, monkeypatch
-    ):
+    async def test_it_removes_a_volume_the_cri_no_longer_lists(self, volumes, monkeypatch):
         stale = _volume(volumes, "stale")
         _cri(monkeypatch, {"alive"})
 
@@ -234,9 +218,7 @@ class TestCriBackstop:
         assert not stale.exists()
 
     @pytest.mark.asyncio
-    async def test_it_leaves_a_volume_that_is_still_being_built(
-        self, volumes, monkeypatch
-    ):
+    async def test_it_leaves_a_volume_that_is_still_being_built(self, volumes, monkeypatch):
         """The dangerous window: a container mid-create is not yet in the CRI.
 
         Its volume root exists and a build is filling it, so the backstop
@@ -246,16 +228,12 @@ class TestCriBackstop:
         fresh = _volume(volumes, "creating")
         _cri(monkeypatch, {"someone-else"})
 
-        await cleanup.garbage_collect_stale_volumes(
-            Path("/cri.sock"), "someone-else", _building("creating")
-        )
+        await cleanup.garbage_collect_stale_volumes(Path("/cri.sock"), "someone-else", _building("creating"))
 
         assert fresh.exists(), "another container's removal ate a live volume"
 
     @pytest.mark.asyncio
-    async def test_a_live_build_is_read_now_and_not_when_it_was_scheduled(
-        self, volumes, monkeypatch
-    ):
+    async def test_a_live_build_is_read_now_and_not_when_it_was_scheduled(self, volumes, monkeypatch):
         """`schedule_garbage_collection` passes the registry, not a copy."""
         later = _volume(volumes, "later")
         _cri(monkeypatch, set())
@@ -296,9 +274,7 @@ class TestTheRaceItself:
             (src / f"f{i:05d}").write_text("x")
         return src
 
-    async def _build_against_sweep(
-        self, volumes: Path, src: Path, building: BuildRegistry
-    ) -> None:
+    async def _build_against_sweep(self, volumes: Path, src: Path, building: BuildRegistry) -> None:
         volume_root = volumes / self.CONTAINER
         async with anyio.create_task_group() as tg:
             tg.start_soon(hardlink_closure, {src}, volume_root / "nix" / "store")
@@ -310,9 +286,7 @@ class TestTheRaceItself:
             )
 
     @pytest.mark.asyncio
-    async def test_a_guarded_build_survives_a_sweep_of_its_own_container(
-        self, volumes, tmp_path, monkeypatch
-    ):
+    async def test_a_guarded_build_survives_a_sweep_of_its_own_container(self, volumes, tmp_path, monkeypatch):
         src = self._closure(tmp_path)
         _cri(monkeypatch, set())
         # The build has no scope to cancel, so the sweep waits out the
@@ -323,14 +297,12 @@ class TestTheRaceItself:
         await self._build_against_sweep(volumes, src, _building(self.CONTAINER))
 
         linked = volumes / self.CONTAINER / "nix" / "store" / src.name
-        assert sorted(p.name for p in linked.iterdir()) == sorted(
-            p.name for p in src.iterdir()
-        ), "the sweep took files out from under the build"
+        assert sorted(p.name for p in linked.iterdir()) == sorted(p.name for p in src.iterdir()), (
+            "the sweep took files out from under the build"
+        )
 
     @pytest.mark.asyncio
-    async def test_without_the_guard_the_same_sweep_breaks_the_build(
-        self, volumes, tmp_path, monkeypatch
-    ):
+    async def test_without_the_guard_the_same_sweep_breaks_the_build(self, volumes, tmp_path, monkeypatch):
         """The negative control: this is the failure seen on nixlab2.
 
         Without it, the test above passes whether or not the guard works --
@@ -344,11 +316,7 @@ class TestTheRaceItself:
         with pytest.raises(BaseExceptionGroup) as caught:
             await self._build_against_sweep(volumes, src, BuildRegistry())
 
-        failures = [
-            error
-            for error in _flatten(caught.value)
-            if isinstance(error, HardlinkClosureError)
-        ]
+        failures = [error for error in _flatten(caught.value) if isinstance(error, HardlinkClosureError)]
         assert failures, f"expected a hardlink failure, got {caught.value!r}"
         logs = failures[0].logs
         assert f"source {src}" in logs and "exists=True" in logs, (

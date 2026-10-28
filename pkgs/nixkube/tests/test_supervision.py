@@ -61,9 +61,7 @@ class TestDetach:
             async with anyio.create_task_group() as tg:
                 detach(tg, _raises, name="nri_build")
 
-        failures = [
-            entry for entry in logs if entry["event"] == "background_task_failed"
-        ]
+        failures = [entry for entry in logs if entry["event"] == "background_task_failed"]
         assert len(failures) == 1
         assert failures[0]["task"] == "nri_build"
         assert failures[0]["log_level"] == "error"

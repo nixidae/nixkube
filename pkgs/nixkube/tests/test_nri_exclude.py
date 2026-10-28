@@ -34,9 +34,7 @@ class _Stream:
         self.sent.append(message)
 
 
-def _request(
-    annotations: dict[str, str], *, container: str = "appstarter-init"
-) -> CreateContainerRequest:
+def _request(annotations: dict[str, str], *, container: str = "appstarter-init") -> CreateContainerRequest:
     request = CreateContainerRequest()
     request.pod.namespace = "nixkube"
     request.pod.name = "pynixd-0"
@@ -61,12 +59,8 @@ async def _create(monkeypatch, request: CreateContainerRequest) -> _Stream:
 
 @pytest.mark.asyncio
 class TestTheExclusion:
-    async def test_an_excluded_container_is_answered_with_an_empty_adjustment(
-        self, monkeypatch
-    ) -> None:
-        stream = await _create(
-            monkeypatch, _request({"nixkube/appstarter-init-exclude": "true"})
-        )
+    async def test_an_excluded_container_is_answered_with_an_empty_adjustment(self, monkeypatch) -> None:
+        stream = await _create(monkeypatch, _request({"nixkube/appstarter-init-exclude": "true"}))
 
         assert len(stream.sent) == 1
         adjustment = stream.sent[0].adjust
@@ -84,9 +78,7 @@ class TestTheExclusion:
             lambda *args: called.append(args) or set(),
         )
 
-        await _create(
-            monkeypatch, _request({"nixkube/appstarter-init-exclude": "true"})
-        )
+        await _create(monkeypatch, _request({"nixkube/appstarter-init-exclude": "true"}))
 
         assert called == []
 

@@ -296,12 +296,8 @@ class TestWhichSideWasMissing:
                     await hardlink_closure({src}, dst_root)
 
         logs = caught.value.logs
-        assert f"source {src / 'file'} exists=True" in logs, (
-            "the store file is still there and the log must say so"
-        )
-        assert "parent" in logs and "exists=False" in logs, (
-            "the missing side is the target's parent directory"
-        )
+        assert f"source {src / 'file'} exists=True" in logs, "the store file is still there and the log must say so"
+        assert "parent" in logs and "exists=False" in logs, "the missing side is the target's parent directory"
 
 
 class TestAnInterruptedWalkIsNotMistakenForAFinishedOne:
@@ -352,9 +348,7 @@ class TestAnInterruptedWalkIsNotMistakenForAFinishedOne:
                     await started.wait()
                     tg.cancel_scope.cancel()
 
-            assert not os.path.lexists(dst / src.name), (
-                "a cancelled walk left a store path the next attempt will skip"
-            )
+            assert not os.path.lexists(dst / src.name), "a cancelled walk left a store path the next attempt will skip"
 
     @pytest.mark.asyncio
     async def test_it_leaves_nothing_of_its_own_behind(self):

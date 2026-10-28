@@ -66,9 +66,7 @@ def test_state_is_degraded_when_the_two_differ(tmp_path):
     assert state.degraded
 
 
-@pytest.mark.parametrize(
-    "content", ["", "not json", "{}", '{"wanted": "/nix/store/w"}']
-)
+@pytest.mark.parametrize("content", ["", "not json", "{}", '{"wanted": "/nix/store/w"}'])
 def test_unreadable_state_is_none_rather_than_an_error(tmp_path, content):
     """`run` starts what the store holds either way. Only the report is lost."""
     path = tmp_path / config.STATE_PATH

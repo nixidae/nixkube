@@ -78,15 +78,9 @@ def refusal(nix_rw: bool, store_mounts: dict[Path, Path] | None) -> str | None:
     if nix_rw:
         # The tree is hardlinks into the node's store. A writable share would
         # let the guest change store inodes on the node.
-        return (
-            "a writable /nix is not offered under a VM runtime: the tree is"
-            " hardlinks into the node's store."
-        )
+        return "a writable /nix is not offered under a VM runtime: the tree is hardlinks into the node's store."
     if store_mounts:
-        return (
-            "store path mounts are not offered under a VM runtime; mount the"
-            " store with a CSI volume instead."
-        )
+        return "store path mounts are not offered under a VM runtime; mount the store with a CSI volume instead."
     return None
 
 

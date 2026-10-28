@@ -173,9 +173,7 @@ class NodeServicer(csi_grpc.NodeBase):
     @csi_error_handler
     async def NodePublishVolume(
         self,
-        stream: Stream[
-            csi_pb2.NodePublishVolumeRequest, csi_pb2.NodePublishVolumeResponse
-        ],
+        stream: Stream[csi_pb2.NodePublishVolumeRequest, csi_pb2.NodePublishVolumeResponse],
     ) -> None:
         logger = structlog.get_logger("nixkube.csi.nodepublishvolume")
         start_time = time.perf_counter()
@@ -243,9 +241,7 @@ class NodeServicer(csi_grpc.NodeBase):
                 return
 
             # Validate that fetched pod matches the UID from volume context
-            assert pod.metadata.uid == pod_uid, (
-                f"Pod UID mismatch: {pod.metadata.uid} != {pod_uid}"
-            )
+            assert pod.metadata.uid == pod_uid, f"Pod UID mismatch: {pod.metadata.uid} != {pod_uid}"
 
             # If the pod is terminating, mounting makes no sense — it's going away.
             # Return success to break kubelet's retry loop; it will call
@@ -335,9 +331,7 @@ class NodeServicer(csi_grpc.NodeBase):
                     # source: a composefs mount's source is the image. It asks
                     # whether this target is still mounted instead.
                     (volume_root / TARGET_FILE).write_text(request.target_path)
-                    await composefs.mount(
-                        image, Path(request.target_path), request.readonly, volume_root
-                    )
+                    await composefs.mount(image, Path(request.target_path), request.readonly, volume_root)
                 elif shown is Presentation.REFUSED:
                     raise MountError(
                         "this node shares its host's store, where a volume can only be"
@@ -391,16 +385,12 @@ class NodeServicer(csi_grpc.NodeBase):
     @csi_error_handler
     async def NodeUnpublishVolume(
         self,
-        stream: Stream[
-            csi_pb2.NodeUnpublishVolumeRequest, csi_pb2.NodeUnpublishVolumeResponse
-        ],
+        stream: Stream[csi_pb2.NodeUnpublishVolumeRequest, csi_pb2.NodeUnpublishVolumeResponse],
     ) -> None:
         logger = structlog.get_logger("nixkube.csi.nodeunpublishvolume")
         request = await stream.recv_message()
         if request is None:
-            raise GRPCError(
-                Status.INVALID_ARGUMENT, "NodeUnpublishVolumeRequest is None"
-            )
+            raise GRPCError(Status.INVALID_ARGUMENT, "NodeUnpublishVolumeRequest is None")
 
         log = logger.bind(
             volume_id=request.volume_id,
@@ -443,9 +433,7 @@ class NodeServicer(csi_grpc.NodeBase):
             # NodeUnpublishVolume if needed, but we should not block cleanup of our own resources.
             try:
                 current_vol_data = target_path.parent / "vol_data.json"
-                active_handles = collect_active_volume_handles(
-                    exclude_vol_data_path=current_vol_data
-                )
+                active_handles = collect_active_volume_handles(exclude_vol_data_path=current_vol_data)
                 cleanup_stale_entries(active_handles)
             except Exception:
                 log.exception("stale_cleanup_failed")
@@ -475,21 +463,15 @@ class NodeServicer(csi_grpc.NodeBase):
     @csi_error_handler
     async def NodeGetCapabilities(
         self,
-        stream: Stream[
-            csi_pb2.NodeGetCapabilitiesRequest, csi_pb2.NodeGetCapabilitiesResponse
-        ],
+        stream: Stream[csi_pb2.NodeGetCapabilitiesRequest, csi_pb2.NodeGetCapabilitiesResponse],
     ) -> None:
         request = await stream.recv_message()
         if request is None:
-            raise GRPCError(
-                Status.INVALID_ARGUMENT, "NodeGetCapabilitiesRequest is None"
-            )
+            raise GRPCError(Status.INVALID_ARGUMENT, "NodeGetCapabilitiesRequest is None")
         await stream.send_message(csi_pb2.NodeGetCapabilitiesResponse(capabilities=[]))
 
     @csi_error_handler
-    async def NodeGetInfo(
-        self, stream: Stream[csi_pb2.NodeGetInfoRequest, csi_pb2.NodeGetInfoResponse]
-    ) -> None:
+    async def NodeGetInfo(self, stream: Stream[csi_pb2.NodeGetInfoRequest, csi_pb2.NodeGetInfoResponse]) -> None:
         request = await stream.recv_message()
         if request is None:
             raise GRPCError(Status.INVALID_ARGUMENT, "NodeGetInfoRequest is None")

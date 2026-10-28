@@ -309,9 +309,7 @@ class NriPlugin(NriPluginBase):
             )
 
         # Parse store mount annotations (nixkube/[container-name/]path), filtered by system
-        store_mounts = parse_store_mounts(
-            req.pod.annotations, req.container.name, system
-        )
+        store_mounts = parse_store_mounts(req.pod.annotations, req.container.name, system)
         if store_mounts:
             logger.info(
                 "parsed_store_mounts",
@@ -326,9 +324,7 @@ class NriPlugin(NriPluginBase):
             # Verify kernel supports new mount API for overlayfs (6.5+)
             if not kernel_supports_rw():
                 logger.error("nix_rw_kernel_unsupported")
-                raise RuntimeError(
-                    "RW overlay mounts not supported on this kernel (requires Linux 6.5+)"
-                )
+                raise RuntimeError("RW overlay mounts not supported on this kernel (requires Linux 6.5+)")
 
         adjust = nri_pb2.ContainerAdjustment()
 
@@ -354,9 +350,7 @@ class NriPlugin(NriPluginBase):
                 vm = is_vm_runtime(req.pod.runtime_handler, NRI_VM_RUNTIME_HANDLERS)
                 if vm:
                     if not NRI_VM_BUSYBOX:
-                        raise RuntimeError(
-                            "NRI_VM_BUSYBOX is not set, so a VM container cannot wait for its /nix"
-                        )
+                        raise RuntimeError("NRI_VM_BUSYBOX is not set, so a VM container cannot wait for its /nix")
                     tree = NRI_CONTAINERS / container_id / "nix"
                     await prepare_waiter(tree, NRI_VM_BUSYBOX)
                     source = host_source(tree, NODE_ROOT)
@@ -380,12 +374,8 @@ class NriPlugin(NriPluginBase):
                         "nri-wait binary not found on PATH, wait hook won't be able to execute"
                     )
                     coreutils_container = shutil.which("coreutils")
-                    assert coreutils_container is not None, (
-                        "coreutils not found on PATH"
-                    )
-                    coreutils_host = NODE_ROOT / Path(coreutils_container).relative_to(
-                        "/"
-                    )
+                    assert coreutils_container is not None, "coreutils not found on PATH"
+                    coreutils_host = NODE_ROOT / Path(coreutils_container).relative_to("/")
                     hook = nri_pb2.Hook(
                         path=str(coreutils_host),
                         args=[
@@ -499,9 +489,7 @@ class NriPlugin(NriPluginBase):
         # A long list comes in parts; `more` marks every part but the last.
         if req is not None and req.more:
             return
-        schedule_garbage_collection(
-            self.tasks, self.cri_socket, building=self.zmq_server.pending_builds
-        )
+        schedule_garbage_collection(self.tasks, self.cri_socket, building=self.zmq_server.pending_builds)
 
     async def _pump_build_progress(self, container_id: str, vm: bool) -> None:
         """Periodically publish build progress heartbeats to reset nri-wait timeout.
@@ -536,9 +524,7 @@ class NriPlugin(NriPluginBase):
         scope = anyio.CancelScope()
         self.zmq_server.pending_builds.attach(container_id, scope)
         with scope:
-            await self._run_build_task(
-                container_id, container_name, pod, store_paths, store_mounts, nix_rw, vm
-            )
+            await self._run_build_task(container_id, container_name, pod, store_paths, store_mounts, nix_rw, vm)
 
     async def _run_build_task(
         self,
@@ -558,9 +544,7 @@ class NriPlugin(NriPluginBase):
         that holds the NRI server, and one container's build failing is not a
         reason to take the plugin down.
         """
-        log = structlog.get_logger("nixkube.nri.buildtask").bind(
-            container_id=container_id
-        )
+        log = structlog.get_logger("nixkube.nri.buildtask").bind(container_id=container_id)
         log.info("build_task_started", count=len(store_paths), vm=vm)
         tree = NRI_CONTAINERS / container_id / "nix"
         started = time.monotonic()
@@ -583,13 +567,9 @@ class NriPlugin(NriPluginBase):
                 log.debug("progress_pump_started")
                 try:
                     if vm:
-                        await self._build_for_vm(
-                            log, container_id, store_paths, store_mounts, nix_rw
-                        )
+                        await self._build_for_vm(log, container_id, store_paths, store_mounts, nix_rw)
                     else:
-                        await self._build_and_mount(
-                            log, container_id, store_paths, store_mounts, nix_rw
-                        )
+                        await self._build_and_mount(log, container_id, store_paths, store_mounts, nix_rw)
                 finally:
                     pump.cancel_scope.cancel()
 
@@ -682,9 +662,7 @@ class NriPlugin(NriPluginBase):
         image = None
         if shown is Presentation.COMPOSEFS:
             # The image references its closure, so this out-link roots both.
-            built = await composefs.build_image(
-                store_paths, None, volume_path / "composefs", extra_args
-            )
+            built = await composefs.build_image(store_paths, None, volume_path / "composefs", extra_args)
             image = built / composefs.IMAGE
         else:
             # A farm binds the closure in the mount worker and leaves nothing
@@ -711,9 +689,7 @@ class NriPlugin(NriPluginBase):
         pid_info = container_info[0] if container_info else None
         log.debug("pid_bundle_received", pid=pid_info)
         if container_info is None:
-            raise RuntimeError(
-                f"No PID/bundle received for container={container_id!r}, cannot mount /nix"
-            )
+            raise RuntimeError(f"No PID/bundle received for container={container_id!r}, cannot mount /nix")
         pid, bundle = container_info
 
         rootfs = await reachable_rootfs(pid, bundle)
@@ -744,9 +720,7 @@ class NriPlugin(NriPluginBase):
             farm=len(farm_paths) if farm_paths else 0,
             composefs=image is not None,
         )
-        await mount_in_container(
-            pid, rootfs, nix_tree_path, mounts, nix_rw, farm_paths, image
-        )
+        await mount_in_container(pid, rootfs, nix_tree_path, mounts, nix_rw, farm_paths, image)
 
     async def _build_for_vm(
         self,
@@ -875,9 +849,7 @@ async def nri_serve() -> None:
         )
 
         tasks.start_soon(zmq_server.start_request_handler, name="zmq-rep")
-        tasks.start_soon(
-            sweep_loop, cri_socket, zmq_server.pending_builds, name="nri-sweep"
-        )
+        tasks.start_soon(sweep_loop, cri_socket, zmq_server.pending_builds, name="nri-sweep")
 
         try:
             # Start server (handles reconnection with exponential backoff internally)

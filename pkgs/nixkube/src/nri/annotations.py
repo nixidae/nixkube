@@ -14,9 +14,7 @@ from ..store import extract_store_paths
 Annotations = Mapping[str, str]
 
 
-def _iter_annotations(
-    annotations: Annotations, target: str, system: str
-) -> Iterator[str]:
+def _iter_annotations(annotations: Annotations, target: str, system: str) -> Iterator[str]:
     """Yield annotation values for nixkube/{target}(@{system})?(-{index})? annotations.
 
     Annotations without @system apply to all systems. System-qualified annotations
@@ -29,9 +27,7 @@ def _iter_annotations(
     return (value for key, value in annotations.items() if pattern.fullmatch(key))
 
 
-def extract_container_store_paths(
-    req: nri_pb2.CreateContainerRequest, system: str
-) -> set[Path]:
+def extract_container_store_paths(req: nri_pb2.CreateContainerRequest, system: str) -> set[Path]:
     """Extract Nix store paths from an NRI CreateContainerRequest.
 
     Scans container env, args, and pod annotations with nixkube/pod or
@@ -43,14 +39,10 @@ def extract_container_store_paths(
         *_iter_annotations(req.pod.annotations, "pod", system),
         *_iter_annotations(req.pod.annotations, req.container.name, system),
     ]
-    return extract_store_paths(
-        [*req.container.env, *req.container.args, *annotation_values]
-    )
+    return extract_store_paths([*req.container.env, *req.container.args, *annotation_values])
 
 
-def _parse_store_mounts_for_name(
-    pod_annotations: Annotations, target_name: str, system: str
-) -> dict[Path, Path]:
+def _parse_store_mounts_for_name(pod_annotations: Annotations, target_name: str, system: str) -> dict[Path, Path]:
     """
     Parse store mount annotations matching a specific name (container name or "pod" for wildcard).
 
@@ -77,9 +69,7 @@ def _parse_store_mounts_for_name(
     }
 
 
-def parse_nix_rw(
-    pod_annotations: Annotations, container_name: str, system: str
-) -> bool:
+def parse_nix_rw(pod_annotations: Annotations, container_name: str, system: str) -> bool:
     """Return True if this container should get a read-write /nix overlayfs.
 
     Container-specific annotation takes precedence over the pod-wide default,
@@ -93,19 +83,13 @@ def parse_nix_rw(
       nixkube/{container-name}-rw: "true"   — only this container gets RW /nix
       nixkube/{container-name}-rw@aarch64-linux: "false" — this container stays RO on aarch64
     """
-    container_values = list(
-        _iter_annotations(pod_annotations, f"{container_name}-rw", system)
-    )
+    container_values = list(_iter_annotations(pod_annotations, f"{container_name}-rw", system))
     if container_values:
         return any(v == "true" for v in container_values)
-    return any(
-        v == "true" for v in _iter_annotations(pod_annotations, "pod-rw", system)
-    )
+    return any(v == "true" for v in _iter_annotations(pod_annotations, "pod-rw", system))
 
 
-def parse_nix_exclude(
-    pod_annotations: Annotations, container_name: str, system: str
-) -> bool:
+def parse_nix_exclude(pod_annotations: Annotations, container_name: str, system: str) -> bool:
     """Return True if this container wants no injection at all.
 
     **For a container that brings its own store.** `CreateContainer` already
@@ -129,19 +113,13 @@ def parse_nix_exclude(
       nixkube/{container-name}-exclude: "true"     — only this one is left alone
       nixkube/{container-name}-exclude@x86_64-linux: "false" — back in, on x86_64
     """
-    container_values = list(
-        _iter_annotations(pod_annotations, f"{container_name}-exclude", system)
-    )
+    container_values = list(_iter_annotations(pod_annotations, f"{container_name}-exclude", system))
     if container_values:
         return any(v == "true" for v in container_values)
-    return any(
-        v == "true" for v in _iter_annotations(pod_annotations, "pod-exclude", system)
-    )
+    return any(v == "true" for v in _iter_annotations(pod_annotations, "pod-exclude", system))
 
 
-def parse_store_mounts(
-    pod_annotations: Annotations, container_name: str, system: str
-) -> dict[Path, Path]:
+def parse_store_mounts(pod_annotations: Annotations, container_name: str, system: str) -> dict[Path, Path]:
     """
     Parse store mount annotations from pod metadata with system filtering.
 

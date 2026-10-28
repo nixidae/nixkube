@@ -49,9 +49,7 @@ def test_the_waiter_runs_first_and_the_args_follow():
 
 def test_the_mount_source_is_the_nodes_path():
     tree = Path("/nix/var/nix-csi/containers/abc/nix")
-    assert host_source(tree, Path("/var/lib/nix-csi")) == Path(
-        "/var/lib/nix-csi/nix/var/nix-csi/containers/abc/nix"
-    )
+    assert host_source(tree, Path("/var/lib/nix-csi")) == Path("/var/lib/nix-csi/nix/var/nix-csi/containers/abc/nix")
 
 
 def test_a_writable_nix_is_refused_with_the_reason():

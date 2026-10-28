@@ -53,9 +53,7 @@ async def get_cri_socket() -> Path:
             endpoint = config.get("kubeletconfig", {}).get("containerRuntimeEndpoint")
 
             if not endpoint:
-                raise RuntimeError(
-                    "containerRuntimeEndpoint not found in kubelet configz"
-                )
+                raise RuntimeError("containerRuntimeEndpoint not found in kubelet configz")
 
             # Strip unix:// prefix if present
             endpoint = endpoint.removeprefix("unix://")
@@ -66,9 +64,7 @@ async def get_cri_socket() -> Path:
     except RuntimeError:
         raise
     except Exception as e:
-        raise RuntimeError(
-            f"Failed to query kubelet configz for node {node_name}: {e}"
-        ) from e
+        raise RuntimeError(f"Failed to query kubelet configz for node {node_name}: {e}") from e
 
 
 async def list_container_ids(cri_socket: Path) -> set[str]:
@@ -96,12 +92,7 @@ async def list_container_ids(cri_socket: Path) -> set[str]:
                 response = await stub.ListContainers(request)
                 return {container.id for container in response.containers}
     except Exception as e:
-        raise RuntimeError(
-            f"Failed to list containers from CRI socket {cri_socket}: {e}"
-        ) from e
+        raise RuntimeError(f"Failed to list containers from CRI socket {cri_socket}: {e}") from e
 
     # The only way past that block without returning is the deadline.
-    raise RuntimeError(
-        f"CRI socket {cri_socket} did not answer ListContainers within "
-        f"{CRI_LIST_TIMEOUT_SECONDS}s"
-    )
+    raise RuntimeError(f"CRI socket {cri_socket} did not answer ListContainers within {CRI_LIST_TIMEOUT_SECONDS}s")

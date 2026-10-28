@@ -51,9 +51,7 @@ def test_each_failure_grows_the_delay():
         m._record_failure(SYSTEM, f"job-{expected}", reason="JobFailed")
         assert m._failures[SYSTEM] == expected
     # The third failure holds the system back for four base intervals.
-    assert m._backoff_remaining(SYSTEM) == pytest.approx(
-        _BACKOFF_BASE_SECONDS * 4, abs=1.0
-    )
+    assert m._backoff_remaining(SYSTEM) == pytest.approx(_BACKOFF_BASE_SECONDS * 4, abs=1.0)
 
 
 def test_one_job_counts_once():
@@ -106,9 +104,7 @@ def test_pod_is_ready_reads_the_condition():
     assert not _pod_is_ready({"podIP": "10.0.0.1"})
     assert not _pod_is_ready({})
     assert not _pod_is_ready({"conditions": None})
-    assert not _pod_is_ready(
-        {"conditions": [{"type": "PodScheduled", "status": "True"}]}
-    )
+    assert not _pod_is_ready({"conditions": [{"type": "PodScheduled", "status": "True"}]})
 
 
 def test_job_age_prefers_start_time():
@@ -142,9 +138,7 @@ NOW = datetime(2026, 9, 10, 12, 0, 0, tzinfo=UTC)
 
 def test_a_young_builder_is_left_alone():
     m = manager(startup_timeout=600.0)
-    assert not m._startup_expired(
-        job_raw("2026-09-10T11:55:00Z"), "job-a", "Pending", NOW
-    )
+    assert not m._startup_expired(job_raw("2026-09-10T11:55:00Z"), "job-a", "Pending", NOW)
 
 
 def test_a_pod_that_never_left_pending_expires():
@@ -166,26 +160,20 @@ def test_a_running_builder_never_expires():
     from the API server, so it survives a restart of this process.
     """
     m = manager(startup_timeout=600.0)
-    assert not m._startup_expired(
-        job_raw("2026-09-10T08:00:00Z"), "job-a", "Running", NOW
-    )
+    assert not m._startup_expired(job_raw("2026-09-10T08:00:00Z"), "job-a", "Running", NOW)
 
 
 def test_a_running_builder_with_a_flaking_probe_never_expires():
     """The restart case. `_ever_ready` is empty and the builder is four hours old."""
     m = manager(startup_timeout=600.0)
     assert not m._ever_ready
-    assert not m._startup_expired(
-        job_raw("2026-09-10T08:00:00Z"), "job-a", "Running", NOW
-    )
+    assert not m._startup_expired(job_raw("2026-09-10T08:00:00Z"), "job-a", "Running", NOW)
 
 
 def test_a_builder_seen_ready_never_expires():
     m = manager(startup_timeout=600.0)
     m._ever_ready.add("job-a")
-    assert not m._startup_expired(
-        job_raw("2026-09-10T08:00:00Z"), "job-a", "Pending", NOW
-    )
+    assert not m._startup_expired(job_raw("2026-09-10T08:00:00Z"), "job-a", "Pending", NOW)
 
 
 def test_an_expired_builder_is_not_acted_on_twice():
@@ -365,9 +353,9 @@ async def test_a_probe_waits_the_builder_budget_then_gives_up(monkeypatch):
     # pass -- both keys can coexist and `nodeName` wins.
     probe_spec = created[0]["spec"]["template"]["spec"]
     assert "nodeName" not in probe_spec
-    terms = probe_spec["affinity"]["nodeAffinity"][
-        "requiredDuringSchedulingIgnoredDuringExecution"
-    ]["nodeSelectorTerms"]
+    terms = probe_spec["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
+        "nodeSelectorTerms"
+    ]
     assert terms == [
         {
             "matchExpressions": [

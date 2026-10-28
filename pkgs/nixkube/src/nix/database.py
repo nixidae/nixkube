@@ -37,9 +37,7 @@ async def pipe_commands(
     read_fd, write_fd = os.pipe()
     try:
         with anyio.move_on_after(timeout) as scope:
-            async with await anyio.open_process(
-                list(producer), stdout=write_fd, stderr=None
-            ) as upstream:
+            async with await anyio.open_process(list(producer), stdout=write_fd, stderr=None) as upstream:
                 os.close(write_fd)
                 write_fd = -1
                 async with await anyio.open_process(
@@ -93,6 +91,4 @@ async def init_database(state_dir: Path, store_paths: set[Path]) -> None:
             logs=str(e),
         ) from e
 
-    logger.debug(
-        "nix_database_initialized", state_dir=str(state_dir), count=len(store_paths)
-    )
+    logger.debug("nix_database_initialized", state_dir=str(state_dir), count=len(store_paths))

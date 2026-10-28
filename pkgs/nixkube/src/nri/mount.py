@@ -223,14 +223,10 @@ def _move_mount(libc: ctypes.CDLL, from_fd: int, to_path: Path) -> None:
     )
     if ret < 0:
         errno = ctypes.get_errno()
-        raise OSError(
-            errno, f"move_mount(fd={from_fd} → {to_path!r}): {os.strerror(errno)}"
-        )
+        raise OSError(errno, f"move_mount(fd={from_fd} → {to_path!r}): {os.strerror(errno)}")
 
 
-def _make_overlay_fd(
-    libc: ctypes.CDLL, lowerdir: Path, upperdir: Path, workdir: Path
-) -> int:
+def _make_overlay_fd(libc: ctypes.CDLL, lowerdir: Path, upperdir: Path, workdir: Path) -> int:
     """Build a detached RW overlayfs mount fd via fsopen/fsconfig/fsmount.
 
     Paths are resolved in the caller's namespace (daemonset), so this must be
@@ -264,9 +260,7 @@ def _make_overlay_fd(
             )
             if ret < 0:
                 errno = ctypes.get_errno()
-                raise OSError(
-                    errno, f"fsconfig({key!r}={path!r}): {os.strerror(errno)}"
-                )
+                raise OSError(errno, f"fsconfig({key!r}={path!r}): {os.strerror(errno)}")
 
         ret = libc.syscall(
             ctypes.c_long(_NR_FSCONFIG),
@@ -405,9 +399,7 @@ def _mount_worker(
                 if farm_paths:
                     set_readonly("/nix", recursive=True)
                 else:
-                    ret = libc.mount(
-                        None, b"/nix", None, MS_BIND | MS_REMOUNT | MS_RDONLY, None
-                    )
+                    ret = libc.mount(None, b"/nix", None, MS_BIND | MS_REMOUNT | MS_RDONLY, None)
                     if ret != 0:
                         errno = ctypes.get_errno()
                         raise OSError(errno, f"remount /nix RO: {os.strerror(errno)}")
@@ -498,10 +490,7 @@ async def mount_in_container(
         # The worker died without answering: OOM-killed, or a segfault in
         # setns. `exitcode` is negative for a signal. Without this the
         # caller sees a bare `Empty` and nothing about the process.
-        raise RuntimeError(
-            f"mount worker for pid {container_pid} left no result "
-            f"(exit code {proc.exitcode})"
-        ) from None
+        raise RuntimeError(f"mount worker for pid {container_pid} left no result (exit code {proc.exitcode})") from None
     if isinstance(result, Exception):
         logger.error("worker_spawn_failed", exc_info=result)
         raise result

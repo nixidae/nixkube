@@ -58,11 +58,7 @@ class Located:
 
 def unsafe(path: str) -> bool:
     """Paths this must never delete, whatever the option says."""
-    return (
-        not path.startswith("/")
-        or path.rstrip("/") in ("", "/nix")
-        or path.startswith("/nix/")
-    )
+    return not path.startswith("/") or path.rstrip("/") in ("", "/nix") or path.startswith("/nix/")
 
 
 def locate(path: str, mountinfo: str) -> Located | None:
@@ -90,9 +86,7 @@ def users(old: Located, mountinfos: Iterable[str]) -> list[str]:
         for line in mountinfo.splitlines():
             fields = line.split()
             root = unescape(fields[3])
-            if fields[2] == old.device and (
-                root == old.root or root.startswith(old.root + "/")
-            ):
+            if fields[2] == old.device and (root == old.root or root.startswith(old.root + "/")):
                 found.append(unescape(fields[4]))
     return found
 
@@ -156,9 +150,7 @@ async def retire_loop() -> None:
         if held is None:
             logger.warning("old_store_not_located", path=host_path)
         elif held:
-            logger.info(
-                "old_store_in_use", path=host_path, mounts=len(held), first=held[0]
-            )
+            logger.info("old_store_in_use", path=host_path, mounts=len(held), first=held[0])
         else:
             await anyio.to_thread.run_sync(shutil.rmtree, old)
             OLD_STORE_BYTES.set(0)

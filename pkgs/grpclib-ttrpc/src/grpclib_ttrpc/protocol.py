@@ -182,9 +182,7 @@ class TtrpcProtocol(asyncio.Protocol):
 
     def _try_parse_frames(self) -> None:
         while len(self._buf) >= HEADER_SIZE:
-            length, stream_id, msg_type, flags = struct.unpack_from(
-                _HEADER_FMT, self._buf, 0
-            )
+            length, stream_id, msg_type, flags = struct.unpack_from(_HEADER_FMT, self._buf, 0)
             if length > MAX_PAYLOAD:
                 log.warning("payload_too_large", bytes=length)
                 if self._transport:

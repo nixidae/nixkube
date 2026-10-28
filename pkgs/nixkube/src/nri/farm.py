@@ -173,8 +173,7 @@ def build_farm(store_dir: Path, store_paths: Iterable[Path]) -> int:
     if not budget.fits:
         raise FarmError(
             errno.ENOSPC,
-            f"{len(store_paths)} mounts will not fit: this namespace holds "
-            f"{budget.used} of {budget.limit}",
+            f"{len(store_paths)} mounts will not fit: this namespace holds {budget.used} of {budget.limit}",
         )
     place(store_dir, store_paths)
     return bind(store_dir, store_paths)

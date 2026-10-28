@@ -46,9 +46,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    native = args.native or run(
-        "nix", "eval", "--impure", "--raw", "--expr", "builtins.currentSystem"
-    )
+    native = args.native or run("nix", "eval", "--impure", "--raw", "--expr", "builtins.currentSystem")
     print(f"native system: {native}")
 
     failed = False
@@ -59,11 +57,7 @@ def main() -> int:
             print(f"  ERROR   {attr}: {exc}", file=sys.stderr)
             failed = True
             continue
-        foreign = {
-            system: n
-            for system, n in counts.items()
-            if system != native and system not in PORTABLE
-        }
+        foreign = {system: n for system, n in counts.items() if system != native and system not in PORTABLE}
         if foreign:
             detail = ", ".join(f"{s}={n}" for s, n in sorted(foreign.items()))
             print(f"  FOREIGN {attr} -> {detail}", file=sys.stderr)

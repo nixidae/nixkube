@@ -47,14 +47,10 @@ class StoreError(RuntimeError):
 
 def _run(*args: str, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
     log.debug("running %s", " ".join(args))
-    return subprocess.run(
-        args, capture_output=True, text=True, check=False, timeout=timeout
-    )
+    return subprocess.run(args, capture_output=True, text=True, check=False, timeout=timeout)
 
 
-def _run_streaming(
-    *args: str, timeout: float | None = None
-) -> subprocess.CompletedProcess[str]:
+def _run_streaming(*args: str, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
     """Run *args*, copying its stderr to ours as it arrives, and keeping it.
 
     **Capturing hides a fetch completely.** Nix writes its progress and its
@@ -74,9 +70,7 @@ def _run_streaming(
     """
     log.debug("running %s", " ".join(args))
     tail: deque[str] = deque(maxlen=_TAIL_LINES)
-    with subprocess.Popen(
-        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    ) as proc:
+    with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
         assert proc.stderr is not None
         for line in proc.stderr:
             sys.stderr.write(line)
@@ -88,18 +82,13 @@ def _run_streaming(
             proc.kill()
             proc.wait()
             raise
-    return subprocess.CompletedProcess(
-        args, proc.returncode, stdout or "", "".join(tail)
-    )
+    return subprocess.CompletedProcess(args, proc.returncode, stdout or "", "".join(tail))
 
 
 def ping(store: str, timeout: float = 30.0) -> bool:
     """Whether `store` answers a `nix store ping`."""
     try:
-        return (
-            _run("nix", "store", "ping", "--store", store, timeout=timeout).returncode
-            == 0
-        )
+        return _run("nix", "store", "ping", "--store", store, timeout=timeout).returncode == 0
     except subprocess.TimeoutExpired:
         log.warning("%s did not answer a ping within %.0fs", store, timeout)
         return False
@@ -115,16 +104,12 @@ def build(target: str, into: Path, substituters: list[str], out_link: Path) -> N
     try:
         result = _build(target, into, substituters, out_link)
     except subprocess.TimeoutExpired:
-        raise StoreError(
-            f"cannot get {target}: nothing answered within {BUILD_TIMEOUT:.0f}s"
-        ) from None
+        raise StoreError(f"cannot get {target}: nothing answered within {BUILD_TIMEOUT:.0f}s") from None
     if result.returncode != 0:
         raise StoreError(f"cannot get {target}: {result.stderr.strip()}")
 
 
-def _build(
-    target: str, into: Path, substituters: list[str], out_link: Path
-) -> subprocess.CompletedProcess[str]:
+def _build(target: str, into: Path, substituters: list[str], out_link: Path) -> subprocess.CompletedProcess[str]:
     return _run_streaming(
         "nix",
         "build",
@@ -211,9 +196,7 @@ def verify(target: str, into: Path) -> None:
     if result.returncode != 0:
         raise StoreError(f"cannot list {target}: {result.stderr.strip()}")
 
-    missing = [
-        path for path in result.stdout.split() if not os.path.lexists(f"{into}{path}")
-    ]
+    missing = [path for path in result.stdout.split() if not os.path.lexists(f"{into}{path}")]
     if missing:
         for path in missing:
             log.error("registered and absent: %s", path)

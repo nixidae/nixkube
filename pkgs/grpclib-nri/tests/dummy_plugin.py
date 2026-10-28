@@ -20,9 +20,7 @@ class DummyPlugin(nri_grpc.PluginBase):
         self.logger.debug("configure_called")
         req = await stream.recv_message()
         assert req is not None
-        self.logger.info(
-            "configure", runtime=req.runtime_name, version=req.runtime_version
-        )
+        self.logger.info("configure", runtime=req.runtime_name, version=req.runtime_version)
         self.configure_called = True
         # Subscribe to all events using the same bit position formula as server.py:
         # bit_position = (event_value - 1), so sum for events 1..LAST
@@ -34,9 +32,7 @@ class DummyPlugin(nri_grpc.PluginBase):
         self.logger.debug("synchronize_called")
         req = await stream.recv_message()
         assert req is not None
-        self.logger.info(
-            "synchronize", pods=len(req.pods), containers=len(req.containers)
-        )
+        self.logger.info("synchronize", pods=len(req.pods), containers=len(req.containers))
         self.synchronize_called = True
         await stream.send_message(nri_pb2.SynchronizeResponse())
 

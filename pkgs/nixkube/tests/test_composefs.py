@@ -31,9 +31,7 @@ def store(tmp_path: Path) -> Path:
     return store
 
 
-def dump(
-    store: Path, primary: str | None = "bbb-app", db: bool = True
-) -> list[list[str]]:
+def dump(store: Path, primary: str | None = "bbb-app", db: bool = True) -> list[list[str]]:
     out = io.StringIO()
     volume(
         out,

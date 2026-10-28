@@ -31,9 +31,7 @@ async def test_plugin_configure_called(nri_server: NriServer) -> None:
     logger.info("configure_called", value=plugin.configure_called)
 
     # Configure should have been called during the handshake
-    assert plugin.configure_called, (
-        "Configure handler was not called during registration"
-    )
+    assert plugin.configure_called, "Configure handler was not called during registration"
 
 
 @pytest.mark.asyncio

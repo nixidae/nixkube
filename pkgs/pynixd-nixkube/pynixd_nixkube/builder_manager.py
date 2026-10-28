@@ -100,9 +100,7 @@ def _job_age_seconds(job_raw: dict, now: datetime) -> float | None:
     controller has written a status. Read from the object, not from a local
     dict, so the age survives a pynixd restart.
     """
-    raw = job_raw.get("status", {}).get("startTime") or job_raw.get("metadata", {}).get(
-        "creationTimestamp"
-    )
+    raw = job_raw.get("status", {}).get("startTime") or job_raw.get("metadata", {}).get("creationTimestamp")
     if not raw:
         return None
     try:
@@ -126,9 +124,7 @@ class RecycleView:
     busy: bool
 
 
-def plan_recycle(
-    builders: list[RecycleView], min_builders: int
-) -> tuple[list[str], list[str]]:
+def plan_recycle(builders: list[RecycleView], min_builders: int) -> tuple[list[str], list[str]]:
     """Which aged builders to drain, and which drained ones to retire.
 
     An aged builder drains only once a fresh builder of its system is Ready,
@@ -140,11 +136,7 @@ def plan_recycle(
     of a busy one makes `remove_store` cancel its builds after 300 seconds.
     """
     fresh = {b.system for b in builders if b.ready and not b.aged and not b.draining}
-    drain = [
-        b.store_id
-        for b in builders
-        if b.aged and not b.draining and (min_builders == 0 or b.system in fresh)
-    ]
+    drain = [b.store_id for b in builders if b.aged and not b.draining and (min_builders == 0 or b.system in fresh)]
     retire = [b.store_id for b in builders if b.draining and not b.busy]
     return drain, retire
 
@@ -159,8 +151,7 @@ def pending_systems(builds: Iterable[QueuedBuild], available: set[str]) -> set[s
     return {
         platform
         for build in builds
-        if build.is_pending
-        and (platform := build.request.derivation.platform) in available
+        if build.is_pending and (platform := build.request.derivation.platform) in available
     }
 
 
@@ -344,9 +335,7 @@ class BuilderManager:
             return 0.0
         return max(0.0, until - time.monotonic())
 
-    def _record_failure(
-        self, system: str, job_name: str, reason: str, node: str | None = None
-    ) -> None:
+    def _record_failure(self, system: str, job_name: str, reason: str, node: str | None = None) -> None:
         """Count one failed builder and hold that system back.
 
         `_ensure_min_builders` counts a Job as active only while it is neither
@@ -406,9 +395,7 @@ class BuilderManager:
 
     # ---- Startup watchdog ----
 
-    def _startup_expired(
-        self, job_raw: dict, job_name: str, phase: str | None, now: datetime
-    ) -> bool:
+    def _startup_expired(self, job_raw: dict, job_name: str, phase: str | None, now: datetime) -> bool:
         """True when a builder that never started has had long enough.
 
         Not `activeDeadlineSeconds`. That field measures the whole life of a
@@ -465,9 +452,7 @@ class BuilderManager:
             age_seconds=round(age or 0.0, 1),
             startup_timeout=self.startup_timeout,
         )
-        await self._report_job_event(
-            job, EVENT_REASON_STARTUP_TIMEOUT, note, event_type="Warning"
-        )
+        await self._report_job_event(job, EVENT_REASON_STARTUP_TIMEOUT, note, event_type="Warning")
         self._record_failure(system, job_name, reason="StartupTimeout", node=pod.node)
         store_id = f"builder-{job_name}"
         if store_id in self._registered:
@@ -475,9 +460,7 @@ class BuilderManager:
         await self._delete_job(job)
         return True
 
-    async def _report_job_event(
-        self, job: Any, reason: str, note: str, event_type: str = "Normal"
-    ) -> None:
+    async def _report_job_event(self, job: Any, reason: str, note: str, event_type: str = "Normal") -> None:
         """Report a Kubernetes event against a builder Job.
 
         An operator looks at events first. The symptom this watchdog acts on
@@ -513,9 +496,7 @@ class BuilderManager:
             )
             await event.create()
         except Exception:
-            log.warning(
-                "builder_event_report_failed", job=job.metadata.name, exc_info=True
-            )
+            log.warning("builder_event_report_failed", job=job.metadata.name, exc_info=True)
 
     # ---- Node probing ----
 
@@ -594,10 +575,7 @@ class BuilderManager:
                     node_name = getattr(resource.metadata, "name", "")
                     if not node_name or node_name in self._pending_probes:
                         continue
-                    drivers = {
-                        d.get("name")
-                        for d in (resource.raw.get("spec", {}).get("drivers") or [])
-                    }
+                    drivers = {d.get("name") for d in (resource.raw.get("spec", {}).get("drivers") or [])}
                     if CSI_DRIVER_NAME not in drivers:
                         continue
                     node = await self._get_node(node_name)
@@ -609,9 +587,7 @@ class BuilderManager:
                     kube_arch = labels.get("kubernetes.io/arch", "")
                     nix_system = KUBE_ARCH_TO_NIX_SYSTEM.get(kube_arch)
                     if not nix_system or nix_system not in set(self.systems):
-                        log.warning(
-                            "probe_node_unsupported", node=node_name, arch=kube_arch
-                        )
+                        log.warning("probe_node_unsupported", node=node_name, arch=kube_arch)
                         continue
                     self._pending_probes.add(node_name)
                     self._detach(
@@ -687,9 +663,7 @@ class BuilderManager:
                     },
                 },
             }
-            job_name = await self._create_builder_job(
-                system=system, overrides=overrides
-            )
+            job_name = await self._create_builder_job(system=system, overrides=overrides)
             if not job_name:
                 return
 
@@ -759,9 +733,7 @@ class BuilderManager:
 
         await self._reconcile_systems()
 
-    async def _label_node(
-        self, node_name: str, system: str, features: dict[str, set[str]]
-    ) -> None:
+    async def _label_node(self, node_name: str, system: str, features: dict[str, set[str]]) -> None:
         """Store probe results on the node as labels and a features annotation."""
         all_feats = sorted({f for feats in features.values() for f in feats})
         try:
@@ -949,9 +921,7 @@ class BuilderManager:
                 and job_name not in self._counted_failures
             ):
                 failed_on = (await self._get_job_pod_state(job)).node
-                self._record_failure(
-                    system, job_name, reason="JobFailed", node=failed_on
-                )
+                self._record_failure(system, job_name, reason="JobFailed", node=failed_on)
             if store_id in self._registered:
                 await self._unregister_builder(store_id)
             return
@@ -979,9 +949,7 @@ class BuilderManager:
             self._store_systems[store_id] = system
 
     @staticmethod
-    def _builder_store_spec(
-        store_id: str, pod_ip: str, probe: bool = False
-    ) -> SSHSubprocessStoreSpec:
+    def _builder_store_spec(store_id: str, pod_ip: str, probe: bool = False) -> SSHSubprocessStoreSpec:
         """The store spec for one builder Pod.
 
         `known_hosts` has no default in pynixd, on purpose: a build store sees
@@ -1014,9 +982,7 @@ class BuilderManager:
             no_schedule=probe,
         )
 
-    async def _register_builder(
-        self, store_id: str, pod_ip: str, job_name: str = "", probe: bool = False
-    ) -> None:
+    async def _register_builder(self, store_id: str, pod_ip: str, job_name: str = "", probe: bool = False) -> None:
         store = SSHSubprocessStore(self._builder_store_spec(store_id, pod_ip, probe))
         try:
             await self.server.add_store(store, dynamic=True)
@@ -1048,13 +1014,7 @@ class BuilderManager:
 
     @staticmethod
     def _get_job_store_versions(job: Any) -> set[str]:
-        for vol in (
-            getattr(job, "raw", {})
-            .get("spec", {})
-            .get("template", {})
-            .get("spec", {})
-            .get("volumes", [])
-        ):
+        for vol in getattr(job, "raw", {}).get("spec", {}).get("template", {}).get("spec", {}).get("volumes", []):
             csi = vol.get("csi", {})
             if csi.get("driver") == "nixkube" and csi.get("readOnly") is False:
                 found = set()
@@ -1066,9 +1026,7 @@ class BuilderManager:
 
     async def _get_expected_store_versions(self) -> set[str]:
         try:
-            template = await PodTemplate.get(
-                BUILDER_PODTEMPLATE_NAME, namespace=self.namespace
-            )
+            template = await PodTemplate.get(BUILDER_PODTEMPLATE_NAME, namespace=self.namespace)
         except Exception:
             log.exception("builder_podtemplate_get_failed")
             return set()
@@ -1231,9 +1189,7 @@ class BuilderManager:
             )
             return
 
-        log.info(
-            "creating_builder_job", active=active, max=self.max_builders, system=system
-        )
+        log.info("creating_builder_job", active=active, max=self.max_builders, system=system)
         await self._create_builder_job(system=system)
         self._last_create_time[system] = now
 
@@ -1251,10 +1207,7 @@ class BuilderManager:
         scheduler = self.server.scheduler
         if scheduler is None:
             return False
-        return any(
-            build.assigned_store_id == store.store_id and not build.is_done
-            for build in scheduler.queue.queue
-        )
+        return any(build.assigned_store_id == store.store_id and not build.is_done for build in scheduler.queue.queue)
 
     async def _recycle_aged(self) -> None:
         """Drain each aged builder once its replacement is Ready, then retire it."""
@@ -1300,11 +1253,7 @@ class BuilderManager:
         """
         while True:
             try:
-                fresh = [
-                    s
-                    for s in self._store_systems
-                    if s in self._registered and not self._is_aged_store(s)
-                ]
+                fresh = [s for s in self._store_systems if s in self._registered and not self._is_aged_store(s)]
                 remaining = len(fresh)
                 now = time.monotonic()
                 for store_id in fresh:
@@ -1379,9 +1328,7 @@ class BuilderManager:
 
         while True:
             try:
-                needed_systems = pending_systems(
-                    scheduler.queue.queue, self._available_systems
-                )
+                needed_systems = pending_systems(scheduler.queue.queue, self._available_systems)
 
                 if not needed_systems:
                     await anyio.sleep(5)
@@ -1389,23 +1336,14 @@ class BuilderManager:
 
                 active_per_system: dict[str, int] = {}
                 for s in self.server.stores.values():
-                    if (
-                        s.store_id.startswith("builder-")
-                        and s.is_healthy
-                        and not s.draining
-                        and not s.no_schedule
-                    ):
+                    if s.store_id.startswith("builder-") and s.is_healthy and not s.draining and not s.no_schedule:
                         fm = s.feature_matrix
                         if fm:
                             for system in fm:
-                                active_per_system[system] = (
-                                    active_per_system.get(system, 0) + 1
-                                )
+                                active_per_system[system] = active_per_system.get(system, 0) + 1
                         else:
                             for system in self._available_systems:
-                                active_per_system[system] = (
-                                    active_per_system.get(system, 0) + 1
-                                )
+                                active_per_system[system] = active_per_system.get(system, 0) + 1
 
                 for system in sorted(needed_systems):
                     if active_per_system.get(system, 0) == 0:
@@ -1417,9 +1355,7 @@ class BuilderManager:
 
     # ---- Job creation ----
 
-    def _build_job_resource(
-        self, system: str, pod_spec: dict, overrides: dict | None = None
-    ) -> dict:
+    def _build_job_resource(self, system: str, pod_spec: dict, overrides: dict | None = None) -> dict:
         """The Job a builder is created from.
 
         `activeDeadlineSeconds` is deliberately absent. It measures a Job's
@@ -1458,13 +1394,9 @@ class BuilderManager:
             job_resource = deep_merge(job_resource, overrides)
         return job_resource
 
-    async def _create_builder_job(
-        self, system: str, overrides: dict | None = None
-    ) -> str | None:
+    async def _create_builder_job(self, system: str, overrides: dict | None = None) -> str | None:
         try:
-            template = await PodTemplate.get(
-                BUILDER_PODTEMPLATE_NAME, namespace=self.namespace
-            )
+            template = await PodTemplate.get(BUILDER_PODTEMPLATE_NAME, namespace=self.namespace)
         except Exception:  # noqa: BLE001 -- absent, malformed or unreachable all mean the same thing to the caller
             log.error("builder_podtemplate_not_found", name=BUILDER_PODTEMPLATE_NAME)
             return None
@@ -1487,9 +1419,7 @@ class BuilderManager:
                 "builder_job_created",
                 job=job_name,
                 system=system,
-                node_name=job_resource["spec"]["template"]
-                .get("spec", {})
-                .get("nodeName"),
+                node_name=job_resource["spec"]["template"].get("spec", {}).get("nodeName"),
             )
             return job_name
         except Exception:

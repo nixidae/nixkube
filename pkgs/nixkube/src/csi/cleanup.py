@@ -35,9 +35,7 @@ def collect_active_volume_handles(exclude_vol_data_path: Path | None) -> set[str
     """
     active_handles: set[str] = set()
 
-    for vol_data_path in KUBELET_PODS_PATH.glob(
-        "*/volumes/kubernetes.io~csi/*/vol_data.json"
-    ):
+    for vol_data_path in KUBELET_PODS_PATH.glob("*/volumes/kubernetes.io~csi/*/vol_data.json"):
         if exclude_vol_data_path and vol_data_path == exclude_vol_data_path:
             continue
 
@@ -46,9 +44,7 @@ def collect_active_volume_handles(exclude_vol_data_path: Path | None) -> set[str
             if handle := data.get("volumeHandle"):
                 active_handles.add(handle)
         except (OSError, json.JSONDecodeError):
-            logger.warning(
-                "vol_data_read_failed", path=str(vol_data_path), exc_info=True
-            )
+            logger.warning("vol_data_read_failed", path=str(vol_data_path), exc_info=True)
 
     return active_handles
 

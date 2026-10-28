@@ -60,9 +60,7 @@ def configure_structlog(renderer: str = "json") -> None:
         # In a Kubernetes container stdout is a pipe (isatty=False), so colors are
         # disabled and the output stays plain text — safe for log aggregators and
         # copy-paste. Colors are enabled automatically when running in a local terminal.
-        final_renderer: structlog.types.Processor = structlog.dev.ConsoleRenderer(
-            colors=sys.stdout.isatty()
-        )
+        final_renderer: structlog.types.Processor = structlog.dev.ConsoleRenderer(colors=sys.stdout.isatty())
     elif renderer == "logfmt":
         # Logfmt: key=value pairs on a single line, human-readable and machine-parseable.
         final_renderer = structlog.processors.LogfmtRenderer()
@@ -222,9 +220,7 @@ async def async_main():
         tg.start_soon(metrics.LoopLagMonitor().run, name="loop-lag")
         tg.start_soon(
             supervised,
-            lambda: csi_serve(
-                plugin_name="nixkube", socket_path=Path("/csi/nixkube/csi.sock")
-            ),
+            lambda: csi_serve(plugin_name="nixkube", socket_path=Path("/csi/nixkube/csi.sock")),
             "csi",
             name="csi",
         )

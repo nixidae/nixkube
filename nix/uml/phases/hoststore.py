@@ -23,9 +23,7 @@ STILL_ALIVE = "since it is still alive"
 async def refuses_delete(cp: Machine, path: str, why: str) -> None:
     rc, out = await cp.execute(f"nix-store --delete {path} 2>&1", timeout=300)
     if rc == 0 or STILL_ALIVE not in out:
-        raise MachineError(
-            f"[cp] the host's GC could take {why}, {path}: rc={rc} {out}"
-        )
+        raise MachineError(f"[cp] the host's GC could take {why}, {path}: rc={rc} {out}")
     print(f"[nixkube] the host's GC keeps {why}", flush=True)
 
 
@@ -35,29 +33,17 @@ async def test(vms: Machines) -> None:
     node = await get_json(cp, "get node cp")
     label = node["metadata"].get("labels", {}).get("nixkube/host")
     if label != "nixos":
-        raise MachineError(
-            f"[cp] the node's nixkube/host label is {label!r}, not nixos"
-        )
-    separate = await get_json(
-        cp, f"get daemonset nix-node-separate --namespace {NAMESPACE}"
-    )
+        raise MachineError(f"[cp] the node's nixkube/host label is {label!r}, not nixos")
+    separate = await get_json(cp, f"get daemonset nix-node-separate --namespace {NAMESPACE}")
     scheduled = separate["status"].get("desiredNumberScheduled", 0)
     if scheduled != 0:
-        raise MachineError(
-            f"[cp] the separate DaemonSet still schedules {scheduled} pods"
-        )
-    print(
-        "[nixkube] labelled nixos; the separate DaemonSet schedules nothing", flush=True
-    )
+        raise MachineError(f"[cp] the separate DaemonSet still schedules {scheduled} pods")
+    print("[nixkube] labelled nixos; the separate DaemonSet schedules nothing", flush=True)
 
     # Read through the agent, not a shell: a shell's own command line holds
     # the pattern, and a grep for it finds the shell.
     # pynixd's own daemon runs `--store /data`, and is not this.
-    own = [
-        p
-        for p in await cp.processes()
-        if p["cmdline"].startswith("nix daemon --store local")
-    ]
+    own = [p for p in await cp.processes() if p["cmdline"].startswith("nix daemon --store local")]
     if own:
         raise MachineError(f"[cp] nixkube runs nix-daemons of its own: {own}")
     await cp.succeed("systemctl is-active nix-daemon.socket")
@@ -68,14 +54,10 @@ async def test(vms: Machines) -> None:
 
     # The negative control: an unrooted path goes at once, so a refusal
     # below is a root and not a delete that cannot work here.
-    loose = (
-        await cp.succeed("echo loose > /tmp/loose && nix-store --add /tmp/loose")
-    ).strip()
+    loose = (await cp.succeed("echo loose > /tmp/loose && nix-store --add /tmp/loose")).strip()
     await cp.succeed(f"nix-store --delete {loose}")
     print(f"[nixkube] an unrooted path is deleted: {loose}", flush=True)
-    running = (
-        await cp.succeed("readlink /nix/var/nix/gcroots/appstarter/node")
-    ).strip()
+    running = (await cp.succeed("readlink /nix/var/nix/gcroots/appstarter/node")).strip()
     await refuses_delete(cp, running, "the node's running environment")
     await refuses_delete(cp, settings["workloadStorePath"], "the resident pod's volume")
 

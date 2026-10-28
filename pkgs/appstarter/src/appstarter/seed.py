@@ -80,9 +80,7 @@ def run(wanted_spec: str, fallback: str | None, store_root: Path) -> int:
             log.error("%s, and this image names no fallback", error)
             return 1
         log.error("%s", error)
-        log.warning(
-            "seeding %s from the image instead; this node will be behind", fallback
-        )
+        log.warning("seeding %s from the image instead; this node will be behind", fallback)
         store.copy(fallback, store_root, out_link)
         running = fallback
 

@@ -108,9 +108,7 @@ class TestIsMountSource:
         """A volume root something is mounted from is live."""
         volume = tmp_path / "volume"
         volume.mkdir()
-        info = self.write_mountinfo(
-            tmp_path, self.line(str(volume.resolve()), "/var/lib/kubelet/x/mount")
-        )
+        info = self.write_mountinfo(tmp_path, self.line(str(volume.resolve()), "/var/lib/kubelet/x/mount"))
         assert is_mount_source(volume, mountinfo_file=info) is True
 
     def test_deleted_source_still_returns_true(self, tmp_path: Path):
@@ -131,9 +129,7 @@ class TestIsMountSource:
         """Being a mount *point* says nothing about being a mount *source*."""
         volume = tmp_path / "volume"
         volume.mkdir()
-        info = self.write_mountinfo(
-            tmp_path, self.line("/somewhere/else", str(volume.resolve()))
-        )
+        info = self.write_mountinfo(tmp_path, self.line("/somewhere/else", str(volume.resolve())))
         assert is_mount_source(volume, mountinfo_file=info) is False
 
     def test_absent_source_returns_false(self, tmp_path: Path):

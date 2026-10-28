@@ -7,9 +7,7 @@ from appstarter import store
 
 
 def _completed(returncode: int, stdout: str = "", stderr: str = ""):
-    return subprocess.CompletedProcess(
-        args=[], returncode=returncode, stdout=stdout, stderr=stderr
-    )
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 def test_link_replaces_an_existing_pointer(tmp_path):
@@ -28,17 +26,13 @@ def test_link_leaves_no_staging_file_behind(tmp_path):
 def test_verify_accepts_a_closure_that_is_on_disk(tmp_path, monkeypatch):
     (tmp_path / "nix" / "store").mkdir(parents=True)
     (tmp_path / "nix" / "store" / "aaa").write_text("")
-    monkeypatch.setattr(
-        store, "_run", lambda *a, **k: _completed(0, "/nix/store/aaa\n")
-    )
+    monkeypatch.setattr(store, "_run", lambda *a, **k: _completed(0, "/nix/store/aaa\n"))
     store.verify("/nix/store/aaa", tmp_path)
 
 
 def test_verify_rejects_a_path_that_is_registered_and_absent(tmp_path, monkeypatch):
     """Issue #8. `nix path-info` answers from the database, so it passes."""
-    monkeypatch.setattr(
-        store, "_run", lambda *a, **k: _completed(0, "/nix/store/gone\n")
-    )
+    monkeypatch.setattr(store, "_run", lambda *a, **k: _completed(0, "/nix/store/gone\n"))
     with pytest.raises(store.StoreError, match="absent"):
         store.verify("/nix/store/gone", tmp_path)
 
@@ -47,9 +41,7 @@ def test_verify_accepts_a_dangling_symlink(tmp_path, monkeypatch):
     """`nix-*-man` points at an absolute path that resolves only under /nix."""
     (tmp_path / "nix" / "store").mkdir(parents=True)
     (tmp_path / "nix" / "store" / "man").symlink_to("/nix/store/elsewhere")
-    monkeypatch.setattr(
-        store, "_run", lambda *a, **k: _completed(0, "/nix/store/man\n")
-    )
+    monkeypatch.setattr(store, "_run", lambda *a, **k: _completed(0, "/nix/store/man\n"))
     store.verify("/nix/store/man", tmp_path)
 
 
@@ -104,9 +96,7 @@ def test_copy_reads_and_writes_local_stores(tmp_path, monkeypatch):
 
 
 def test_copy_reports_what_nix_said(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        store, "_run", lambda *a, **k: _completed(1, stderr="cannot connect\n")
-    )
+    monkeypatch.setattr(store, "_run", lambda *a, **k: _completed(1, stderr="cannot connect\n"))
     with pytest.raises(store.StoreError, match="cannot connect"):
         store.copy("/nix/store/aaa", tmp_path, tmp_path / "result")
 

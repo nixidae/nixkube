@@ -122,9 +122,7 @@ async def test_the_caller_survives_a_timeout():
 async def test_large_output():
     """Test handling of large output."""
     # Generate 1000 lines of output
-    result = await run_captured(
-        "sh", "-c", "for i in $(seq 1 1000); do echo line_$i; done"
-    )
+    result = await run_captured("sh", "-c", "for i in $(seq 1 1000); do echo line_$i; done")
     assert result.returncode == 0
     lines = result.stdout.split("\n")
     assert len(lines) >= 1000

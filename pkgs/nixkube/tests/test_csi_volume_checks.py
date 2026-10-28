@@ -75,9 +75,7 @@ class TestCheckCsiVolumeMounts:
         """Correct nixkube volume (subPath='nix', mountPath='/nix') emits no events."""
         pod = make_pod(
             {
-                "containers": [
-                    container_with_mounts("app", mount("nix-store", "/nix", "nix"))
-                ],
+                "containers": [container_with_mounts("app", mount("nix-store", "/nix", "nix"))],
                 "volumes": [nixkube_volume("nix-store")],
             }
         )
@@ -90,9 +88,7 @@ class TestCheckCsiVolumeMounts:
         """Volume mount without subPath emits MissingSubPath warning."""
         pod = make_pod(
             {
-                "containers": [
-                    container_with_mounts("app", mount("nix-store", "/nix"))
-                ],
+                "containers": [container_with_mounts("app", mount("nix-store", "/nix"))],
                 "volumes": [nixkube_volume("nix-store")],
             }
         )
@@ -106,9 +102,7 @@ class TestCheckCsiVolumeMounts:
         """Volume mounted elsewhere but not at /nix emits MissingNixMount warning."""
         pod = make_pod(
             {
-                "containers": [
-                    container_with_mounts("app", mount("nix-store", "/opt/nix", "nix"))
-                ],
+                "containers": [container_with_mounts("app", mount("nix-store", "/opt/nix", "nix"))],
                 "volumes": [nixkube_volume("nix-store")],
             }
         )
@@ -137,9 +131,7 @@ class TestCheckCsiVolumeMounts:
         """Mount missing subPath and not at /nix triggers both warnings."""
         pod = make_pod(
             {
-                "containers": [
-                    container_with_mounts("app", mount("nix-store", "/opt/nix"))
-                ],
+                "containers": [container_with_mounts("app", mount("nix-store", "/opt/nix"))],
                 "volumes": [nixkube_volume("nix-store")],
             }
         )
@@ -154,9 +146,7 @@ class TestCheckCsiVolumeMounts:
         """nix.csi.store driver is treated the same as nixkube."""
         pod = make_pod(
             {
-                "containers": [
-                    container_with_mounts("app", mount("nix-store", "/nix"))
-                ],
+                "containers": [container_with_mounts("app", mount("nix-store", "/nix"))],
                 "volumes": [nixkube_volume("nix-store", driver="nix.csi.store")],
             }
         )
@@ -173,9 +163,7 @@ class TestCheckCsiVolumeMounts:
         pod = make_pod(
             {
                 "containers": [],
-                "initContainers": [
-                    container_with_mounts("init", mount("nix-store", "/nix"))
-                ],
+                "initContainers": [container_with_mounts("init", mount("nix-store", "/nix"))],
                 "volumes": [nixkube_volume("nix-store")],
             }
         )
@@ -190,9 +178,7 @@ class TestCheckCsiVolumeMounts:
         pod = make_pod(
             {
                 "containers": [],
-                "initContainers": [
-                    container_with_mounts("init", mount("nix-store", "/nix", "nix"))
-                ],
+                "initContainers": [container_with_mounts("init", mount("nix-store", "/nix", "nix"))],
                 "volumes": [nixkube_volume("nix-store")],
             }
         )
@@ -214,11 +200,7 @@ class TestCheckCsiVolumeMounts:
         )
         with patch("src.csi.server.report_event", new_callable=AsyncMock) as mock_event:
             await check_csi_volume_mounts(pod)
-            missing_subpath_calls = [
-                c
-                for c in mock_event.call_args_list
-                if c.kwargs["reason"] == "MissingSubPath"
-            ]
+            missing_subpath_calls = [c for c in mock_event.call_args_list if c.kwargs["reason"] == "MissingSubPath"]
             assert len(missing_subpath_calls) == 1
             assert "bad" in missing_subpath_calls[0].kwargs["note"]
 
@@ -258,9 +240,7 @@ class TestCheckCsiVolumeMounts:
         """
         pod = make_pod(
             {
-                "containers": [
-                    container_with_mounts("app", mount("nix-store", "/opt/nix"))
-                ],
+                "containers": [container_with_mounts("app", mount("nix-store", "/opt/nix"))],
                 "volumes": [nixkube_volume("nix-store")],
             }
         )

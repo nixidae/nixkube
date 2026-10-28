@@ -47,9 +47,7 @@ async def get_builder_uris() -> list[str]:
         # Use kr8s to query pods with label selector
         # kr8s.asyncio.get() returns an async generator, iterate with async for
         uris = []
-        async for pod in kr8s.asyncio.get(
-            "pods", namespace=NAMESPACE, label_selector="app.kubernetes.io/name=builder"
-        ):
+        async for pod in kr8s.asyncio.get("pods", namespace=NAMESPACE, label_selector="app.kubernetes.io/name=builder"):
             try:
                 if is_usable(pod):
                     pod_name = pod["metadata"]["name"]

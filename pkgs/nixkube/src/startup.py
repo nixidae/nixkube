@@ -64,8 +64,7 @@ async def run_setup() -> None:
     etc = Path("/etc")
     etc.mkdir(exist_ok=True)
     nixbld_passwd = "\n".join(
-        f"nixbld{i}:x:{30000 + i}:30000:Nix build user {i}:/var/empty:/sbin/nologin"
-        for i in range(1, 33)
+        f"nixbld{i}:x:{30000 + i}:30000:Nix build user {i}:/var/empty:/sbin/nologin" for i in range(1, 33)
     )
     nixbld_group_members = ",".join(f"nixbld{i}" for i in range(1, 33))
     _write_if_missing(
@@ -77,10 +76,7 @@ async def run_setup() -> None:
     )
     _write_if_missing(
         etc / "group",
-        "root:x:0:\n"
-        "nix:x:1000:\n"
-        "nobody:x:65534:\n"
-        f"nixbld:x:30000:{nixbld_group_members}\n",
+        f"root:x:0:\nnix:x:1000:\nnobody:x:65534:\nnixbld:x:30000:{nixbld_group_members}\n",
     )
     _write_if_missing(
         etc / "nsswitch.conf",

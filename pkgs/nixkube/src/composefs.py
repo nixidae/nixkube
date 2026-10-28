@@ -43,10 +43,7 @@ _MTIME = "1.0"
 def escape(text: str) -> str:
     """A dump field: every byte outside printable ASCII, and the separators
     backslash and '=', as \\xNN. Space is outside the range, so it is too."""
-    return "".join(
-        chr(b) if 0x21 <= b <= 0x7E and b not in (0x5C, 0x3D) else f"\\x{b:02x}"
-        for b in text.encode()
-    )
+    return "".join(chr(b) if 0x21 <= b <= 0x7E and b not in (0x5C, 0x3D) else f"\\x{b:02x}" for b in text.encode())
 
 
 class Dump:
@@ -63,9 +60,7 @@ class Dump:
             raise ValueError(f"{path} is in the image twice")
         self.seen.add(path)
         # PATH SIZE MODE NLINK UID GID RDEV MTIME PAYLOAD CONTENT DIGEST
-        self.out.write(
-            f"{escape(path)} {size} {mode:o} {nlink} 0 0 0 {_MTIME} {payload} - -\n"
-        )
+        self.out.write(f"{escape(path)} {size} {mode:o} {nlink} 0 0 0 {_MTIME} {payload} - -\n")
 
     def directory(self, path: str, mode: int = stat.S_IFDIR | 0o555) -> None:
         self._line(path, 0, mode, 2, "-")
@@ -142,9 +137,7 @@ def volume(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nixkube-composefs-dump", description=__doc__)
-    parser.add_argument(
-        "--closure", type=Path, required=True, help="one store path per line"
-    )
+    parser.add_argument("--closure", type=Path, required=True, help="one store path per line")
     parser.add_argument("--primary", type=Path, help="its tree goes at the root")
     parser.add_argument("--database", type=Path, help="the files of /nix/var/nix/db")
     args = parser.parse_args(argv)

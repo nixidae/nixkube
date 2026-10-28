@@ -47,28 +47,16 @@ async def host_kubeconfig(cp: Machine) -> str:
     """
     reachable = cp.reachable(6443)
     assert reachable, (
-        "6443 is not forwarded, so the host cannot reach the API server -- "
-        "see vivarium.forward in nix/uml/ci.nix"
+        "6443 is not forwarded, so the host cannot reach the API server -- see vivarium.forward in nix/uml/ci.nix"
     )
     # kubeadm always names it `kubernetes`, but ask rather than assume.
-    cluster = (
-        await cp.succeed("kubectl config view --output jsonpath='{.clusters[0].name}'")
-    ).strip()
+    cluster = (await cp.succeed("kubectl config view --output jsonpath='{.clusters[0].name}'")).strip()
     conf = "/tmp/host-kubeconfig"
     await cp.succeed(f"cp /etc/kubernetes/admin.conf {conf}")
-    await cp.succeed(
-        f"kubectl --kubeconfig {conf} config set-cluster {cluster}"
-        f" --server=https://{reachable[0]}"
-    )
+    await cp.succeed(f"kubectl --kubeconfig {conf} config set-cluster {cluster} --server=https://{reachable[0]}")
     if INSECURE:
-        await cp.succeed(
-            f"kubectl --kubeconfig {conf} config unset"
-            f" clusters.{cluster}.certificate-authority-data"
-        )
-        await cp.succeed(
-            f"kubectl --kubeconfig {conf} config set"
-            f" clusters.{cluster}.insecure-skip-tls-verify true"
-        )
+        await cp.succeed(f"kubectl --kubeconfig {conf} config unset clusters.{cluster}.certificate-authority-data")
+        await cp.succeed(f"kubectl --kubeconfig {conf} config set clusters.{cluster}.insecure-skip-tls-verify true")
     return await cp.succeed(f"cat {conf}")
 
 
@@ -105,20 +93,15 @@ async def check_store_split(cp: Machine, nixos: bool) -> None:
     node = await get_json(cp, "get node cp")
     label = node["metadata"].get("labels", {}).get("nixkube/host")
     assert label == ("nixos" if nixos else None), (
-        f"the node's nixkube/host label is {label!r} on a"
-        f" {'NixOS' if nixos else 'non-NixOS'} node"
+        f"the node's nixkube/host label is {label!r} on a {'NixOS' if nixos else 'non-NixOS'} node"
     )
     serving = "nix-node-host" if nixos else "nix-node-separate"
     idle = "nix-node-separate" if nixos else "nix-node-host"
     for name, want in ((serving, 1), (idle, 0)):
-        status = (await get_json(cp, f"get daemonset {name} --namespace nixkube"))[
-            "status"
-        ]
+        status = (await get_json(cp, f"get daemonset {name} --namespace nixkube"))["status"]
         ready = status.get("numberReady", 0)
         scheduled = status.get("desiredNumberScheduled", 0)
-        assert (ready, scheduled) == (want, want), (
-            f"{name} has {ready} ready of {scheduled} scheduled, not {want}"
-        )
+        assert (ready, scheduled) == (want, want), f"{name} has {ready} ready of {scheduled} scheduled, not {want}"
     print(f"[test] {serving} serves the node, {idle} schedules nothing")
 
 
@@ -205,12 +188,8 @@ async def test(vms: Machines) -> None:
             cp,
             "get events --namespace nixkube --field-selector reason=NixVolumeMount",
         )
-        assert mounts["items"], (
-            "the jobs completed and the CSI driver reported no NixVolumeMount"
-        )
-        print(
-            f"[test] the CSI driver reported {len(mounts['items'])} NixVolumeMount events"
-        )
+        assert mounts["items"], "the jobs completed and the CSI driver reported no NixVolumeMount"
+        print(f"[test] the CSI driver reported {len(mounts['items'])} NixVolumeMount events")
 
         # And the ones that must not finish -- see ci/test-jobs.nix.
         #
@@ -225,8 +204,7 @@ async def test(vms: Machines) -> None:
         wrong = sorted(await succeeded() & set(rejected))
         assert not wrong, (
             f"{', '.join(wrong)} succeeded, and each of them asks for"
-            " something that cannot be built:\n"
-            + await kubectl(cp, "get jobs --namespace nixkube")
+            " something that cannot be built:\n" + await kubectl(cp, "get jobs --namespace nixkube")
         )
         print(f"[test] {', '.join(rejected)} were all refused")
 
@@ -235,8 +213,7 @@ async def test(vms: Machines) -> None:
         selector = ",".join(settings["deployedJobs"])
         await kubectl(
             cp,
-            f'wait --for=delete pod --selector "job-name in ({selector})"'
-            " --namespace nixkube --timeout=120s",
+            f'wait --for=delete pod --selector "job-name in ({selector})" --namespace nixkube --timeout=120s',
             timeout=180,
         )
         print("[test] the jobs are gone and their pods with them")
@@ -245,9 +222,4 @@ async def test(vms: Machines) -> None:
         # guessed: the images this node pulled, every store path the jobs
         # asked for, and pynixd's volume when there is one. A runner has
         # 14 GB for the whole guest.
-        print(
-            "[test] node disk\n"
-            + await cp.succeed(
-                "df -h /; du -sh /var/lib/vivarium-storage 2>/dev/null || true"
-            )
-        )
+        print("[test] node disk\n" + await cp.succeed("df -h /; du -sh /var/lib/vivarium-storage 2>/dev/null || true"))

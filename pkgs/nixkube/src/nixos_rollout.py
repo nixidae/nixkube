@@ -58,9 +58,7 @@ GROUP: Final = "nixkube.nixidae.org"
 VERSION: Final = f"{GROUP}/v1alpha1"
 TEMPLATE: Final = "nixkube-nixos-host"
 
-NixOSRollout = new_class(
-    "NixOSRollout", version=VERSION, namespaced=False, plural="nixosrollouts"
-)
+NixOSRollout = new_class("NixOSRollout", version=VERSION, namespaced=False, plural="nixosrollouts")
 Lease = new_class("Lease", version="coordination.k8s.io/v1", namespaced=True)
 ModernEvent = new_class("Event", version="events.k8s.io/v1", namespaced=True)
 
@@ -104,9 +102,7 @@ IN_FLIGHT: Final = frozenset(
         NodePhase.DISARMING,
     }
 )
-HALTING: Final = frozenset(
-    {NodePhase.REVERTED, NodePhase.BUILD_FAILED, NodePhase.DRAIN_FAILED}
-)
+HALTING: Final = frozenset({NodePhase.REVERTED, NodePhase.BUILD_FAILED, NodePhase.DRAIN_FAILED})
 
 # The switch Job's exit code when only a boot picks the change up, as
 # `rebootNeeded` in kubenix/nixos-host.nix.
@@ -140,13 +136,9 @@ def selects(selector: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
     return True
 
 
-def job_name(
-    rollout: str, node: str, action: Action, target: str, generation: int
-) -> str:
+def job_name(rollout: str, node: str, action: Action, target: str, generation: int) -> str:
     """One name per step, so a restarted controller finds the Job it made."""
-    digest = hashlib.sha256(
-        f"{rollout}\0{node}\0{target}\0{generation}".encode()
-    ).hexdigest()[:16]
+    digest = hashlib.sha256(f"{rollout}\0{node}\0{target}\0{generation}".encode()).hexdigest()[:16]
     return f"nixos-{action}-{digest}"
 
 
@@ -179,10 +171,7 @@ def plan(
                 "message": "selected by more than one NixOSRollout",
             } | ({"current": entry["current"]} if "current" in entry else {})
             continue
-        if (
-            phase in HALTING - {NodePhase.BUILD_FAILED}
-            and entry.get("generation", 0) >= generation
-        ):
+        if phase in HALTING - {NodePhase.BUILD_FAILED} and entry.get("generation", 0) >= generation:
             out[node] = entry
             continue
         if phase == NodePhase.DONE and entry.get("target") == target:
@@ -228,9 +217,7 @@ def node_system(labels: Mapping[str, str]) -> str:
     return ARCH_SYSTEMS.get(arch, f"{arch}-linux")
 
 
-def build_argv(
-    source: Mapping[str, Any], node: str, labels: Mapping[str, str], store: str
-) -> list[str]:
+def build_argv(source: Mapping[str, Any], node: str, labels: Mapping[str, str], store: str) -> list[str]:
     """Evaluate in the pod's own store, build in pynixd's."""
     args = {
         "url": source["url"],
@@ -318,16 +305,11 @@ def build_entries(
         # A restarted controller builds again, and until the build returns, a
         # node settled at this generation must stay as it was: a Reverted node
         # that turned Building would be switched again, cordoned or not.
-        if (
-            old.get("phase") in (NodePhase.DONE, NodePhase.REVERTED)
-            and old.get("generation", 0) >= generation
-        ):
+        if old.get("phase") in (NodePhase.DONE, NodePhase.REVERTED) and old.get("generation", 0) >= generation:
             out[node] = dict(old)
             continue
         out[node] = {k: v for k, v in old.items() if k in KEPT} | (
-            {"phase": NodePhase.BUILD_FAILED, "message": build.error}
-            if build.error
-            else {"phase": NodePhase.BUILDING}
+            {"phase": NodePhase.BUILD_FAILED, "message": build.error} if build.error else {"phase": NodePhase.BUILDING}
         )
     return out
 
@@ -472,10 +454,7 @@ class Controller:
                     env = dict(os.environ)
                     if ref := source.get("secretRef"):
                         secret = await Secret.get(ref["name"], namespace=self.namespace)
-                        data = {
-                            k: base64.b64decode(v)
-                            for k, v in (secret.raw.get("data") or {}).items()
-                        }
+                        data = {k: base64.b64decode(v) for k, v in (secret.raw.get("data") or {}).items()}
                         env |= git_env(secret.raw.get("type", ""), data, Path(tmp))
                     result = await anyio.run_process(
                         build_argv(source, node, labels, self.store),
@@ -500,9 +479,7 @@ class Controller:
         nodes = {n.name: n async for n in Node.list() if isinstance(n, Node)}
         selected = {
             r.name: sorted(
-                name
-                for name, node in nodes.items()
-                if selects(r.raw["spec"].get("nodeSelector") or {}, node.labels)
+                name for name, node in nodes.items() if selects(r.raw["spec"].get("nodeSelector") or {}, node.labels)
             )
             for r in rollouts
         }
@@ -538,42 +515,25 @@ class Controller:
         fetch_from = self.store if "source" in spec else ""
         open_builds: dict[str, Build] = {}
         if "source" in spec:
-            systems, open_builds = self.systems_from_source(
-                rollout, generation, selected, nodes
-            )
+            systems, open_builds = self.systems_from_source(rollout, generation, selected, nodes)
         else:
             systems = spec.get("systems") or {}
 
-        entries = plan(
-            status.get("nodes") or {}, systems, selected, conflicts, generation
-        )
-        entries |= build_entries(
-            entries, status.get("nodes") or {}, open_builds, generation
-        )
+        entries = plan(status.get("nodes") or {}, systems, selected, conflicts, generation)
+        entries |= build_entries(entries, status.get("nodes") or {}, open_builds, generation)
         for node, entry in entries.items():
             if entry["phase"] in IN_FLIGHT:
-                await self.step(
-                    rollout, node, entry, nodes.get(node), timeouts, fetch_from
-                )
+                await self.step(rollout, node, entry, nodes.get(node), timeouts, fetch_from)
 
         message = ""
         if confirm_timeout >= self.revert_delay:
             message = f"confirmTimeout {confirm_timeout} must be less than the revert delay {self.revert_delay}"
         unmanaged = sorted(set(selected) - set(systems) - set(open_builds))
         if unmanaged:
-            message = (
-                (message + "; " if message else "")
-                + "no system for: "
-                + ", ".join(unmanaged)
-            )
+            message = (message + "; " if message else "") + "no system for: " + ", ".join(unmanaged)
 
         halted = rollout_phase(entries) == Phase.HALTED
-        startable = (
-            not halted
-            and not spec.get("paused")
-            and confirm_timeout < self.revert_delay
-            and not open_builds
-        )
+        startable = not halted and not spec.get("paused") and confirm_timeout < self.revert_delay and not open_builds
         in_flight = sum(e["phase"] in IN_FLIGHT for e in entries.values())
         for node, entry in sorted(entries.items()):
             if not startable or in_flight >= max_unavailable:
@@ -610,9 +570,7 @@ class Controller:
         fetch_from: str,
     ) -> None:
         name = job_name(rollout.name, node, Action.SWITCH, entry["target"], generation)
-        await self.create_job(
-            rollout, node, Action.SWITCH, name, entry["target"], fetch_from=fetch_from
-        )
+        await self.create_job(rollout, node, Action.SWITCH, name, entry["target"], fetch_from=fetch_from)
         entry.update(
             phase=NodePhase.SWITCHING,
             job=name,
@@ -664,8 +622,7 @@ class Controller:
             elif elapsed > timeouts.drain:
                 entry.update(
                     phase=NodePhase.DRAIN_FAILED,
-                    message=f"not drained within {timeouts.drain}s: "
-                    + ", ".join(remaining),
+                    message=f"not drained within {timeouts.drain}s: " + ", ".join(remaining),
                 )
                 log.warning("drain_failed", remaining=remaining)
                 await self.event(rollout, "DrainFailed", f"{node}: {entry['message']}")
@@ -680,9 +637,7 @@ class Controller:
                     entry["target"],
                     entry["generation"],
                 )
-                await self.create_job(
-                    rollout, node, Action.DISARM, name, entry["target"]
-                )
+                await self.create_job(rollout, node, Action.DISARM, name, entry["target"])
                 entry.update(phase=NodePhase.DISARMING, job=name)
                 log.info("rebooted", boot_id=current)
             elif elapsed > timeouts.reboot:
@@ -695,9 +650,7 @@ class Controller:
             return
         if phase == NodePhase.CONFIRMING:
             lease = await Lease.get(node, namespace="kube-node-lease")
-            renewed = parse_time(lease.raw["spec"]["renewTime"]) > parse_time(
-                entry["leaseRenewTime"]
-            )
+            renewed = parse_time(lease.raw["spec"]["renewTime"]) > parse_time(entry["leaseRenewTime"])
             if renewed and node_obj is not None and node_ready(node_obj):
                 name = job_name(
                     rollout.name,
@@ -706,9 +659,7 @@ class Controller:
                     entry["target"],
                     entry["generation"],
                 )
-                await self.create_job(
-                    rollout, node, Action.DISARM, name, entry["target"]
-                )
+                await self.create_job(rollout, node, Action.DISARM, name, entry["target"])
                 entry.update(phase=NodePhase.DISARMING, job=name)
                 log.info("switch_confirmed")
             elif elapsed > confirm_timeout:
@@ -722,9 +673,7 @@ class Controller:
                 # Best effort: with the kubelet down this pod never runs,
                 # and the armed timer reverts the host instead. The deadline
                 # keeps a late pod from reverting some later switch.
-                await self.create_job(
-                    rollout, node, Action.REVERT, name, entry["target"], deadline=60
-                )
+                await self.create_job(rollout, node, Action.REVERT, name, entry["target"], deadline=60)
                 await self.halt(
                     rollout,
                     node,
@@ -762,9 +711,7 @@ class Controller:
                     with contextlib.suppress(NotFoundError):
                         await (await Node.get(node)).uncordon()
                 log.info("node_done", system=entry["target"])
-            case "Failed", NodePhase.SWITCHING if (
-                await self.job_exit_code(entry["job"]) == REBOOT_NEEDED
-            ):
+            case "Failed", NodePhase.SWITCHING if await self.job_exit_code(entry["job"]) == REBOOT_NEEDED:
                 with contextlib.suppress(NotFoundError):
                     await (await Node.get(node)).cordon()
                 entry.update(
@@ -777,20 +724,12 @@ class Controller:
                 log.info("reboot_needed")
             case "Failed", _:
                 tail = await self.job_log(entry["job"])
-                await self.halt(
-                    rollout, node, entry, f"Job {entry['job']} failed: {tail}"
-                )
+                await self.halt(rollout, node, entry, f"Job {entry['job']} failed: {tail}")
 
-    async def halt(
-        self, rollout: Any, node: str, entry: dict[str, Any], message: str
-    ) -> None:
-        entry.update(
-            phase=NodePhase.REVERTED, failedSystem=entry["target"], message=message
-        )
+    async def halt(self, rollout: Any, node: str, entry: dict[str, Any], message: str) -> None:
+        entry.update(phase=NodePhase.REVERTED, failedSystem=entry["target"], message=message)
         entry.pop("leaseRenewTime", None)
-        logger.warning(
-            "node_reverted", rollout=rollout.name, node=node, message=message
-        )
+        logger.warning("node_reverted", rollout=rollout.name, node=node, message=message)
         with contextlib.suppress(NotFoundError):
             await (await Node.get(node)).cordon()
         await self.event(rollout, "Reverted", f"{node}: {message}")
@@ -809,9 +748,7 @@ class Controller:
         pod = copy.deepcopy(template.raw["template"])
         pod["spec"]["nodeName"] = node
         values = {"ACTION": str(action), "TOPLEVEL": target, "FETCH_FROM": fetch_from}
-        for container in (
-            pod["spec"].get("initContainers", []) + pod["spec"]["containers"]
-        ):
+        for container in pod["spec"].get("initContainers", []) + pod["spec"]["containers"]:
             for env in container.get("env") or []:
                 if env["name"] in values:
                     env["value"] = values[env["name"]]
@@ -855,9 +792,7 @@ class Controller:
                 raise
 
     async def job_exit_code(self, job: str) -> int | None:
-        async for pod in Pod.list(
-            namespace=self.namespace, label_selector={"job-name": job}
-        ):
+        async for pod in Pod.list(namespace=self.namespace, label_selector={"job-name": job}):
             assert isinstance(pod, Pod)
             return exit_code(pod.raw)
         return None
@@ -869,9 +804,7 @@ class Controller:
         until the next pass. A pod that is terminating counts until it is gone.
         """
         remaining: list[str] = []
-        async for pod in Pod.list(
-            namespace=ALL, field_selector={"spec.nodeName": node}
-        ):
+        async for pod in Pod.list(namespace=ALL, field_selector={"spec.nodeName": node}):
             assert isinstance(pod, Pod)
             if not evictable(pod.raw):
                 continue
@@ -903,9 +836,7 @@ class Controller:
 
     async def job_log(self, job: str) -> str:
         try:
-            async for pod in Pod.list(
-                namespace=self.namespace, label_selector={"job-name": job}
-            ):
+            async for pod in Pod.list(namespace=self.namespace, label_selector={"job-name": job}):
                 assert isinstance(pod, Pod)
                 lines = [line async for line in pod.logs(tail_lines=5)]
                 return " | ".join(lines)[-500:]

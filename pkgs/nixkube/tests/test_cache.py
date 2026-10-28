@@ -25,15 +25,11 @@ PATHS = {STORE_PATH}
 
 
 def ok(stdout: str = "") -> SubprocessResult:
-    return SubprocessResult(
-        returncode=0, stdout=stdout, stderr="", combined="", elapsed=0.0
-    )
+    return SubprocessResult(returncode=0, stdout=stdout, stderr="", combined="", elapsed=0.0)
 
 
 def fail() -> SubprocessResult:
-    return SubprocessResult(
-        returncode=1, stdout="", stderr="error", combined="error", elapsed=0.0
-    )
+    return SubprocessResult(returncode=1, stdout="", stderr="error", combined="error", elapsed=0.0)
 
 
 def make_mock_run(copy_results: list[SubprocessResult]):

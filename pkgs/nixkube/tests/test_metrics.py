@@ -98,9 +98,7 @@ class TestCommandLabel:
     """
 
     def test_a_store_path_argument_does_not_reach_the_label(self):
-        assert metrics.command_label(("nix", "build", "/nix/store/aaa-hello")) == (
-            "nix build"
-        )
+        assert metrics.command_label(("nix", "build", "/nix/store/aaa-hello")) == ("nix build")
 
     def test_a_flake_reference_does_not_reach_the_label(self):
         """The case that looks safe: a bare word after the subcommand."""
@@ -109,19 +107,13 @@ class TestCommandLabel:
     def test_a_store_subcommand_is_kept(self):
         """`nix store ping` and `nix store sign` are different work and both
         are in the allow-list, so the label keeps the third token."""
-        assert (
-            metrics.command_label(("nix", "store", "ping", "--json"))
-            == "nix store ping"
-        )
+        assert metrics.command_label(("nix", "store", "ping", "--json")) == "nix store ping"
 
     def test_an_unknown_subcommand_falls_back_to_the_binary(self):
         assert metrics.command_label(("nix", "frobnicate", "x")) == "nix"
 
     def test_a_binary_is_named_without_its_store_path(self):
-        assert (
-            metrics.command_label(("/nix/store/abc-nix/bin/nix", "copy", "--to", "x"))
-            == "nix copy"
-        )
+        assert metrics.command_label(("/nix/store/abc-nix/bin/nix", "copy", "--to", "x")) == "nix copy"
 
     def test_no_arguments_answers_a_name_and_not_an_error(self):
         assert metrics.command_label(()) == "unknown"
@@ -136,14 +128,8 @@ class TestTheNewCounters:
         metrics.SUBPROCESS_DURATION.labels(command="nix build").observe(1.0)
 
         series = _series()
-        assert (
-            series['nixkube_subprocess_calls_total{command="nix build",result="ok"}']
-            >= 1
-        )
-        assert (
-            series['nixkube_subprocess_duration_seconds_count{command="nix build"}']
-            >= 1
-        )
+        assert series['nixkube_subprocess_calls_total{command="nix build",result="ok"}'] >= 1
+        assert series['nixkube_subprocess_duration_seconds_count{command="nix build"}'] >= 1
 
     def test_the_build_counters_are_registered(self):
         metrics.NIX_BUILDS.labels(kind="store_path", result="ok").inc()
@@ -288,9 +274,7 @@ class TestServe:
         say the daemon serves an address it does not."""
         tried = []
 
-        monkeypatch.setattr(
-            metrics, "start_http_server", lambda _port, addr: tried.append(addr)
-        )
+        monkeypatch.setattr(metrics, "start_http_server", lambda _port, addr: tried.append(addr))
 
         metrics.serve(port=9099, addr="::")
 
@@ -309,15 +293,11 @@ class TestAppstarterDegraded:
     def _state(self, tmp_path: Path, wanted: str, running: str) -> None:
         path = tmp_path / "nix/var/appstarter"
         path.mkdir(parents=True)
-        (path / "state.json").write_text(
-            f'{{"wanted": "{wanted}", "running": "{running}"}}'
-        )
+        (path / "state.json").write_text(f'{{"wanted": "{wanted}", "running": "{running}"}}')
 
     def test_the_wanted_environment_reads_zero(self, tmp_path, monkeypatch):
         self._state(tmp_path, "/nix/store/aaa-node", "/nix/store/aaa-node")
-        monkeypatch.setattr(
-            metrics, "APPSTARTER_STATE", tmp_path / "nix/var/appstarter/state.json"
-        )
+        monkeypatch.setattr(metrics, "APPSTARTER_STATE", tmp_path / "nix/var/appstarter/state.json")
 
         [family] = list(metrics.AppstarterCollector().collect())
 
@@ -326,9 +306,7 @@ class TestAppstarterDegraded:
 
     def test_the_image_fallback_reads_one(self, tmp_path, monkeypatch):
         self._state(tmp_path, "/nix/store/aaa-node", "/nix/store/bbb-older")
-        monkeypatch.setattr(
-            metrics, "APPSTARTER_STATE", tmp_path / "nix/var/appstarter/state.json"
-        )
+        monkeypatch.setattr(metrics, "APPSTARTER_STATE", tmp_path / "nix/var/appstarter/state.json")
 
         [family] = list(metrics.AppstarterCollector().collect())
 

@@ -487,9 +487,7 @@ async def test_server_starts(test_server_process, socket_path: Path) -> None:
     logger = structlog.get_logger("test.server_starts")
 
     assert socket_path.exists(), f"Server socket not created at {socket_path}"
-    assert test_server_process.returncode is None, (
-        f"Server exited with code {test_server_process.returncode}"
-    )
+    assert test_server_process.returncode is None, f"Server exited with code {test_server_process.returncode}"
 
     logger.info("server_running")
 
@@ -561,9 +559,7 @@ async def test_client_client_streaming(socket_path: Path, test_server_process) -
 
 
 @pytest.mark.asyncio
-async def test_client_bidirectional_streaming(
-    socket_path: Path, test_server_process
-) -> None:
+async def test_client_bidirectional_streaming(socket_path: Path, test_server_process) -> None:
     """Test Client API for bidirectional streaming RPC."""
     client = Client(path=str(socket_path))
     try:

@@ -107,9 +107,7 @@ VERIFY_STORE_PATHS = os.environ.get("VERIFY_STORE_PATHS", "false") == "true"
 # costs that one volume time and disk; refusing costs it the container. The
 # node says so at error level either way, because nothing outside it can see a
 # mount table fill up.
-MOUNT_BUDGET_FALLBACK_RATIO: float = _parse_float_env(
-    "MOUNT_BUDGET_FALLBACK_RATIO", "0.9"
-)
+MOUNT_BUDGET_FALLBACK_RATIO: float = _parse_float_env("MOUNT_BUDGET_FALLBACK_RATIO", "0.9")
 
 # Present a container's store as one read-only bind mount per closure path,
 # instead of a hardlink tree. Issue #65, and `nri/farm.py` for why.
@@ -134,9 +132,7 @@ NRI_COMPOSEFS = os.environ.get("NRI_COMPOSEFS", "true") == "true"
 # RuntimeClass handlers that run each pod in a VM, such as Kata. The pod's
 # /nix reaches the VM as a bind mount the runtime shares over virtio-fs, and
 # not as a mount into the container's namespace. See `nri/vm.py`.
-NRI_VM_RUNTIME_HANDLERS = frozenset(
-    h for h in os.environ.get("NRI_VM_RUNTIME_HANDLERS", "kata").split(",") if h
-)
+NRI_VM_RUNTIME_HANDLERS = frozenset(h for h in os.environ.get("NRI_VM_RUNTIME_HANDLERS", "kata").split(",") if h)
 
 # A static busybox, which a VM runs from the container's /nix to wait for
 # the build. Empty where the node does not set it; a VM pod is then refused.
@@ -236,9 +232,7 @@ NRI_SWEEP_INTERVAL_SECONDS: float = _parse_float_env("NRI_SWEEP_INTERVAL_SECONDS
 #
 # The copy is the generous one: it can move a whole node's store over SSH.
 GC_COPY_TIMEOUT_SECONDS: int = _parse_int_env("GC_COPY_TIMEOUT_SECONDS", "1800")
-GC_PATH_INFO_TIMEOUT_SECONDS: int = _parse_int_env(
-    "GC_PATH_INFO_TIMEOUT_SECONDS", "300"
-)
+GC_PATH_INFO_TIMEOUT_SECONDS: int = _parse_int_env("GC_PATH_INFO_TIMEOUT_SECONDS", "300")
 GC_DELETE_TIMEOUT_SECONDS: int = _parse_int_env("GC_DELETE_TIMEOUT_SECONDS", "1800")
 
 # How long to wait for pynixd to answer a ping before treating it as absent.
@@ -256,9 +250,7 @@ CACHE_PING_TIMEOUT_SECONDS: float = _parse_float_env("CACHE_PING_TIMEOUT_SECONDS
 # ping the loop retries sooner, from `CACHE_PROBE_RETRY_SECONDS` doubling up
 # to this. The retry lives in the loop and not in the mount's ping, for the
 # reason above: a mount does not wait on pynixd.
-CACHE_PROBE_INTERVAL_SECONDS: float = _parse_float_env(
-    "CACHE_PROBE_INTERVAL_SECONDS", "300"
-)
+CACHE_PROBE_INTERVAL_SECONDS: float = _parse_float_env("CACHE_PROBE_INTERVAL_SECONDS", "300")
 CACHE_PROBE_RETRY_SECONDS: float = _parse_float_env("CACHE_PROBE_RETRY_SECONDS", "5")
 
 # Cycles without one completing before the loop says so at error level. Both

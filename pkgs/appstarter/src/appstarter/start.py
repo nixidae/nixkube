@@ -29,9 +29,7 @@ def run(program: str, argv: list[str], store_root: Path) -> int:
 
     state = State.read(store_root)
     if state is None:
-        log.warning(
-            "no state from `appstarter init`; starting %s without a version", entry
-        )
+        log.warning("no state from `appstarter init`; starting %s without a version", entry)
     else:
         os.environ["APPSTARTER_WANTED_STORE_PATH"] = state.wanted
         os.environ["APPSTARTER_RUNNING_STORE_PATH"] = state.running

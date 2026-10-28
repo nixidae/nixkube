@@ -31,9 +31,7 @@ class Presentation(StrEnum):
     REFUSED = "refused"
 
 
-def csi(
-    *, enabled: bool, kernel: bool, user_namespace: bool, host_store: bool
-) -> Presentation:
+def csi(*, enabled: bool, kernel: bool, user_namespace: bool, host_store: bool) -> Presentation:
     """A CSI volume.
 
     A pod with `hostUsers: false` gets an idmapped mount of every volume,
@@ -49,9 +47,7 @@ def csi(
     return Presentation.HARDLINKS
 
 
-def nri(
-    *, vm: bool, enabled: bool, kernel: bool, bind_farm: bool, host_store: bool
-) -> Presentation:
+def nri(*, vm: bool, enabled: bool, kernel: bool, bind_farm: bool, host_store: bool) -> Presentation:
     """An NRI container's /nix, before `farm_fallback`.
 
     A VM runtime reads /nix through virtio-fs, which serves files, so it gets
@@ -129,9 +125,7 @@ class Question:
     no: Question | Leaf
 
 
-def tree(
-    decide: Callable[..., Presentation], names: list[str], fixed: dict[str, bool]
-) -> Question | Leaf:
+def tree(decide: Callable[..., Presentation], names: list[str], fixed: dict[str, bool]) -> Question | Leaf:
     """The decision tree of `decide`, asking `names` in order and skipping
     a question whose answer changes nothing."""
     rest = [n for n in names if n not in fixed]
@@ -167,8 +161,7 @@ def dot_lines(prefix: str, title: str, root: Question | Leaf) -> list[str]:
             name = f"{prefix}_{at.shown}"
             names[at] = name
             lines.append(
-                f'    {name} [label="{at.shown}", shape=box, style="rounded,filled",'
-                f" fillcolor={COLOURS[at.shown]}];"
+                f'    {name} [label="{at.shown}", shape=box, style="rounded,filled", fillcolor={COLOURS[at.shown]}];'
             )
             return name
         name = f"{prefix}_q{len(names)}"

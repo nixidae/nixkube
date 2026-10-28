@@ -185,8 +185,7 @@ COMPOSEFS_AVAILABLE = Gauge(
 
 OLD_STORE_BYTES = Gauge(
     "nixkube_old_store_bytes",
-    "Bytes on disk of a host-store node's former separate store, until it is"
-    " retired (issue #25); 0 when there is none",
+    "Bytes on disk of a host-store node's former separate store, until it is retired (issue #25); 0 when there is none",
 )
 
 # --- Nix builds ---
@@ -601,9 +600,7 @@ def serve(port: int, addr: str) -> None:
         try:
             start_http_server(port, addr=candidate)
         except OSError:
-            logger.warning(
-                "metrics_server_failed", port=port, addr=candidate, exc_info=True
-            )
+            logger.warning("metrics_server_failed", port=port, addr=candidate, exc_info=True)
             continue
         logger.info("metrics_serving", port=port, addr=candidate)
         return

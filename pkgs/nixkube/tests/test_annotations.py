@@ -141,15 +141,9 @@ class TestParseStoreMountsForName:
 
     def test_flake_reference_detection(self):
         """Flake references are preserved as source paths."""
-        annotations = {
-            "nixkube/pod": "/etc/myapp=github:nixos/nixpkgs#legacyPackages.x86_64-linux.hello"
-        }
+        annotations = {"nixkube/pod": "/etc/myapp=github:nixos/nixpkgs#legacyPackages.x86_64-linux.hello"}
         result = _parse_store_mounts_for_name(annotations, "pod", "x86_64-linux")
-        assert result == {
-            Path("/etc/myapp"): Path(
-                "github:nixos/nixpkgs#legacyPackages.x86_64-linux.hello"
-            )
-        }
+        assert result == {Path("/etc/myapp"): Path("github:nixos/nixpkgs#legacyPackages.x86_64-linux.hello")}
 
     def test_nix_expression_detection(self):
         """Nix expressions are preserved as source paths."""

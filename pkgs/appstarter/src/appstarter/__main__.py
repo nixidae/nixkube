@@ -28,9 +28,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="appstarter", description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
 
-    init = modes.add_parser(
-        "init", help="fetch the wanted version into the node's store"
-    )
+    init = modes.add_parser("init", help="fetch the wanted version into the node's store")
     init.add_argument(
         "--store",
         type=Path,

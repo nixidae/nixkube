@@ -46,11 +46,7 @@ def pod_summary(out: str) -> str:
     Name, ready count and status. Those change when something happens, and
     only then.
     """
-    rows = [
-        line.split()
-        for line in out.splitlines()
-        if line.split() and not line.startswith("No resources found")
-    ]
+    rows = [line.split() for line in out.splitlines() if line.split() and not line.startswith("No resources found")]
     return " | ".join(f"{r[0]}={r[1]} {r[2]}" for r in rows if len(r) > 2) or "no pods"
 
 
@@ -92,9 +88,7 @@ def own_user_namespace(mountinfo: str) -> bool:
     host's whole range to itself. The lines are `inside outside count`;
     mountinfo lines around them have more fields and are skipped."""
     maps = [line.split() for line in mountinfo.splitlines() if len(line.split()) == 3]
-    return any(
-        m != ["0", "0", "4294967295"] for m in maps if all(f.isdigit() for f in m)
-    )
+    return any(m != ["0", "0", "4294967295"] for m in maps if all(f.isdigit() for f in m))
 
 
 # These are stuck-detectors, not patience.
@@ -152,9 +146,7 @@ async def wait_for_driver(cp: Machine, settings: dict) -> None:
 
     drivers = await kubectl(cp, "get csidriver --no-headers")
     if "nixkube" not in drivers:
-        raise MachineError(
-            f"[cp] the API server serves no nixkube CSIDriver:\n{drivers}"
-        )
+        raise MachineError(f"[cp] the API server serves no nixkube CSIDriver:\n{drivers}")
     print(f"[nixkube] csidrivers:\n{drivers}", flush=True)
 
 
@@ -171,16 +163,13 @@ async def wait_for_pynixd(cp: Machine) -> None:
     """
 
     async def ready():
-        data = await get_json(
-            cp, f"get statefulset {STATEFULSET} --namespace {NAMESPACE}"
-        )
+        data = await get_json(cp, f"get statefulset {STATEFULSET} --namespace {NAMESPACE}")
         status = data.get("status", {})
         want = status.get("replicas", 0)
         got = status.get("readyReplicas", 0)
         pods = await kubectl(
             cp,
-            f"get pods --namespace {NAMESPACE}"
-            " --selector app.kubernetes.io/component=pynixd --no-headers",
+            f"get pods --namespace {NAMESPACE} --selector app.kubernetes.io/component=pynixd --no-headers",
         )
         return bool(want) and got == want, f"{got}/{want} ready, {pod_summary(pods)}"
 
@@ -195,9 +184,7 @@ async def wait_for_pynixd(cp: Machine) -> None:
     )
     print(f"[nixkube] pynixd is Ready; appstarter-init said:\n{logs}", flush=True)
     if "store holds" not in logs:
-        raise MachineError(
-            f"[cp] pynixd started, and appstarter-init never said what it holds:\n{logs}"
-        )
+        raise MachineError(f"[cp] pynixd started, and appstarter-init never said what it holds:\n{logs}")
     # `appstarter/seed.py` writes "store holds X" when the fetch worked and
     # "store holds X, and the deployment asks for Y" when it fell back to the
     # image. Both carry "store holds", so the check above passes on the
@@ -206,8 +193,7 @@ async def wait_for_pynixd(cp: Machine) -> None:
     # Running with exit 0 from the initContainer.
     if FALLBACK_MARK in logs:
         raise MachineError(
-            f"[cp] appstarter-init fell back to the image instead of fetching"
-            f" what the deployment asks for:\n{logs}"
+            f"[cp] appstarter-init fell back to the image instead of fetching what the deployment asks for:\n{logs}"
         )
 
 
@@ -231,13 +217,9 @@ async def check_workloads(cp: Machine) -> None:
     async def finished():
         data = await get_json(
             cp,
-            f"get jobs --namespace {NAMESPACE}"
-            " --selector app.kubernetes.io/component=uml-test",
+            f"get jobs --namespace {NAMESPACE} --selector app.kubernetes.io/component=uml-test",
         )
-        seen = {
-            item["metadata"]["name"]: item.get("status", {})
-            for item in data.get("items", [])
-        }
+        seen = {item["metadata"]["name"]: item.get("status", {}) for item in data.get("items", [])}
         failed = sorted(name for name, s in seen.items() if s.get("failed"))
         if failed:
             raise MachineError(
@@ -246,16 +228,13 @@ async def check_workloads(cp: Machine) -> None:
                 " this says the driver did not mount it there."
             )
         done = sorted(name for name, s in seen.items() if s.get("succeeded"))
-        summary = ", ".join(
-            f"{name}={'ok' if name in done else '...'}" for name in sorted(seen)
-        )
+        summary = ", ".join(f"{name}={'ok' if name in done else '...'}" for name in sorted(seen))
         if len(done) != len(WORKLOADS):
             # Which pod, and in what state. "csi-path=..." for five minutes
             # says nothing about why.
             pods = await kubectl(
                 cp,
-                f"get pods --namespace {NAMESPACE}"
-                " --selector app.kubernetes.io/component=uml-test --no-headers",
+                f"get pods --namespace {NAMESPACE} --selector app.kubernetes.io/component=uml-test --no-headers",
             )
             summary = f"{summary} -- {pod_summary(pods)}"
         return len(done) == len(WORKLOADS), summary or "no jobs yet"
@@ -320,8 +299,7 @@ async def probe(
             if status.get("failed"):
                 pods = await kubectl(
                     cp,
-                    f"get pods --namespace {NAMESPACE}"
-                    f" --selector job-name={name} --output wide --no-headers",
+                    f"get pods --namespace {NAMESPACE} --selector job-name={name} --output wide --no-headers",
                 )
                 raise MachineError(
                     f"[cp] a {want} probe failed after {why}. A pod that"
@@ -329,25 +307,20 @@ async def probe(
                 )
             pods = await kubectl(
                 cp,
-                f"get pods --namespace {NAMESPACE}"
-                f" --selector job-name={name} --no-headers",
+                f"get pods --namespace {NAMESPACE} --selector job-name={name} --no-headers",
             )
             return bool(status.get("succeeded")), f"{name}: {pod_summary(pods)}"
 
         await until(f"a {want} probe after {why}", done, READY_TIMEOUT, cp)
 
-        csi = await kubectl(
-            cp, f"logs --namespace {NAMESPACE} job/{name} --container csi"
-        )
+        csi = await kubectl(cp, f"logs --namespace {NAMESPACE} job/{name} --container csi")
         if "Hello, world!" not in csi:
             raise MachineError(
                 f"[cp] the {want} probe's csi container said nothing after"
                 f" {why}, so the volume is not what the pod asked for:\n{csi}"
             )
 
-        nri = await kubectl(
-            cp, f"logs --namespace {NAMESPACE} job/{name} --container nri"
-        )
+        nri = await kubectl(cp, f"logs --namespace {NAMESPACE} job/{name} --container nri")
         mount = nix_mount(nri)
         if mount is None:
             raise MachineError(
@@ -364,8 +337,7 @@ async def probe(
             )
         if want not in options.split(","):
             raise MachineError(
-                f"[cp] the {want} probe wanted a {want} /nix after {why} and"
-                f" got `{options}` ({fstype})."
+                f"[cp] the {want} probe wanted a {want} /nix after {why} and got `{options}` ({fstype})."
             )
         # Without this a node that falls back to the farm -- a probe that
         # fails, a kernel without EROFS -- passes every other check.
@@ -385,8 +357,7 @@ async def probe(
         under = "" if runtime_class is None else f" under {runtime_class}"
         shown = "composefs" if composefs else "not composefs"
         print(
-            f"[nixkube] a {want} probe got both mounts{under} after {why}:"
-            f" /nix {options} ({fstype}, {shown})",
+            f"[nixkube] a {want} probe got both mounts{under} after {why}: /nix {options} ({fstype}, {shown})",
             flush=True,
         )
 
@@ -395,17 +366,14 @@ async def probe(
 UNREACHABLE = "rootfs is not reachable through pid"
 
 
-async def run_job(
-    cp: Machine, source: str, jq_filter: str, what: str
-) -> tuple[dict, str]:
+async def run_job(cp: Machine, source: str, jq_filter: str, what: str) -> tuple[dict, str]:
     """Create a Job from *source* through *jq_filter*; wait until it ends.
 
     Returns its pod as JSON and its logs. The pod ends either way here, so
     nothing is raised on failure: the caller says which outcome it wanted.
     """
     created = await cp.succeed(
-        f"jq '{jq_filter}' {source}"
-        f" | kubectl create --namespace {NAMESPACE} --filename - --output name",
+        f"jq '{jq_filter}' {source} | kubectl create --namespace {NAMESPACE} --filename - --output name",
         timeout=APPLY_TIMEOUT,
     )
     name = created.strip().splitlines()[-1].split("/")[-1]
@@ -413,9 +381,7 @@ async def run_job(
 
     async def ended() -> tuple[bool, str]:
         pods = (await get_json(cp, f"get pods {selector}")).get("items", [])
-        statuses = [
-            s for p in pods for s in p.get("status", {}).get("containerStatuses", [])
-        ]
+        statuses = [s for p in pods for s in p.get("status", {}).get("containerStatuses", [])]
         done = bool(statuses) and all(
             "terminated" in s.get("state", {})
             or s.get("state", {}).get("waiting", {}).get("reason")
@@ -452,22 +418,13 @@ async def check_sandboxed(cp: Machine, settings: dict, runtime_class: str) -> No
         ' | .volumeMounts = [{"name": "store", "mountPath": "/nix", "subPath": "nix"}])'
         f' | .metadata.generateName = "csi-{runtime_class}-"'
     )
-    _, logs = await run_job(
-        cp, settings["probeRo"], csi, f"a CSI pod under {runtime_class}"
-    )
+    _, logs = await run_job(cp, settings["probeRo"], csi, f"a CSI pod under {runtime_class}")
     if "Hello, world!" not in logs:
-        raise MachineError(
-            f"[cp] a CSI volume at /nix did not run hello under {runtime_class}:\n{logs}"
-        )
+        raise MachineError(f"[cp] a CSI volume at /nix did not run hello under {runtime_class}:\n{logs}")
     print(f"[nixkube] a CSI volume works under {runtime_class}", flush=True)
 
-    nri = (
-        f'.spec.template.spec.runtimeClassName = "{runtime_class}"'
-        f' | .metadata.generateName = "nri-{runtime_class}-"'
-    )
-    pod, _ = await run_job(
-        cp, settings["probeRo"], nri, f"an NRI pod under {runtime_class}"
-    )
+    nri = f'.spec.template.spec.runtimeClassName = "{runtime_class}" | .metadata.generateName = "nri-{runtime_class}-"'
+    pod, _ = await run_job(cp, settings["probeRo"], nri, f"an NRI pod under {runtime_class}")
     messages = " ".join(
         s.get("state", {}).get("waiting", {}).get("message", "")
         + s.get("state", {}).get("terminated", {}).get("message", "")
@@ -493,16 +450,9 @@ async def check_vm(cp: Machine, settings: dict, runtime_class: str) -> None:
     exactly /nix. The rw probe must fail in its nri container with the
     reason, which the waiter prints before it exits.
     """
-    await probe(
-        cp, settings, "a clean start", runtime_class=runtime_class, wants=("ro",)
-    )
-    rw = (
-        f'.spec.template.spec.runtimeClassName = "{runtime_class}"'
-        f' | .metadata.generateName = "rw-{runtime_class}-"'
-    )
-    _, logs = await run_job(
-        cp, settings["probeRw"], rw, f"an rw probe under {runtime_class}"
-    )
+    await probe(cp, settings, "a clean start", runtime_class=runtime_class, wants=("ro",))
+    rw = f'.spec.template.spec.runtimeClassName = "{runtime_class}" | .metadata.generateName = "rw-{runtime_class}-"'
+    _, logs = await run_job(cp, settings["probeRw"], rw, f"an rw probe under {runtime_class}")
     if VM_RW_REFUSED not in logs:
         raise MachineError(
             f"[cp] an rw probe under {runtime_class} was not refused with the"
@@ -611,9 +561,7 @@ NODE_SANDBOX = "$(crictl pods --quiet --name '^nix-node-')"
 
 
 async def kubernetes_deletes_the_pod(cp: Machine, settings: dict) -> None:
-    await kubectl(
-        cp, f"delete pod --namespace {NAMESPACE} {NODE_SELECTOR} --wait=false"
-    )
+    await kubectl(cp, f"delete pod --namespace {NAMESPACE} {NODE_SELECTOR} --wait=false")
 
 
 async def crictl_stops_the_container(cp: Machine, settings: dict) -> None:
@@ -743,13 +691,9 @@ async def check_resident(cp: Machine, settings: dict, why: str) -> None:
     """
 
     async def up():
-        out = await kubectl(
-            cp, f"get pods --namespace {NAMESPACE} {RESIDENT} --no-headers"
-        )
+        out = await kubectl(cp, f"get pods --namespace {NAMESPACE} {RESIDENT} --no-headers")
         rows = [line.split() for line in out.splitlines() if line.split()]
-        running = [
-            r for r in rows if len(r) > 2 and r[2] == "Running" and r[1] == "1/1"
-        ]
+        running = [r for r in rows if len(r) > 2 and r[2] == "Running" and r[1] == "1/1"]
         return len(running) == 1, pod_summary(out)
 
     await until(f"the resident pod after {why}", up, READY_TIMEOUT, cp)
@@ -757,30 +701,22 @@ async def check_resident(cp: Machine, settings: dict, why: str) -> None:
     name = (
         await kubectl(
             cp,
-            f"get pods --namespace {NAMESPACE} {RESIDENT}"
-            " --output jsonpath={.items[0].metadata.name}",
+            f"get pods --namespace {NAMESPACE} {RESIDENT} --output jsonpath={{.items[0].metadata.name}}",
         )
     ).strip()
 
-    hello = await kubectl(
-        cp, f"exec --namespace {NAMESPACE} {name} -- {settings['residentHello']}"
-    )
+    hello = await kubectl(cp, f"exec --namespace {NAMESPACE} {name} -- {settings['residentHello']}")
     if "Hello, world!" not in hello:
         raise MachineError(
-            f"[cp] the resident pod lost its volume after {why}: its binary"
-            f" under /mnt/csi said\n{hello}"
+            f"[cp] the resident pod lost its volume after {why}: its binary under /mnt/csi said\n{hello}"
         )
 
     mounts = await kubectl(
         cp,
-        f"exec --namespace {NAMESPACE} {name} --"
-        f" {settings['residentCat']} /proc/self/mountinfo",
+        f"exec --namespace {NAMESPACE} {name} -- {settings['residentCat']} /proc/self/mountinfo",
     )
     if nix_mount(mounts) is None:
-        raise MachineError(
-            f"[cp] the resident pod lost its /nix after {why}. Its mount"
-            f" table was:\n{mounts}"
-        )
+        raise MachineError(f"[cp] the resident pod lost its /nix after {why}. Its mount table was:\n{mounts}")
     print(f"[nixkube] {name} still has both mounts after {why}", flush=True)
 
 
@@ -796,9 +732,7 @@ def csi_presentations(mountinfo: str) -> dict[str, str]:
             continue
         after = fields[fields.index("-") + 1 :]
         fstype, options = after[0], after[2] if len(after) > 2 else ""
-        found[point] = (
-            "composefs" if fstype == "overlay" and "::" in options else "hardlinks"
-        )
+        found[point] = "composefs" if fstype == "overlay" and "::" in options else "hardlinks"
     return found
 
 
@@ -886,8 +820,7 @@ async def report(cp: Machine) -> None:
     # "[nri-wait] OCI state: id=hello pid=2081 bundle=..." and the verdict
     # was 900 characters further on.
     rc, out = await cp.execute(
-        f"journalctl --unit {RUNTIME_UNIT} --no-pager --lines 4000"
-        " | grep --text nri-wait | tail -n 20",
+        f"journalctl --unit {RUNTIME_UNIT} --no-pager --lines 4000 | grep --text nri-wait | tail -n 20",
         timeout=120,
     )
     print(f"[nixkube] what nri-wait said (rc={rc}):\n{out}", flush=True)
@@ -914,8 +847,7 @@ async def report(cp: Machine) -> None:
             for container in containers:
                 for flags in ("", " --previous"):
                     rc, out = await cp.execute(
-                        f"kubectl logs --namespace {NAMESPACE} {pod}"
-                        f" --container {container}{flags} --tail 60",
+                        f"kubectl logs --namespace {NAMESPACE} {pod} --container {container}{flags} --tail 60",
                         timeout=120,
                     )
                     if rc == 0 and out.strip():

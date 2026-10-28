@@ -56,9 +56,7 @@ async def _main() -> None:
                     max_builders=settings.builder_max,
                     min_builders=settings.builder_min,
                     idle_timeout=settings.idle_timeout,
-                    systems=[
-                        s.strip() for s in settings.systems.split(",") if s.strip()
-                    ],
+                    systems=[s.strip() for s in settings.systems.split(",") if s.strip()],
                     startup_timeout=settings.builder_startup_timeout,
                     backoff_cap=settings.builder_backoff_cap,
                     max_age=settings.builder_max_age,

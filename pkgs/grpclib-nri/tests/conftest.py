@@ -68,9 +68,7 @@ def socket_path() -> Generator[Path]:
 
 
 @pytest_asyncio.fixture
-async def test_server_process(
-    test_server_bin: Path, socket_path: Path
-) -> AsyncGenerator[asyncio.subprocess.Process]:
+async def test_server_process(test_server_bin: Path, socket_path: Path) -> AsyncGenerator[asyncio.subprocess.Process]:
     """Start the Go NRI test server and yield the process.
 
     Waits for the server to be ready by checking if the socket exists.
@@ -131,9 +129,7 @@ async def test_server_process(
 
 
 @pytest_asyncio.fixture
-async def nri_server(
-    test_server_process: asyncio.subprocess.Process, socket_path: Path
-) -> AsyncGenerator[NriServer]:
+async def nri_server(test_server_process: asyncio.subprocess.Process, socket_path: Path) -> AsyncGenerator[NriServer]:
     """Create and start an NriServer connected to the test server.
 
     The test server is already running and listening on socket_path.

@@ -67,9 +67,7 @@ class CrashLoopTracker:
     A crash loop is detected when max_restarts restarts occur within window seconds.
     """
 
-    def __init__(
-        self, max_restarts: int = 5, window: float = 60.0, name: str = ""
-    ) -> None:
+    def __init__(self, max_restarts: int = 5, window: float = 60.0, name: str = "") -> None:
         self.max_restarts = max_restarts
         self.window = window
         self.name = name
@@ -85,8 +83,7 @@ class CrashLoopTracker:
             self._timestamps.popleft()
         if len(self._timestamps) >= self.max_restarts:
             raise CrashLoopError(
-                f"{self.name!r}: crashed {len(self._timestamps)} times "
-                f"in {self.window:.0f}s (max {self.max_restarts})"
+                f"{self.name!r}: crashed {len(self._timestamps)} times in {self.window:.0f}s (max {self.max_restarts})"
             )
 
 

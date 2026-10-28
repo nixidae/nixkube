@@ -41,20 +41,14 @@ def main() -> int:
         duplicated += repeated
         total += layer["size"]
         label = names[index] if index < len(names) else f"rest-{index - len(names) + 1}"
-        print(
-            f"{index:>2}  {label:<14} {layer['size'] / MIB:>8.1f}  {len(paths):>6}  {repeated:>8}"
-        )
+        print(f"{index:>2}  {label:<14} {layer['size'] / MIB:>8.1f}  {len(paths):>6}  {repeated:>8}")
         for p in paths:
             seen.setdefault(p, index)
 
-    print(
-        f"{'':>2}  {'TOTAL':<14} {total / MIB:>8.1f}  {len(seen):>6}  {duplicated:>8}"
-    )
+    print(f"{'':>2}  {'TOTAL':<14} {total / MIB:>8.1f}  {len(seen):>6}  {duplicated:>8}")
     print(f"\n{len(layers)} layers, {len(seen)} distinct store paths.")
     if duplicated:
-        print(
-            f"{duplicated} path(s) appear in more than one layer: the dedupe chain has a gap."
-        )
+        print(f"{duplicated} path(s) appear in more than one layer: the dedupe chain has a gap.")
     return 0
 
 

@@ -124,9 +124,7 @@ def probe_delay(failures: int) -> float:
     """Seconds until the next ping, after `failures` failed pings in a row."""
     if failures == 0:
         return CACHE_PROBE_INTERVAL_SECONDS
-    return min(
-        CACHE_PROBE_RETRY_SECONDS * 2 ** (failures - 1), CACHE_PROBE_INTERVAL_SECONDS
-    )
+    return min(CACHE_PROBE_RETRY_SECONDS * 2 ** (failures - 1), CACHE_PROBE_INTERVAL_SECONDS)
 
 
 async def cache_probe_loop() -> None:
@@ -199,9 +197,7 @@ async def copy_to_cache(package_paths: set[Path] | None) -> None:
             info: dict[str, SubprocessResult] = {}
 
             async def _path_info(key: str, *extra: str) -> None:
-                info[key] = await run_captured(
-                    "nix", "path-info", "--recursive", *extra, *asked
-                )
+                info[key] = await run_captured("nix", "path-info", "--recursive", *extra, *asked)
 
             async with anyio.create_task_group() as tg:
                 tg.start_soon(_path_info, "plain")
@@ -302,9 +298,7 @@ async def copy_to_cache(package_paths: set[Path] | None) -> None:
         CACHE_COPY_DURATION.observe(time.monotonic() - copy_started)
 
 
-def schedule_copy_to_cache(
-    tasks: anyio.abc.TaskGroup, package_paths: set[Path]
-) -> None:
+def schedule_copy_to_cache(tasks: anyio.abc.TaskGroup, package_paths: set[Path]) -> None:
     """Copy in the background, so the caller does not wait for the network.
 
     `tasks` belongs to the server that is handling the request, so the copy

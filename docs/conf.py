@@ -29,8 +29,4 @@ html_theme = "furo"
 
 smartquotes = False
 
-intersphinx_mapping = (
-    {}
-    if os.environ.get("NIXCSI_DOCS_OFFLINE")
-    else {"python": ("https://docs.python.org/3", None)}
-)
+intersphinx_mapping = {} if os.environ.get("NIXCSI_DOCS_OFFLINE") else {"python": ("https://docs.python.org/3", None)}

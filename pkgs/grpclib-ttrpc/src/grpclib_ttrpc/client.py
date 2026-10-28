@@ -68,9 +68,7 @@ async def unary_call[T](
         codec = ProtoCodec()
 
     log.debug("unary_call_connecting", path=path, service=service, method=method)
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_unix_connection(path), timeout=connect_timeout
-    )
+    reader, writer = await asyncio.wait_for(asyncio.open_unix_connection(path), timeout=connect_timeout)
 
     try:
         payload = codec.encode(request, request_type)
@@ -84,9 +82,7 @@ async def unary_call[T](
         req_bytes = req.SerializeToString()
 
         if len(req_bytes) > MAX_PAYLOAD:
-            raise ProtocolError(
-                f"Request payload too large: {len(req_bytes)} > {MAX_PAYLOAD}"
-            )
+            raise ProtocolError(f"Request payload too large: {len(req_bytes)} > {MAX_PAYLOAD}")
 
         # Per ttRPC PROTOCOL.md: unary Request frames use flags=0.
         # FLAG_REMOTE_CLOSED (0x01) signals streaming (client done sending
@@ -105,9 +101,7 @@ async def unary_call[T](
         # response_timeout must be long enough for the server to do any
         # back-connects (e.g. containerd RegisterPlugin → Configure/Synchronize).
         log.debug("unary_call_waiting_response", timeout=response_timeout)
-        raw_header = await asyncio.wait_for(
-            reader.readexactly(HEADER_SIZE), timeout=response_timeout
-        )
+        raw_header = await asyncio.wait_for(reader.readexactly(HEADER_SIZE), timeout=response_timeout)
         length, _stream_id, msg_type, resp_flags = struct.unpack(">IIBB", raw_header)
         log.debug(
             "unary_call_response_header",
@@ -118,17 +112,12 @@ async def unary_call[T](
         )
 
         if msg_type != MSG_TYPE_RESPONSE:
-            raise ProtocolError(
-                f"Expected RESPONSE frame (0x{MSG_TYPE_RESPONSE:02x}), "
-                f"got 0x{msg_type:02x}"
-            )
+            raise ProtocolError(f"Expected RESPONSE frame (0x{MSG_TYPE_RESPONSE:02x}), got 0x{msg_type:02x}")
 
         if length > MAX_PAYLOAD:
             raise ProtocolError(f"Response payload too large: {length}")
 
-        resp_bytes = await asyncio.wait_for(
-            reader.readexactly(length), timeout=response_timeout
-        )
+        resp_bytes = await asyncio.wait_for(reader.readexactly(length), timeout=response_timeout)
         log.debug(
             "unary_call_response_payload",
             length=length,
@@ -349,9 +338,7 @@ class Client:
         req_bytes = req.SerializeToString()
 
         # Send request (server-streaming, so client closes immediately)
-        await self._send_frame(
-            stream_id, MSG_TYPE_REQUEST, FLAG_REMOTE_CLOSED, req_bytes
-        )
+        await self._send_frame(stream_id, MSG_TYPE_REQUEST, FLAG_REMOTE_CLOSED, req_bytes)
 
         # Read DATA frames until REMOTE_CLOSED
         while True:
@@ -456,9 +443,7 @@ class ClientStreamContext:
     async def close(self) -> None:
         """Close the client stream (signal server no more messages)."""
         if not self._closed:
-            await self.client._send_frame(
-                self.stream_id, MSG_TYPE_DATA, FLAG_REMOTE_CLOSED, b""
-            )
+            await self.client._send_frame(self.stream_id, MSG_TYPE_DATA, FLAG_REMOTE_CLOSED, b"")
             self._closed = True
 
     async def recv(self) -> _ResponseT:
@@ -513,9 +498,7 @@ class BidirectionalStreamContext:
     async def close(self) -> None:
         """Close the bidirectional stream."""
         if not self._closed:
-            await self.client._send_frame(
-                self.stream_id, MSG_TYPE_DATA, FLAG_REMOTE_CLOSED, b""
-            )
+            await self.client._send_frame(self.stream_id, MSG_TYPE_DATA, FLAG_REMOTE_CLOSED, b"")
             self._closed = True
 
     async def __aiter__(self) -> AsyncIterator[_ResponseT]:

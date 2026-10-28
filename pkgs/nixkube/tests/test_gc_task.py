@@ -213,11 +213,7 @@ class TestTheCommands:
             calls.append(argv)
             if stdout is not None:
                 if "path-info" in argv:
-                    stdout.write(
-                        json.dumps(
-                            {"/nix/store/aaa-old": {"registrationTime": 1}}
-                        ).encode()
-                    )
+                    stdout.write(json.dumps({"/nix/store/aaa-old": {"registrationTime": 1}}).encode())
                 else:
                     stdout.write(b"deleting '/nix/store/aaa-old'\n")
             return subprocess.CompletedProcess(argv, 0, b"", b"")
@@ -282,9 +278,7 @@ class TestStoreSize:
 
     @pytest.mark.asyncio
     async def test_a_path_with_no_nar_size_does_not_break_the_sum(self):
-        gc_task._record_store_size(
-            await _scan({"/nix/store/aaa": {"registrationTime": 1}}, cutoff=0)
-        )
+        gc_task._record_store_size(await _scan({"/nix/store/aaa": {"registrationTime": 1}}, cutoff=0))
 
         assert gc_task.STORE_NAR_BYTES._value.get() == 0
 
@@ -317,9 +311,7 @@ class TestLastSuccess:
 
         before = gc_task.GC_LAST_SUCCESS._value.get()
         # One pass of the loop body, then stop it at the sleep.
-        monkeypatch.setattr(
-            gc_task.anyio, "sleep", AsyncMock(side_effect=anyio.get_cancelled_exc_class())
-        )
+        monkeypatch.setattr(gc_task.anyio, "sleep", AsyncMock(side_effect=anyio.get_cancelled_exc_class()))
         with pytest.raises(anyio.get_cancelled_exc_class()):
             await gc_task.gc_loop()
 
@@ -334,9 +326,7 @@ class TestLastSuccess:
 
         monkeypatch.setattr(gc_task, "_run_gc_cycle", cycle)
         gc_task.GC_LAST_SUCCESS.set(1000.0)
-        monkeypatch.setattr(
-            gc_task.anyio, "sleep", AsyncMock(side_effect=anyio.get_cancelled_exc_class())
-        )
+        monkeypatch.setattr(gc_task.anyio, "sleep", AsyncMock(side_effect=anyio.get_cancelled_exc_class()))
         with pytest.raises(anyio.get_cancelled_exc_class()):
             await gc_task.gc_loop()
 
@@ -391,15 +381,11 @@ class TestRealProcesses:
             out = Path(tmp) / "big.txt"
             with anyio.fail_after(20):
                 with out.open("wb") as handle:
-                    await anyio.run_process(
-                        ["python3", "-c", "print('x' * 300000)"], stdout=handle
-                    )
+                    await anyio.run_process(["python3", "-c", "print('x' * 300000)"], stdout=handle)
             assert out.stat().st_size == 300001
 
     @pytest.mark.asyncio
-    async def test_the_delete_options_put_both_streams_in_one_file(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_the_delete_options_put_both_streams_in_one_file(self, tmp_path: Path) -> None:
         """`_delete`'s exact combination, against a real process.
 
         `input=` with `stdout=<file>` and `stderr=STDOUT` is what puts the
@@ -408,11 +394,7 @@ class TestRealProcesses:
         and the count silently becomes the offered length.
         """
         out = tmp_path / "delete.log"
-        script = (
-            "import sys; "
-            "print('from stdin: ' + sys.stdin.read().strip()); "
-            "print('to stderr', file=sys.stderr)"
-        )
+        script = "import sys; print('from stdin: ' + sys.stdin.read().strip()); print('to stderr', file=sys.stderr)"
 
         with anyio.fail_after(30):
             with out.open("wb") as handle:

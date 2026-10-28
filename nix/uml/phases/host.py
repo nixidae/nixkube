@@ -64,9 +64,7 @@ async def running(vm: Machine) -> str:
 
 
 async def profile(vm: Machine) -> str:
-    return (
-        await vm.succeed("readlink --canonicalize /nix/var/nix/profiles/system")
-    ).strip()
+    return (await vm.succeed("readlink --canonicalize /nix/var/nix/profiles/system")).strip()
 
 
 async def armed(vm: Machine) -> bool:
@@ -115,9 +113,7 @@ async def roll_to(
             },
         },
     )
-    generation = (await get_json(cp, f"get nixosrollout {ROLLOUT}"))["metadata"][
-        "generation"
-    ]
+    generation = (await get_json(cp, f"get nixosrollout {ROLLOUT}"))["metadata"]["generation"]
     started: list[str] = []
 
     async def settled() -> tuple[bool, str]:
@@ -135,8 +131,7 @@ async def roll_to(
             if node not in started:
                 started.append(node)
         done = status.get("phase") == "Halted" or (
-            status.get("phase") == "Complete"
-            and all(nodes.get(n, {}).get("target") == t for n, t in systems.items())
+            status.get("phase") == "Complete" and all(nodes.get(n, {}).get("target") == t for n, t in systems.items())
         )
         return done, json.dumps(status)
 
@@ -157,13 +152,9 @@ async def switch_to(
     for name, toplevel in systems.items():
         vm = vms[name]
         if "leaseRenewTime" in status["nodes"][name]:
-            raise MachineError(
-                f"[{name}] a Done node keeps its confirm state: {status}"
-            )
+            raise MachineError(f"[{name}] a Done node keeps its confirm state: {status}")
         if await running(vm) != toplevel or await profile(vm) != toplevel:
-            raise MachineError(
-                f"[{name}] the rollout is Complete and the host is not on {toplevel}"
-            )
+            raise MachineError(f"[{name}] the rollout is Complete and the host is not on {toplevel}")
         if await armed(vm):
             raise MachineError(f"[{name}] the revert is still armed after the rollout")
     # A node the poll never caught in flight switched between two polls.
@@ -234,9 +225,7 @@ async def reboots(hosts: dict[str, Machine], settings: dict) -> None:
             },
         },
     )
-    await kubectl(
-        cp, f"wait --for=condition=Ready pod/{VICTIM} --timeout={READY_TIMEOUT}s"
-    )
+    await kubectl(cp, f"wait --for=condition=Ready pod/{VICTIM} --timeout={READY_TIMEOUT}s")
     boots = {name: (await vm.succeed(BOOT_ID)).strip() for name, vm in hosts.items()}
 
     await switch_to(hosts, target, timeout=REBOOT_TIMEOUT)
@@ -255,8 +244,7 @@ async def reboots(hosts: dict[str, Machine], settings: dict) -> None:
     if spec.get("unschedulable"):
         raise MachineError("[worker] the rebooted node is still cordoned")
     print(
-        "[nixkube] the rollout drained and rebooted worker into its new initrd, "
-        "and switched cp in place",
+        "[nixkube] the rollout drained and rebooted worker into its new initrd, and switched cp in place",
         flush=True,
     )
 
@@ -281,9 +269,7 @@ async def falls_back(hosts: dict[str, Machine], settings: dict) -> None:
     if booted != old["worker"]:
         raise MachineError(f"[worker] booted {booted}, not {old['worker']}")
     # systemd-boot names a spent entry `<id>+0-<tries>.conf`.
-    entry = await worker.succeed(
-        f"grep -l 'init={bad}/init' /boot/loader/entries/*.conf"
-    )
+    entry = await worker.succeed(f"grep -l 'init={bad}/init' /boot/loader/entries/*.conf")
     if not entry.strip().endswith("+0-2.conf"):
         raise MachineError(f"[worker] the entry of {bad} is {entry.strip()}")
     spec = (await get_json(cp, "get node worker"))["spec"]
@@ -291,15 +277,12 @@ async def falls_back(hosts: dict[str, Machine], settings: dict) -> None:
         raise MachineError("[worker] the node that fell back is not cordoned")
     await kubectl(cp, "uncordon worker")
     print(
-        f"[nixkube] worker failed two boots of {bad}, fell back to "
-        f"{old['worker']}, and the rollout halted",
+        f"[nixkube] worker failed two boots of {bad}, fell back to {old['worker']}, and the rollout halted",
         flush=True,
     )
 
 
-async def from_source(
-    hosts: dict[str, Machine], cache: Machine, settings: dict
-) -> None:
+async def from_source(hosts: dict[str, Machine], cache: Machine, settings: dict) -> None:
     """The controller evaluates the git source, pynixd builds, the hosts fetch."""
     cp = hosts["cp"]
     built: dict[str, str] = settings["hostBuilt"]
@@ -331,9 +314,7 @@ async def from_source(
     print(f"[nixkube] the rollout built and switched both hosts: {built}", flush=True)
 
 
-async def broken_halts(
-    hosts: dict[str, Machine], first: dict[str, str], broken: str, worker_next: str
-) -> None:
+async def broken_halts(hosts: dict[str, Machine], first: dict[str, str], broken: str, worker_next: str) -> None:
     """cp's switch fails, so the rollout halts and never starts on worker."""
     cp, worker = hosts["cp"], hosts["worker"]
     # The host's timer fires `nixosHost.revertDelay` (30 s) after the switch.
@@ -365,15 +346,10 @@ async def broken_halts(
     switch = [
         j
         for j in jobs["items"]
-        if any(
-            e.get("value") == broken
-            for e in j["spec"]["template"]["spec"]["containers"][0]["env"]
-        )
+        if any(e.get("value") == broken for e in j["spec"]["template"]["spec"]["containers"][0]["env"])
     ]
     if not switch or not switch[0].get("status", {}).get("succeeded"):
-        raise MachineError(
-            f"[cp] the switch to {broken} did not succeed, so the timer went untested"
-        )
+        raise MachineError(f"[cp] the switch to {broken} did not succeed, so the timer went untested")
     # `job_name` in src/nixos_rollout.py: one name per rollout, node, target
     # and generation.
     key = f"{ROLLOUT}\0worker\0{worker_next}\0{status['observedGeneration']}"

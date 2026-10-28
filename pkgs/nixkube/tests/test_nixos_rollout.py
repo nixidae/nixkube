@@ -41,12 +41,8 @@ def test_selects():
         {"matchExpressions": [{"key": "zone", "operator": "NotIn", "values": ["x"]}]},
         labels,
     )
-    assert selects(
-        {"matchExpressions": [{"key": "gpu", "operator": "DoesNotExist"}]}, labels
-    )
-    assert not selects(
-        {"matchExpressions": [{"key": "gpu", "operator": "Exists"}]}, labels
-    )
+    assert selects({"matchExpressions": [{"key": "gpu", "operator": "DoesNotExist"}]}, labels)
+    assert not selects({"matchExpressions": [{"key": "gpu", "operator": "Exists"}]}, labels)
 
 
 def test_job_name_is_stable_and_short():
@@ -75,9 +71,7 @@ def test_plan_keeps_in_flight_even_when_deselected():
 
 
 def test_plan_reverted_resumes_on_a_new_generation():
-    entries = {
-        "n1": {"phase": "Reverted", "target": A, "failedSystem": A, "generation": 3}
-    }
+    entries = {"n1": {"phase": "Reverted", "target": A, "failedSystem": A, "generation": 3}}
     assert plan(entries, {"n1": A}, ["n1"], set(), 3) == entries
     out = plan(entries, {"n1": A}, ["n1"], set(), 4)
     assert out["n1"]["phase"] == NodePhase.PENDING
@@ -92,14 +86,8 @@ def test_plan_conflict():
 def test_rollout_phase():
     assert rollout_phase({}) == Phase.COMPLETE
     assert rollout_phase({"a": {"phase": "Done"}}) == Phase.COMPLETE
-    assert (
-        rollout_phase({"a": {"phase": "Done"}, "b": {"phase": "Pending"}})
-        == Phase.PROGRESSING
-    )
-    assert (
-        rollout_phase({"a": {"phase": "Reverted"}, "b": {"phase": "Switching"}})
-        == Phase.HALTED
-    )
+    assert rollout_phase({"a": {"phase": "Done"}, "b": {"phase": "Pending"}}) == Phase.PROGRESSING
+    assert rollout_phase({"a": {"phase": "Reverted"}, "b": {"phase": "Switching"}}) == Phase.HALTED
 
 
 def test_build_failure_halts():
@@ -130,9 +118,7 @@ def test_build_argv_passes_every_value_as_a_string():
 
 
 def test_git_env_basic_auth():
-    env = git_env(
-        "kubernetes.io/basic-auth", {"username": b"u", "password": b"p"}, Path("/x")
-    )
+    env = git_env("kubernetes.io/basic-auth", {"username": b"u", "password": b"p"}, Path("/x"))
     assert env["GIT_CONFIG_KEY_0"] == "http.extraHeader"
     assert env["GIT_CONFIG_VALUE_0"] == "Authorization: Basic dTpw"
 

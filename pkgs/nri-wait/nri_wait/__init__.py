@@ -75,9 +75,7 @@ def check_build_status(
         if response.get("status") == "done":
             return True
         if response.get("status") == "failed":
-            fail_build(
-                oci_state.get("id", "?"), response.get("reason", "no reason given")
-            )
+            fail_build(oci_state.get("id", "?"), response.get("reason", "no reason given"))
     except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
         print(f"[nri-wait] Failed to parse response: {e}", file=sys.stderr)
 

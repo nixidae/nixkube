@@ -92,9 +92,7 @@ async def _register_plugin(
         remaining = deadline - loop.time()
         if remaining <= 0:
             raise TimeoutError("Timed out waiting for RegisterPlugin response")
-        chunk: bytes | None = await asyncio.wait_for(
-            mux.read_channel(RUNTIME_SERVICE_CONN), timeout=remaining
-        )
+        chunk: bytes | None = await asyncio.wait_for(mux.read_channel(RUNTIME_SERVICE_CONN), timeout=remaining)
         if chunk is None:
             raise ProtocolError("Connection closed waiting for RegisterPlugin response")
         buf.extend(chunk)
@@ -102,15 +100,11 @@ async def _register_plugin(
             continue
         payload_len, _, msg_type, _ = struct.unpack_from(">IIBB", buf)
         if payload_len > MAX_PAYLOAD:
-            raise ProtocolError(
-                f"RegisterPlugin response payload too large: {payload_len}"
-            )
+            raise ProtocolError(f"RegisterPlugin response payload too large: {payload_len}")
         if len(buf) < HEADER_SIZE + payload_len:
             continue  # wait for more chunks
         if msg_type != MSG_TYPE_RESPONSE:
-            raise ProtocolError(
-                f"Expected RESPONSE (0x{MSG_TYPE_RESPONSE:02x}), got 0x{msg_type:02x}"
-            )
+            raise ProtocolError(f"Expected RESPONSE (0x{MSG_TYPE_RESPONSE:02x}), got 0x{msg_type:02x}")
         resp_bytes = bytes(buf[HEADER_SIZE : HEADER_SIZE + payload_len])
         resp = Response.FromString(resp_bytes)
         if resp.status.code != 0:

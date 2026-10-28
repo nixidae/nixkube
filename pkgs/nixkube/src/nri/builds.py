@@ -91,8 +91,6 @@ class BuildRegistry:
             await build.done.wait()
 
         if not build.done.is_set():
-            logger.warning(
-                "build_cancel_timeout", container_id=container_id, timeout=timeout
-            )
+            logger.warning("build_cancel_timeout", container_id=container_id, timeout=timeout)
             return False
         return True

@@ -73,8 +73,7 @@ def pub():
         socket = context.socket(zmq.PUB)
         path = Path(_socket_dir()) / "p.sock"
         assert len(str(path)) < zmq.IPC_PATH_MAX_LEN, (
-            f"{path} is {len(str(path))} bytes, and a unix socket path holds "
-            f"{zmq.IPC_PATH_MAX_LEN}"
+            f"{path} is {len(str(path))} bytes, and a unix socket path holds {zmq.IPC_PATH_MAX_LEN}"
         )
         socket.bind(f"ipc://{path}")
         yield socket, str(path)

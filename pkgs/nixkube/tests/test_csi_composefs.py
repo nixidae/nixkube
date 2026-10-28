@@ -20,19 +20,11 @@ def test_the_expression_names_the_tools_and_sorts_the_roots():
         Path("/nix/store/yyy-a"),
         TOOLS,
     )
-    assert (
-        '"${(builtins.storePath "/nix/store/aaa-nixkube-wrapped")}/bin/nixkube-composefs-build"'
-        in expr
-    )
-    assert (
-        '"${(builtins.storePath "/nix/store/bbb-composefs-1.0.8")}/bin/mkcomposefs"'
-        in expr
-    )
+    assert '"${(builtins.storePath "/nix/store/aaa-nixkube-wrapped")}/bin/nixkube-composefs-build"' in expr
+    assert '"${(builtins.storePath "/nix/store/bbb-composefs-1.0.8")}/bin/mkcomposefs"' in expr
     assert '"${(builtins.storePath "/nix/store/ccc-nix-2.34")}/bin/nix-store"' in expr
     # Sorted, as nix/composefs.nix sorts them: the same set is one derivation.
-    closure = next(
-        line for line in expr.splitlines() if "exportReferencesGraph" in line
-    )
+    closure = next(line for line in expr.splitlines() if "exportReferencesGraph" in line)
     assert closure.index("yyy-a") < closure.index("zzz-b")
     assert 'primary = "${(builtins.storePath "/nix/store/yyy-a")}";' in expr
 

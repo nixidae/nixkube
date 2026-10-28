@@ -105,9 +105,7 @@ class ZeroMQServer:
             self._container_info[container_id] = ContainerInfo()
         return self._container_info[container_id]
 
-    async def wait_for_pid(
-        self, container_id: str, timeout: float = 30.0
-    ) -> tuple[int, str] | None:
+    async def wait_for_pid(self, container_id: str, timeout: float = 30.0) -> tuple[int, str] | None:
         """Wait until nri-wait reports the container PID and bundle, then return (pid, bundle)."""
         log = logger.bind(container_id=container_id)
         info = self._get_info(container_id)
@@ -164,9 +162,7 @@ class ZeroMQServer:
             return
         log = logger.bind(container_id=container_id)
         try:
-            msg = json.dumps(
-                {"container_id": container_id, "status": "failed", "reason": reason}
-            )
+            msg = json.dumps({"container_id": container_id, "status": "failed", "reason": reason})
             await self.pub_socket.send(msg.encode())
             log.info("zmq_published_failed")
         except Exception:
@@ -190,11 +186,7 @@ class ZeroMQServer:
                     pid = query.get("pid")
                     bundle = query.get("bundle")
                     log = logger.bind(container_id=container_id)
-                    if (
-                        pid is not None
-                        and bundle is not None
-                        and container_id is not None
-                    ):
+                    if pid is not None and bundle is not None and container_id is not None:
                         info = self._get_info(container_id)
                         info.pid = pid
                         info.bundle = bundle
@@ -208,9 +200,7 @@ class ZeroMQServer:
                     # of passing `None` into a `str` parameter and relying on
                     # both lookups missing.
                     status = (
-                        {"status": "unknown"}
-                        if container_id is None
-                        else await self.query_build_status(container_id)
+                        {"status": "unknown"} if container_id is None else await self.query_build_status(container_id)
                     )
                     log.debug("zmq_rep_responding", status=status)
                     response = json.dumps(status)

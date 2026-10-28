@@ -23,20 +23,13 @@ from src.nix.database import pipe_commands
 # `sys.executable`, not "python3": the environment a test runs in is not
 # guaranteed to have one on PATH, and the env case below replaces PATH.
 PY = sys.executable
-WRITE_STDIN_TO = (
-    "import sys, pathlib; pathlib.Path(sys.argv[1]).write_text(sys.stdin.read())"
-)
-READ_ENV_TO = (
-    "import os, sys, pathlib; sys.stdin.read(); "
-    "pathlib.Path(sys.argv[1]).write_text(os.environ['PROBE'])"
-)
+WRITE_STDIN_TO = "import sys, pathlib; pathlib.Path(sys.argv[1]).write_text(sys.stdin.read())"
+READ_ENV_TO = "import os, sys, pathlib; sys.stdin.read(); pathlib.Path(sys.argv[1]).write_text(os.environ['PROBE'])"
 
 
 @pytest.mark.asyncio
 class TestThePipe:
-    async def test_the_consumer_reads_what_the_producer_wrote(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_the_consumer_reads_what_the_producer_wrote(self, tmp_path: Path) -> None:
         out = tmp_path / "out.txt"
 
         with anyio.fail_after(30):
@@ -49,9 +42,7 @@ class TestThePipe:
         assert codes == (0, 0)
         assert out.read_text() == "hello\n"
 
-    async def test_a_payload_larger_than_the_pipe_buffer_still_ends(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_a_payload_larger_than_the_pipe_buffer_still_ends(self, tmp_path: Path) -> None:
         """A pipe holds 64KB. Anything past it needs both ends running at once,
         which is what makes this a pipe and not a buffer with two steps."""
         out = tmp_path / "big.txt"
@@ -66,9 +57,7 @@ class TestThePipe:
         assert codes == (0, 0)
         assert out.stat().st_size == 300001
 
-    async def test_the_consumer_takes_the_environment_it_is_given(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_the_consumer_takes_the_environment_it_is_given(self, tmp_path: Path) -> None:
         """`init_database` puts `NIX_STATE_DIR` here, and that is the whole
         reason the second command writes somewhere other than the node's own
         store."""
@@ -90,9 +79,7 @@ class TestThePipe:
         assert codes == (0, 0)
         assert out.read_text() == "reached"
 
-    async def test_a_failing_producer_is_reported_and_not_swallowed(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_a_failing_producer_is_reported_and_not_swallowed(self, tmp_path: Path) -> None:
         """The consumer still exits 0: it read an empty stream and was happy.
         Only the producer's code says the dump never happened."""
         out = tmp_path / "empty.txt"
@@ -107,9 +94,7 @@ class TestThePipe:
         assert codes == (3, 0)
         assert out.read_text() == ""
 
-    async def test_a_pipe_that_never_ends_raises_rather_than_hanging(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_a_pipe_that_never_ends_raises_rather_than_hanging(self, tmp_path: Path) -> None:
         """The deadline `init_database` needs.
 
         This runs inside `NodePublishVolume` and nothing above it gives up,

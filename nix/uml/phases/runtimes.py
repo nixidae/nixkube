@@ -39,15 +39,12 @@ async def test(vms: Machines) -> None:
     # vivarium's `containerd-zero-layers`. Asserted, so the day containerd
     # runs it this fails and the probe above takes over.
     try:
-        await probe(
-            cp, settings, "a pod with hostUsers false", host_users=False, wants=("ro",)
-        )
+        await probe(cp, settings, "a pod with hostUsers false", host_users=False, wants=("ro",))
     except MachineError as error:
         if "StartError" not in str(error):
             raise
         await cp.succeed(
-            "kubectl delete jobs --namespace nixkube --wait=true"
-            " --selector app.kubernetes.io/component=uml-probe",
+            "kubectl delete jobs --namespace nixkube --wait=true --selector app.kubernetes.io/component=uml-probe",
             timeout=300,
         )
         print(
@@ -83,9 +80,7 @@ async def check_user_namespace_refused(cp: Machine, settings: dict) -> None:
         return said, "\n".join(mine[-3:]) or f"no events for {job} yet"
 
     await until("the hostUsers false probe to be refused", refused, READY_TIMEOUT, cp)
-    await cp.succeed(
-        f"kubectl delete job {job} --namespace {NAMESPACE} --wait=true", timeout=300
-    )
+    await cp.succeed(f"kubectl delete job {job} --namespace {NAMESPACE} --wait=true", timeout=300)
     print(
         "[nixkube] hostUsers false on a host-store node: refused, and says why",
         flush=True,

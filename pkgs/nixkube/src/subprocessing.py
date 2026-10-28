@@ -51,9 +51,7 @@ async def try_captured(*args, timeout: float | None = None) -> SubprocessResult:
     return result
 
 
-async def try_console(
-    *args, log_level: int = logging.DEBUG, timeout: float | None = None
-) -> SubprocessResult:
+async def try_console(*args, log_level: int = logging.DEBUG, timeout: float | None = None) -> SubprocessResult:
     """Run a command with output forwarded to logs, and raise SubprocessError if it fails.
 
     Args:
@@ -93,9 +91,7 @@ async def run_captured(*args, timeout: float | None = None) -> SubprocessResult:
     return await run_console(*args, log_level=logging.NOTSET, timeout=timeout)
 
 
-async def run_console(
-    *args, log_level: int = logging.DEBUG, timeout: float | None = None
-) -> SubprocessResult:
+async def run_console(*args, log_level: int = logging.DEBUG, timeout: float | None = None) -> SubprocessResult:
     """Run a command with output forwarded to logs, without raising on non-zero exit.
 
     Args:
@@ -133,21 +129,15 @@ async def run_console(
             # a chatty command finish at all -- and reading them together is
             # what makes `combined` interleaved rather than concatenated.
             async with anyio.create_task_group() as tg:
-                tg.start_soon(
-                    _read_stream, proc.stdout, stdout_data, combined_data, log_level
-                )
-                tg.start_soon(
-                    _read_stream, proc.stderr, stderr_data, combined_data, log_level
-                )
+                tg.start_soon(_read_stream, proc.stdout, stdout_data, combined_data, log_level)
+                tg.start_soon(_read_stream, proc.stderr, stderr_data, combined_data, log_level)
             # Not raised on non-zero: try_captured/try_console decide that.
             returncode = await proc.wait()
 
     if scope.cancelled_caught:
         # Return code 124 is the conventional one for a timeout.
         SUBPROCESS_CALLS.labels(command=label, result="timeout").inc()
-        SUBPROCESS_DURATION.labels(command=label).observe(
-            time.perf_counter() - start_time
-        )
+        SUBPROCESS_DURATION.labels(command=label).observe(time.perf_counter() - start_time)
         raise CommandTimeoutError(
             returncode=124,
             stdout="\n".join(stdout_data).strip(),
@@ -158,9 +148,7 @@ async def run_console(
 
     assert returncode is not None
     elapsed_time = time.perf_counter() - start_time
-    SUBPROCESS_CALLS.labels(
-        command=label, result="ok" if returncode == 0 else "error"
-    ).inc()
+    SUBPROCESS_CALLS.labels(command=label, result="ok" if returncode == 0 else "error").inc()
     SUBPROCESS_DURATION.labels(command=label).observe(elapsed_time)
     cmd_str = shlex.join([str(arg) for arg in args])
 
@@ -176,9 +164,7 @@ async def run_console(
 
     # Also log slow commands at INFO regardless of caller's log_level
     if elapsed_time > 5:
-        logger.info(
-            "slow_command", elapsed_time=round(elapsed_time, 3), command=cmd_str
-        )
+        logger.info("slow_command", elapsed_time=round(elapsed_time, 3), command=cmd_str)
 
     return SubprocessResult(
         returncode,

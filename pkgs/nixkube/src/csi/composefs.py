@@ -78,9 +78,7 @@ def tools() -> Tools:
             nix=Path(os.environ["NIXKUBE_NIX"]),
         )
     except KeyError as missing:
-        raise FileNotFoundError(
-            f"{missing} is not set: not run by the nixkube wrapper"
-        ) from None
+        raise FileNotFoundError(f"{missing} is not set: not run by the nixkube wrapper") from None
 
 
 def expression(roots: set[Path], primary: Path | None, tools: Tools) -> str:
@@ -110,9 +108,7 @@ def expression(roots: set[Path], primary: Path | None, tools: Tools) -> str:
     return "\n".join(lines) + "\n"
 
 
-async def build_image(
-    roots: set[Path], primary: Path | None, out_link: Path, extra_args: list[str]
-) -> Path:
+async def build_image(roots: set[Path], primary: Path | None, out_link: Path, extra_args: list[str]) -> Path:
     """The volume's image, substituted or built, rooted at `out_link`."""
     return await _run_nix_build(
         [
@@ -147,9 +143,7 @@ def overlay_options(erofs: Path, basedir: str, upper: Path | None) -> str:
     return f"{options},upperdir={upper / 'upper'},workdir={upper / 'work'}"
 
 
-def _mount(
-    source: str, target: Path, fstype: str, flags: int, data: str | None
-) -> None:
+def _mount(source: str, target: Path, fstype: str, flags: int, data: str | None) -> None:
     ret = _libc.mount(
         source.encode(),
         os.fsencode(target),
@@ -180,9 +174,7 @@ def _mount_image(image: Path, at: Path) -> None:
     )
 
 
-def compose(
-    image: Path, target: Path, basedir: str, scratch: Path, upper: Path | None
-) -> None:
+def compose(image: Path, target: Path, basedir: str, scratch: Path, upper: Path | None) -> None:
     """The volume at `target`: the image at `scratch`/erofs, the overlay over
     it at `target`, then the image's own mount detached. The overlay holds
     the image, so the volume is one mount, and the loop device, if any, goes
@@ -196,9 +188,7 @@ def compose(
     _mount_image(image, erofs)
     try:
         flags = MS_RDONLY if upper is None else 0
-        _mount(
-            "overlay", target, "overlay", flags, overlay_options(erofs, basedir, upper)
-        )
+        _mount("overlay", target, "overlay", flags, overlay_options(erofs, basedir, upper))
     finally:
         _libc.umount2(os.fsencode(erofs), MNT_DETACH)
 
@@ -225,9 +215,7 @@ async def mount(image: Path, target: Path, readonly: bool, volume_root: Path) ->
 
 # The probe's image: one file, backed by an object whose name differs, so a
 # root that shows the object is a root that shows the base directory.
-_PROBE_DUMP = (
-    "/ 0 40555 2 0 0 0 1.0 - - -\n/probe 7 100444 1 0 0 0 1.0 probe-object - -\n"
-)
+_PROBE_DUMP = "/ 0 40555 2 0 0 0 1.0 - - -\n/probe 7 100444 1 0 0 0 1.0 probe-object - -\n"
 _PROBE_CONTENT = b"nixkube"
 
 
