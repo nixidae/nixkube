@@ -1500,7 +1500,7 @@ rec {
 
   # Every GitHub Actions workflow as a value, beside the file it renders to.
   # ci/workflows/*.nix hold them and say why.
-  ghanix = import sources.ghanix { inherit lib; };
+  ghanix = (import sources.ghanix { inherit lib; }).lib;
 
   ciWorkflows = {
     pages = {
