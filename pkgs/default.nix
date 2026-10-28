@@ -148,7 +148,7 @@ in
   # directory or a branch name: either one builds a pynixd that no lock
   # records, so CI and a working copy ship different `cacheEnv`s and a node
   # asks its substituters for a path nobody built.
-  pynixd = (import sources.pynixd { inherit pkgs sources; }).library;
+  pynixd = (import sources.pynixd { inherit pkgs sources; }).packages.pynixd-lib;
   pynixd-nixkube-fake-nss = pkgs.callPackage ./pynixd-nixkube/fake-nss.nix { };
 
   pynixd-nixkube = self.mkApp {

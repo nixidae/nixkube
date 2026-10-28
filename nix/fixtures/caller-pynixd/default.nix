@@ -4,5 +4,5 @@
 # that names this directory must get this answer back.
 { ... }:
 {
-  library = "caller-pynixd";
+  packages.pynixd-lib = "caller-pynixd";
 }
