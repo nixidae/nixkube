@@ -167,8 +167,10 @@ let
   /*
     A second NixOS node, for the host phase to roll out across two nodes.
     `phases/cluster.py` taints it, so every other phase runs on `cp` alone;
-    the switch Jobs name their node and tolerate every taint. It runs
-    kubelet, the CRI and those Jobs, so vivarium's worker size fits.
+    the switch Jobs name their node and tolerate every taint, and the node
+    DaemonSet tolerates it too, because the Jobs run from the store it
+    mounts. It runs kubelet, the CRI, the node DaemonSet and those Jobs, so
+    vivarium's worker size fits.
   */
   workerNode =
     { config, ... }:
