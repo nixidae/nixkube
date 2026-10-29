@@ -7,8 +7,9 @@
 
   A rollout names either `systems`, prebuilt toplevels by node, or a
   `source`: a git URL, a rev and an attribute, a function
-  `{ name, labels, system }: <NixOS system>`. The controller evaluates a
-  source once per node and builds it through pynixd, and the switch Job
+  `{ name, labels, system }: <toplevel>` that returns the derivation to
+  build. The controller calls it once per node and builds the result through
+  pynixd, never looking inside a module system, and the switch Job
   copies the result from pynixd into the host's store.
 
   A node whose kernel, initrd or kernel modules change is cordoned and
@@ -153,7 +154,7 @@ let
                     additionalProperties = storePath;
                   };
                   source = {
-                    description = "A git repository whose attribute is a function `{ name, labels, system }: <NixOS system>`, evaluated once per selected node.";
+                    description = "A git repository whose attribute is a function `{ name, labels, system }: <toplevel>`, called once per selected node; the derivation it returns is built and switched to.";
                     type = "object";
                     required = [
                       "url"

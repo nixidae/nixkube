@@ -236,7 +236,8 @@ ARCH_SYSTEMS: Final = {"amd64": "x86_64-linux", "arm64": "aarch64-linux"}
 # To select `attribute`, a root that is a function is called with `{ }`, as
 # `nix-build --file` does: many repositories have
 # `{ inputs ? ..., pkgs ? ... }: { ... }`. With no attribute the root is the
-# node function itself, and is called with the node.
+# node function itself, and is called with the node. Whatever it returns is
+# built as it is: a toplevel, or any derivation that switches like one.
 BUILD_EXPR: Final = r"""
 { url, rev, attribute, name, labels, system }:
 let
@@ -246,7 +247,7 @@ let
   path = builtins.filter builtins.isString (builtins.split "\\." attribute);
   f = builtins.foldl' (v: k: v.${k}) root (if attribute == "" then [ ] else path);
 in
-(f { inherit name system; labels = builtins.fromJSON labels; }).config.system.build.toplevel
+f { inherit name system; labels = builtins.fromJSON labels; }
 """
 
 
