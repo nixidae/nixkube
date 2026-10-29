@@ -60,31 +60,23 @@ spec:
       mountPath: /nix
   volumes:
   - name: nix
-    ephemeral:
-      volumeClaimTemplate:
-        spec:
-          accessModes: ["ReadOnlyMany"]
-          storageClassName: ephemeral-storage
-          resources:
-            requests:
-              storage: 1Gi
-          csi:
-            driver: nixkube
-            volumeAttributes:
-              x86_64-linux: /nix/store/hello-......
-              aarch64-linux: /nix/store/hello-......
-              flakeRef: github:nixos/nixpkgs/nixos-unstable#hello
-              nixExpr: |
-                let
-                  nixpkgs = builtins.fetchTree {
-                    type = "github";
-                    owner = "nixos";
-                    repo = "nixpkgs";
-                    ref = "nixos-unstable";
-                  };
-                  pkgs = import nixpkgs { };
-                in
-                pkgs.hello
+    csi:
+      driver: nixkube
+      volumeAttributes:
+        x86_64-linux: /nix/store/hello-......
+        aarch64-linux: /nix/store/hello-......
+        flakeRef: github:nixos/nixpkgs/nixos-unstable#hello
+        nixExpr: |
+          let
+            nixpkgs = builtins.fetchTree {
+              type = "github";
+              owner = "nixos";
+              repo = "nixpkgs";
+              ref = "nixos-unstable";
+            };
+            pkgs = import nixpkgs { };
+          in
+          pkgs.hello
 ```
 
 The first successful option by priority wins.
