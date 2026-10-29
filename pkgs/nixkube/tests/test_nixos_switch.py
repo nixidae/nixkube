@@ -67,7 +67,7 @@ def test_journal_lines_keeps_a_partial_line_for_the_next_read() -> None:
 
 
 def test_journal_lines_decodes_a_message_journald_sent_as_bytes() -> None:
-    _, lines = journal_lines(_entry("c1", list(b"calf\xc3\xa9 \xff")) + b"\n")
+    _, lines = journal_lines(_entry("c1", list(b"caf\xc3\xa9 \xff")) + b"\n")
     assert lines == [("c1", "café �")]
 
 
