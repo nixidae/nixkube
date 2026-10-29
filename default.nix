@@ -263,34 +263,16 @@ rec {
     '';
   };
 
-  # The module options as CommonMark. `genModDoc` writes it into the tree and
-  # `docOptionsCheck` compares the tree against it, so both read one binding.
-  optionsDocs = import ./nix/shared/options-reference.nix { inherit lib pkgs; } {
+  optionsReference = import ./nix/shared/options-reference.nix { inherit lib pkgs; } {
+    title = "Module options";
     inherit (kubenixCI1) options;
     prefixes = [
       "nix-csi"
       "nixkube"
     ];
-    declarationsRoot = ./.;
+    root = ./.;
+    repository = "nixidae/nixkube";
   };
-
-  genModDoc =
-    pkgs.writeScriptBin "genModDoc" # bash
-      ''
-        #! ${pkgs.runtimeShell}
-        set -euo pipefail
-        # GIT_ROOT comes from the dev shell. Without it this wrote to
-        # `/doc/options.md`, which fails with "No such file or directory" and,
-        # unset `-e`, still exited 0. Ask git when the variable is absent, so
-        # `nix run --file . genModDoc` works from any directory in the
-        # checkout and from no shell at all.
-        root="''${GIT_ROOT:-$(${lib.getExe pkgs.git} rev-parse --show-toplevel)}"
-        # In the nixidae monorepo the checkout's root holds this source.
-        if [ -d "$root/nixkube/doc" ]; then
-          root="$root/nixkube"
-        fi
-        cp --no-preserve=mode ${optionsDocs.optionsCommonMark} "$root/doc/options.md"
-      '';
 
   # Evaluate the hostPath+subPath check against a container that has no
   # volumeMounts at all.
@@ -1137,7 +1119,7 @@ rec {
   inherit ((import sources.nixvenv { inherit pkgs; }).lib) nixvenv;
   nixkube-docs = pkgs.python3Packages.callPackage ./nix/docs.nix {
     inherit (pkgs) graphviz;
-    inherit nixvenv;
+    inherit nixvenv optionsReference;
   };
 
   nixImage = pkgs.callPackage ./niximage.nix {
@@ -1467,7 +1449,6 @@ rec {
       sourcesAreLocked
       ciWorkflowCheck
       presentationChartIsCurrent
-      docOptionsCheck
       builderPresentsPinnedHostKey
       noPrivateKeysInManifest
       probeWatchHasRbac
@@ -1565,26 +1546,6 @@ rec {
   # parser answers the boolean `true` for it, which would compare a boolean
   # key against a string one and fail every run.
   #
-  # Does doc/options.md still say what the modules say?
-  #
-  # The same question ciWorkflowCheck asks about the workflows, and it exists
-  # because nothing asked it: `genModDoc` was broken two ways for weeks and
-  # the committed file drifted 573 lines with nothing to notice. A generated
-  # file with no gate is a file that silently stops being generated.
-  #
-  # Text, not parsed. Markdown has no canonical form to compare, and the
-  # generator is a derivation, so its output is byte-stable for a given
-  # module set.
-  docOptionsCheck = pkgs.runCommand "doc-options-check" { } ''
-    if ! diff --unified ${./doc/options.md} ${optionsDocs.optionsCommonMark}; then
-      echo >&2
-      echo "doc/options.md and the module options disagree." >&2
-      echo "Run: nix run --file . genModDoc" >&2
-      exit 1
-    fi
-    touch $out
-  '';
-
   ciWorkflowCheck =
     pkgs.runCommand "ci-workflow-check"
       {

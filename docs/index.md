@@ -6,4 +6,5 @@
 
 store-presentation
 preview-rendering
+options
 ```

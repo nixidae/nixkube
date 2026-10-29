@@ -6,12 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Always use Jujutsu (jj) instead of Git** for all version control operations in this repository.
 
-**Before committing**, run from `nixkube/` what the CI `check` job runs, and regenerate the docs:
+**Before committing**, run from `nixkube/` what the CI `check` job runs:
 
 ```bash
 nix run --file . treefmt
 nix build --file ./checks.nix all
-nix run --file . genModDoc
 ```
 
 Run treefmt from `nixkube/` only. From the nixidae root it formats the whole monorepo.
