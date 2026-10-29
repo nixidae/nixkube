@@ -1182,6 +1182,7 @@ let
               manifest = umlManifest;
               matrixCell = { inherit backend cri kata; };
               attrPath = [
+                "internal"
                 "umlMatrix"
                 name
               ];
@@ -1217,6 +1218,7 @@ let
               kata = false;
             };
             attrPath = [
+              "internal"
               "umlMatrix"
               "uml-${cri}-hoststore"
             ];
@@ -1236,6 +1238,7 @@ let
             erofs = false;
           };
           attrPath = [
+            "internal"
             "umlMatrix"
             "qemu-containerd-noerofs"
           ];
@@ -1259,6 +1262,7 @@ let
             kata = false;
           };
           attrPath = [
+            "internal"
             "umlMatrix"
             "uml-containerd-hardlinks"
           ];

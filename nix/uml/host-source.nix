@@ -16,7 +16,7 @@
   pkgs,
   lib,
   sources,
-  # Where `nixkube/default.nix` keeps this run, such as [ "umlTest" ].
+  # Where `nixkube/default.nix` keeps this run, such as [ "internal" "umlTest" ].
   attrPath,
   knobs,
 }:

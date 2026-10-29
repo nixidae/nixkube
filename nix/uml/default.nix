@@ -37,7 +37,10 @@
   matrixCell ? null,
   # Where ../../default.nix keeps this run. The source rollout's repository
   # evaluates the same run, from there.
-  attrPath ? [ "umlTest" ],
+  attrPath ? [
+    "internal"
+    "umlTest"
+  ],
 }:
 let
   vivariumSet = import sources.vivarium { inherit pkgs sources; };
