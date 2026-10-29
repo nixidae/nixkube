@@ -46,6 +46,7 @@ from ..nix import (
     get_build_args,
     get_current_system,
 )
+from ..nri.annotations import parse_pod_exclude
 from ..presentation import Presentation
 from ..volume import (
     cleanup_failed_volume,
@@ -291,17 +292,23 @@ class NodeServicer(csi_grpc.NodeBase):
                 e.pod = pod
                 raise
 
-            # Build packages from pod spec
-            try:
-                async with self.volume_locks[pod_uid]:
-                    package_paths = await build_pod_packages(
-                        pod,
-                        gc_root,
-                        extra_args,
-                    )
-            except CSIError as e:
-                e.pod = pod
-                raise
+            # Build packages from pod spec, unless the pod opted out: then
+            # the volume holds its own package alone (`parse_pod_exclude`).
+            annotations = pod_doc(pod).get("metadata", {}).get("annotations") or {}
+            if parse_pod_exclude(annotations, self.system):
+                log.info("pod_packages_excluded")
+                package_paths: set[Path] = set()
+            else:
+                try:
+                    async with self.volume_locks[pod_uid]:
+                        package_paths = await build_pod_packages(
+                            pod,
+                            gc_root,
+                            extra_args,
+                        )
+                except CSIError as e:
+                    e.pod = pod
+                    raise
 
             if primary_package is not None:
                 package_paths.add(primary_package)

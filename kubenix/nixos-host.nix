@@ -38,10 +38,11 @@ in
       metadata.labels = labels;
       template = {
         metadata.labels = labels;
-        # `TOPLEVEL` is a store path in the environment, and nixkube's NRI
-        # plugin would realise it on the node before the container starts:
-        # the path the program exists to bring.
-        metadata.annotations."nixkube/fetch-exclude" = "true";
+        # `TOPLEVEL` is a store path in the environment. Without this, the
+        # CSI driver fetches it into the volume and NRI into the node's
+        # store, before the container starts: the path the program exists to
+        # bring, which a prebuilt rollout's host may hold alone.
+        metadata.annotations."nixkube/pod-exclude" = "true";
         spec = {
           restartPolicy = "Never";
           # /proc/1 is the host's init, whose namespaces the program joins.

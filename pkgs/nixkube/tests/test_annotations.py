@@ -10,6 +10,7 @@ from src.nri.annotations import (
     extract_container_store_paths,
     parse_nix_exclude,
     parse_nix_rw,
+    parse_pod_exclude,
     parse_store_mounts,
 )
 
@@ -369,3 +370,27 @@ class TestExtractContainerStorePaths:
         )
         result = extract_container_store_paths(req, "x86_64-linux")
         assert result == {Path(self.STORE_PATH)}
+
+class TestParsePodExclude:
+    """`parse_pod_exclude`: the CSI driver fetches nothing a pod's spec names.
+
+    The switch Job is the case. Its `TOPLEVEL` names the host system it
+    switches to, which may be in the host's store only, and its volume holds
+    the switch program alone. Fetching the spec's paths into the volume
+    failed the mount: no substituter has that system.
+    """
+
+    def test_nothing_is_excluded_by_default(self) -> None:
+        assert parse_pod_exclude({}, "x86_64-linux") is False
+
+    def test_pod_wide_exclude(self) -> None:
+        assert parse_pod_exclude({"nixkube/pod-exclude": "true"}, "x86_64-linux") is True
+
+    def test_a_container_exclude_is_not_pod_wide(self) -> None:
+        """A volume belongs to the pod, so only the pod-wide annotation speaks for it."""
+        assert parse_pod_exclude({"nixkube/switch-exclude": "true"}, "x86_64-linux") is False
+
+    def test_a_system_qualified_exclude(self) -> None:
+        annotations = {"nixkube/pod-exclude@aarch64-linux": "true"}
+        assert parse_pod_exclude(annotations, "aarch64-linux") is True
+        assert parse_pod_exclude(annotations, "x86_64-linux") is False
