@@ -29,7 +29,8 @@ let
     "app.kubernetes.io/component" = "nixos-host";
   };
   storeVolumeAttributes = lib.mapAttrs (
-    system: pkgs: "${ekn.lib.packageRef "nixkube-nixos-switch-env-${system}" pkgs.nixkube-nixos-switch-env}"
+    system: pkgs:
+    "${ekn.lib.packageRef "nixkube-nixos-switch-env-${system}" pkgs.nixkube-nixos-switch-env}"
   ) csiPkgs;
 in
 {
