@@ -371,6 +371,7 @@ class TestExtractContainerStorePaths:
         result = extract_container_store_paths(req, "x86_64-linux")
         assert result == {Path(self.STORE_PATH)}
 
+
 class TestParsePodExclude:
     """`parse_pod_exclude`: the CSI driver fetches nothing a pod's spec names.
 

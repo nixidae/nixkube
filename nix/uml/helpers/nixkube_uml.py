@@ -689,7 +689,7 @@ async def replace_served_pods(cp: Machine) -> None:
     `check_resident` counts pods and finds the new one.
     """
     _, out = await cp.execute(
-        "grep --files-with-matches '\"driverName\":\"nixkube\"' "
+        'grep --files-with-matches \'"driverName":"nixkube"\' '
         "/var/lib/kubelet/pods/*/volumes/kubernetes.io~csi/*/vol_data.json | cut -d/ -f6 | sort -u",
         timeout=60,
     )
@@ -863,16 +863,16 @@ async def report(cp: Machine) -> None:
         " findmnt --task $pid --list --noheadings --output TARGET,FSTYPE,OPTIONS | grep nix;"
         " opts=$(findmnt --task $pid --list --noheadings --output OPTIONS --mountpoint /nix);"
         " for d in upperdir workdir; do"
-        "   p=$(echo \"$opts\" | tr , '\\n' | sed -n \"s/^$d=//p\");"
-        "   [ -n \"$p\" ] && { echo \"$d $p:\"; ls -la \"$p\" 2>&1 | head -n 4; };"
+        '   p=$(echo "$opts" | tr , \'\\n\' | sed -n "s/^$d=//p");'
+        '   [ -n "$p" ] && { echo "$d $p:"; ls -la "$p" 2>&1 | head -n 4; };'
         " done;"
         " dmesg | grep -i overlay | tail -n 20;"
         " vol=$(echo \"$opts\" | tr , '\\n' | sed -n 's|^upperdir=.*/\\(csi-[0-9a-f]*\\)/upper$|\\1|p');"
-        " echo \"what the node did with $vol:\";"
+        ' echo "what the node did with $vol:";'
         " for pod in $(kubectl get pods --namespace nixkube --selector app.kubernetes.io/component=node"
         "   --output jsonpath='{.items[*].metadata.name}'); do"
         "   kubectl logs --namespace nixkube $pod --container nix-node --tail -1 --timestamps"
-        "     | grep --text \"$vol\" | grep -v gc_active | tail -n 25;"
+        '     | grep --text "$vol" | grep -v gc_active | tail -n 25;'
         " done;"
         " ls -la $root/nix $root/nix/store | head -n 12;"
         " ls -la $root/nix/store/.links 2>&1 | head -n 3;"
