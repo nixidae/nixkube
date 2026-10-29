@@ -668,14 +668,37 @@ async def break_and_recover(cp: Machine, settings: dict, name: str) -> None:
     await wait_for_driver(cp, settings)
     await probe(cp, settings, name)
     if resident is REPLACED:
-        # `--wait` by default, so the old pod is gone before
-        # `check_resident` counts pods and finds the new one.
-        await kubectl(cp, f"delete pod --namespace {NAMESPACE} {RESIDENT}")
+        await replace_served_pods(cp)
     await check_resident(cp, settings, name)
     await check_reconciled(cp, settings, name)
 
 
 RESIDENT = "--selector app.kubernetes.io/component=uml-resident"
+
+
+async def replace_served_pods(cp: Machine) -> None:
+    """Delete every pod on the node that a nixkube volume serves.
+
+    The wipe breaks all of them, not the resident alone. The rollout
+    controller is one: its rw store loses its overlay's upper and work
+    directories, and every build after that fails with ENOENT on
+    `/nix/store/.links` -- the host phase, minutes later.
+
+    Kubelet's own record of the pod's volumes names them, so no node name
+    is needed. `--wait` by default, so the old resident is gone before
+    `check_resident` counts pods and finds the new one.
+    """
+    _, out = await cp.execute(
+        "grep --files-with-matches '\"driverName\":\"nixkube\"' "
+        "/var/lib/kubelet/pods/*/volumes/kubernetes.io~csi/*/vol_data.json | cut -d/ -f6 | sort -u",
+        timeout=60,
+    )
+    uids = set(out.split())
+    pods = await get_json(cp, "get pods --all-namespaces")
+    for pod in pods["items"]:
+        meta = pod["metadata"]
+        if meta["uid"] in uids:
+            await kubectl(cp, f"delete pod --namespace {meta['namespace']} {meta['name']}")
 
 
 async def check_resident(cp: Machine, settings: dict, why: str) -> None:
