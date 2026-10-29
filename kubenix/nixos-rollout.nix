@@ -427,9 +427,16 @@ in
                     JOB_TTL_SECONDS.value = toString cfg.nixosHost.jobTTLSeconds;
                     PYNIXD_STORE.value = "ssh-ng://nix@pynixd";
                   };
-                  resources.requests = {
-                    memory = "64Mi";
-                    cpu = "10m";
+                  # Evaluating a NixOS system is the cost. On sg1 (2026-10-29,
+                  # 12 h): median 466 MiB, peak 2.2 GiB while it evaluated
+                  # three nodes. The request follows the median; the limit
+                  # leaves room for a larger system.
+                  resources = {
+                    requests = {
+                      memory = "512Mi";
+                      cpu = "10m";
+                    };
+                    limits.memory = "4Gi";
                   };
                   # A source rollout evaluates here and builds through
                   # pynixd, as a node does.
