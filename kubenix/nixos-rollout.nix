@@ -7,8 +7,9 @@
 
   A rollout names either `systems`, prebuilt toplevels by node, or a
   `source`: a git URL, a rev and an attribute, a function
-  `{ name, labels, system }: <NixOS system>`. The controller evaluates a
-  source once per node and builds it through pynixd, and the switch Job
+  `{ name, labels, system }: <toplevel>` that returns the derivation to
+  build. The controller calls it once per node and builds the result through
+  pynixd, never looking inside a module system, and the switch Job
   copies the result from pynixd into the host's store.
 
   A node whose kernel, initrd or kernel modules change is cordoned and
@@ -20,10 +21,17 @@
 {
   config,
   lib,
+  csiPkgs,
+  ekn,
   ...
 }:
 let
   cfg = config.nixkube;
+  # The controller runs out of the store, mounted through the node's CSI
+  # driver as a pynixd builder is: an apply moves it, no image does.
+  storeVolumeAttributes = lib.mapAttrs (
+    system: pkgs: "${ekn.lib.packageRef "nixkube-rollout-env-${system}" pkgs.nixkube-rollout-env}"
+  ) csiPkgs;
   name = "nixkube-nixos-rollout";
   labels = cfg.labels // {
     "app.kubernetes.io/component" = "nixos-rollout";
@@ -146,7 +154,7 @@ let
                     additionalProperties = storePath;
                   };
                   source = {
-                    description = "A git repository whose attribute is a function `{ name, labels, system }: <NixOS system>`, evaluated once per selected node.";
+                    description = "A git repository whose attribute is a function `{ name, labels, system }: <toplevel>`, called once per selected node; the derivation it returns is built and switched to.";
                     type = "object";
                     required = [
                       "url"
@@ -405,9 +413,13 @@ in
               serviceAccountName = name;
               containers = lib.mkNamedList {
                 controller = {
-                  image = cfg.images.nix;
+                  image = cfg.images.scratch;
                   inherit (cfg) imagePullPolicy;
-                  command = [ "nixkube-rollout-controller" ];
+                  command = [
+                    "/nix/var/result/bin/tini"
+                    "--"
+                    "/nix/var/result/bin/nixkube-rollout-controller"
+                  ];
                   env = lib.mkNamedList {
                     NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
                     REVERT_DELAY.value = toString cfg.nixosHost.revertDelay;
@@ -422,6 +434,10 @@ in
                   # A source rollout evaluates here and builds through
                   # pynixd, as a node does.
                   volumeMounts = lib.mkNamedList {
+                    nix-store = {
+                      mountPath = "/nix";
+                      subPath = "nix";
+                    };
                     nix-config.mountPath = "/etc/nix";
                     ssh-config.mountPath = "/etc/ssh";
                     ssh-dynauth.mountPath = "/etc/ssh-dynauth";
@@ -430,6 +446,11 @@ in
                 };
               };
               volumes = lib.mkNamedList {
+                nix-store.csi = {
+                  driver = "nixkube";
+                  readOnly = false;
+                  volumeAttributes = storeVolumeAttributes;
+                };
                 nix-config.configMap.name = "nix-node";
                 ssh-config.configMap = {
                   name = "ssh-config";

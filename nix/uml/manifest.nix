@@ -116,6 +116,16 @@ in
 
     # The host phase switches the guest's own system. Issue #24.
     nixosHost.enable = true;
+    # The switch Job runs from the store the CSI driver mounts, so a node a
+    # rollout switches needs the node DaemonSet. phases/cluster.py taints
+    # worker to keep the other phases' workloads off it, not nixkube.
+    node.tolerations = [
+      {
+        key = "nixkube.nixidae.org/host-only";
+        operator = "Exists";
+        effect = "NoSchedule";
+      }
+    ];
     # The broken switch waits this out. A good switch needs it to cover the
     # switch, its confirmation and the disarm Job: 7.5 and 9.7 s measured on
     # a quiet host, and 12 s at a load of 13, when 12 lost the race.

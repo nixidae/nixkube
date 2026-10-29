@@ -120,18 +120,21 @@ def test_build_argv_passes_every_value_as_a_string() -> None:
 
 
 def test_git_env_basic_auth() -> None:
-    env = git_env("kubernetes.io/basic-auth", {"username": b"u", "password": b"p"}, Path("/x"))
-    assert env["GIT_CONFIG_KEY_0"] == "http.extraHeader"
+    url = "https://git.example.invalid/group/repo.git"
+    env = git_env("kubernetes.io/basic-auth", {"username": b"u", "password": b"p"}, Path("/x"), url)
+    # Scoped to the source: the evaluation fetches other repositories too.
+    assert env["GIT_CONFIG_KEY_0"] == f"http.{url}.extraHeader"
     assert env["GIT_CONFIG_VALUE_0"] == "Authorization: Basic dTpw"
 
 
 def test_git_env_ssh_needs_known_hosts(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="known_hosts"):
-        git_env("kubernetes.io/ssh-auth", {"ssh-privatekey": b"k"}, tmp_path)
+        git_env("kubernetes.io/ssh-auth", {"ssh-privatekey": b"k"}, tmp_path, "ssh://git@host/repo")
     env = git_env(
         "kubernetes.io/ssh-auth",
         {"ssh-privatekey": b"k", "known_hosts": b"h"},
         tmp_path,
+        "ssh://git@host/repo",
     )
     assert (tmp_path / "key").stat().st_mode & 0o777 == 0o600
     assert "StrictHostKeyChecking=yes" in env["GIT_SSH_COMMAND"]
@@ -139,7 +142,7 @@ def test_git_env_ssh_needs_known_hosts(tmp_path: Path) -> None:
 
 def test_git_env_refuses_other_types(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unsupported"):
-        git_env("Opaque", {}, tmp_path)
+        git_env("Opaque", {}, tmp_path, "https://host/repo")
 
 
 def test_a_restart_keeps_a_reverted_node_while_it_builds() -> None:

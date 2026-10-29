@@ -136,6 +136,70 @@ in
     extraGroupLines = [ "nixbld:x:30000:" ];
   };
 
+  # The NixOSRollout controller, which evaluates and builds sources. It brings
+  # nix, git and ssh along, and installs the fake NSS files first: ssh exits
+  # when its user has no passwd entry. It brings its CA bundle and /bin/sh
+  # too, because the scratch image has neither (measured on sg1): git's
+  # https fetch fails with "unable to get local issuer certificate", and the
+  # ssh-ng store's `LocalCommand=echo started` never runs, so nix waits for
+  # "started" while pynixd waits for nix's handshake, forever. $SHELL does
+  # not help: nix's createSSHEnv sets SHELL=/bin/sh for ssh itself.
+  nixkube-rollout-controller = self.writeShellApplication {
+    name = "nixkube-rollout-controller";
+    runtimeInputs = [
+      self.coreutils
+      self.gitMinimal
+      self.nix
+      self.rsync
+      self.openssh
+      self.kubectl
+    ];
+    text = ''
+      mkdir -p /tmp
+      rsync --archive ${self.appstarter-fake-nss}/ /
+      export SSL_CERT_FILE=${self.cacert}/etc/ssl/certs/ca-bundle.crt
+      export NIX_SSL_CERT_FILE=$SSL_CERT_FILE GIT_SSL_CAINFO=$SSL_CERT_FILE
+      mkdir -p /bin
+      ln -sfn ${self.runtimeShell} /bin/sh
+      exec ${self.nixkube}/bin/nixkube-nixos-rollout "$@"
+    '';
+  };
+
+  # What the controller's pod mounts through the node's CSI driver, as a
+  # pynixd builder does: the controller runs out of the store, so a change to
+  # it reaches a cluster with an apply and no new image.
+  nixkube-rollout-env = self.buildEnv {
+    name = "nixkube-rollout-env";
+    paths = [
+      self.nixkube-rollout-controller
+      self.tini
+    ];
+  };
+
+  # The switch Job's program. It copies its own closure into the host's store
+  # and runs on from there, so that closure is python3Minimal and one file:
+  # every switched host carries it.
+  nixkube-nixos-switch = self.writeTextFile {
+    name = "nixkube-nixos-switch";
+    destination = "/bin/nixkube-nixos-switch";
+    executable = true;
+    text = "#!${self.python3Minimal}/bin/python3\n" + builtins.readFile ./nixkube/src/nixos_switch.py;
+  };
+
+  # What the switch Job's pod mounts through the CSI driver. Only the program
+  # goes on to the host; nix, ssh, bash and the fake NSS serve the copy in
+  # the pod.
+  nixkube-nixos-switch-env = self.buildEnv {
+    name = "nixkube-nixos-switch-env";
+    paths = [
+      self.nixkube-nixos-switch
+      self.nix
+      self.openssh
+      self.bash
+      self.appstarter-fake-nss
+    ];
+  };
+
   ci-debug = pkgs.callPackage ./ci-debug { inherit pkgs; };
 
   # The two kubernetes-csi sidecars the node DaemonSet runs, and images for

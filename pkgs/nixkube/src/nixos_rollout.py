@@ -125,7 +125,7 @@ IN_FLIGHT: Final = frozenset(
 HALTING: Final = frozenset({NodePhase.REVERTED, NodePhase.BUILD_FAILED, NodePhase.DRAIN_FAILED})
 
 # The switch Job's exit code when only a boot picks the change up, as
-# `rebootNeeded` in kubenix/nixos-host.nix.
+# `REBOOT_NEEDED` in nixos_switch.py.
 REBOOT_NEEDED: Final = 100
 MIRROR: Final = "kubernetes.io/config.mirror"
 
@@ -233,14 +233,21 @@ ARCH_SYSTEMS: Final = {"amd64": "x86_64-linux", "arm64": "aarch64-linux"}
 
 # Every value arrives with --argstr, so nothing from the CR is spliced into
 # Nix source. `allRefs`: a rev on any branch, not only the default one.
+# To select `attribute`, a root that is a function is called with `{ }`, as
+# `nix-build --file` does: many repositories have
+# `{ inputs ? ..., pkgs ? ... }: { ... }`. With no attribute the root is the
+# node function itself, and is called with the node. Whatever it returns is
+# built as it is: a toplevel, or any derivation that switches like one.
 BUILD_EXPR: Final = r"""
 { url, rev, attribute, name, labels, system }:
 let
   src = builtins.fetchGit { inherit url rev; allRefs = true; };
+  imported = import src;
+  root = if attribute != "" && builtins.isFunction imported then imported { } else imported;
   path = builtins.filter builtins.isString (builtins.split "\\." attribute);
-  f = builtins.foldl' (v: k: v.${k}) (import src) (if attribute == "" then [ ] else path);
+  f = builtins.foldl' (v: k: v.${k}) root (if attribute == "" then [ ] else path);
 in
-(f { inherit name system; labels = builtins.fromJSON labels; }).config.system.build.toplevel
+f { inherit name system; labels = builtins.fromJSON labels; }
 """
 
 
@@ -281,8 +288,13 @@ def build_argv(source: RolloutSource, node: str, labels: Mapping[str, str], stor
     return argv
 
 
-def git_env(kind: str, data: Mapping[str, bytes], directory: Path) -> dict[str, str]:
-    """The environment that makes git, run by Nix's fetcher, use a Secret."""
+def git_env(kind: str, data: Mapping[str, bytes], directory: Path, url: str) -> dict[str, str]:
+    """The environment that makes git, run by Nix's fetcher, use a Secret.
+
+    A password goes only to `url`: the evaluation after the fetch reaches
+    other repositories through the same git, and a bare `http.extraHeader`
+    would hand them the token too.
+    """
     match kind:
         case "kubernetes.io/ssh-auth":
             if "known_hosts" not in data:
@@ -307,7 +319,7 @@ def git_env(kind: str, data: Mapping[str, bytes], directory: Path) -> dict[str, 
             token = base64.b64encode(data["username"] + b":" + data["password"])
             return {
                 "GIT_CONFIG_COUNT": "1",
-                "GIT_CONFIG_KEY_0": "http.extraHeader",
+                "GIT_CONFIG_KEY_0": f"http.{url}.extraHeader",
                 "GIT_CONFIG_VALUE_0": f"Authorization: Basic {token.decode()}",
             }
         case _:
@@ -492,7 +504,7 @@ class Controller:
                         secret = await Secret.get(ref["name"], namespace=self.namespace)
                         doc = secret_doc(secret)
                         data = {k: base64.b64decode(v) for k, v in (doc.get("data") or {}).items()}
-                        env |= git_env(doc.get("type", ""), data, Path(tmp))
+                        env |= git_env(doc.get("type", ""), data, Path(tmp), source["url"])
                     result = await anyio.run_process(
                         build_argv(source, node, labels, self.store),
                         env=env,

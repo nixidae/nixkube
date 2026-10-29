@@ -54,7 +54,8 @@ let
         ];
       };
     in
-    test.systems.''${name}.extendModules { modules = [ "''${sources.nixkube}/nix/uml/host-built.nix" ]; }
+    (test.systems.''${name}.extendModules { modules = [ "''${sources.nixkube}/nix/uml/host-built.nix" ]; })
+    .config.system.build.toplevel
   '';
 
   user = "nixkube";

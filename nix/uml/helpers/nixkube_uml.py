@@ -668,14 +668,37 @@ async def break_and_recover(cp: Machine, settings: dict, name: str) -> None:
     await wait_for_driver(cp, settings)
     await probe(cp, settings, name)
     if resident is REPLACED:
-        # `--wait` by default, so the old pod is gone before
-        # `check_resident` counts pods and finds the new one.
-        await kubectl(cp, f"delete pod --namespace {NAMESPACE} {RESIDENT}")
+        await replace_served_pods(cp)
     await check_resident(cp, settings, name)
     await check_reconciled(cp, settings, name)
 
 
 RESIDENT = "--selector app.kubernetes.io/component=uml-resident"
+
+
+async def replace_served_pods(cp: Machine) -> None:
+    """Delete every pod on the node that a nixkube volume serves.
+
+    The wipe breaks all of them, not the resident alone. The rollout
+    controller is one: its rw store loses its overlay's upper and work
+    directories, and every build after that fails with ENOENT on
+    `/nix/store/.links` -- the host phase, minutes later.
+
+    Kubelet's own record of the pod's volumes names them, so no node name
+    is needed. `--wait` by default, so the old resident is gone before
+    `check_resident` counts pods and finds the new one.
+    """
+    _, out = await cp.execute(
+        "grep --files-with-matches '\"driverName\":\"nixkube\"' "
+        "/var/lib/kubelet/pods/*/volumes/kubernetes.io~csi/*/vol_data.json | cut -d/ -f6 | sort -u",
+        timeout=60,
+    )
+    uids = set(out.split())
+    pods = await get_json(cp, "get pods --all-namespaces")
+    for pod in pods["items"]:
+        meta = pod["metadata"]
+        if meta["uid"] in uids:
+            await kubectl(cp, f"delete pod --namespace {meta['namespace']} {meta['name']}")
 
 
 async def check_resident(cp: Machine, settings: dict, why: str) -> None:
@@ -824,6 +847,40 @@ async def report(cp: Machine) -> None:
         timeout=120,
     )
     print(f"[nixkube] what nri-wait said (rc={rc}):\n{out}", flush=True)
+
+    # The NixOSRollout controller: what its builds said, and its /nix as the
+    # container sees it, read through /proc/<pid>/root from the node. A
+    # source build writes .drv files into that /nix, through the CSI volume.
+    rc, out = await cp.execute(
+        f"kubectl logs --namespace {NAMESPACE} deploy/nixkube-nixos-rollout --tail 80",
+        timeout=120,
+    )
+    print(f"[nixkube] logs deploy/nixkube-nixos-rollout (rc={rc}):\n{out}", flush=True)
+    rc, out = await cp.execute(
+        "id=$(crictl ps --name controller --quiet | head -n 1);"
+        " pid=$(crictl inspect --output go-template --template '{{.info.pid}}' $id);"
+        " root=/proc/$pid/root;"
+        " findmnt --task $pid --list --noheadings --output TARGET,FSTYPE,OPTIONS | grep nix;"
+        " opts=$(findmnt --task $pid --list --noheadings --output OPTIONS --mountpoint /nix);"
+        " for d in upperdir workdir; do"
+        "   p=$(echo \"$opts\" | tr , '\\n' | sed -n \"s/^$d=//p\");"
+        "   [ -n \"$p\" ] && { echo \"$d $p:\"; ls -la \"$p\" 2>&1 | head -n 4; };"
+        " done;"
+        " dmesg | grep -i overlay | tail -n 20;"
+        " vol=$(echo \"$opts\" | tr , '\\n' | sed -n 's|^upperdir=.*/\\(csi-[0-9a-f]*\\)/upper$|\\1|p');"
+        " echo \"what the node did with $vol:\";"
+        " for pod in $(kubectl get pods --namespace nixkube --selector app.kubernetes.io/component=node"
+        "   --output jsonpath='{.items[*].metadata.name}'); do"
+        "   kubectl logs --namespace nixkube $pod --container nix-node --tail -1 --timestamps"
+        "     | grep --text \"$vol\" | grep -v gc_active | tail -n 25;"
+        " done;"
+        " ls -la $root/nix $root/nix/store | head -n 12;"
+        " ls -la $root/nix/store/.links 2>&1 | head -n 3;"
+        " mkdir $root/nix/store/.uml-probe && echo 'mkdir in /nix/store: ok';"
+        " rmdir $root/nix/store/.uml-probe 2>/dev/null; true",
+        timeout=120,
+    )
+    print(f"[nixkube] the controller's /nix (rc={rc}):\n{out}", flush=True)
 
     # Every container of the node's and pynixd's pods, by name, from the API
     # server.

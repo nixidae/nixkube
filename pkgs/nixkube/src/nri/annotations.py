@@ -116,6 +116,15 @@ def parse_nix_exclude(pod_annotations: Annotations, container_name: str, system:
     container_values = list(_iter_annotations(pod_annotations, f"{container_name}-exclude", system))
     if container_values:
         return any(v == "true" for v in container_values)
+    return parse_pod_exclude(pod_annotations, system)
+
+
+def parse_pod_exclude(pod_annotations: Annotations, system: str) -> bool:
+    """Return True if the pod as a whole wants no injection: `nixkube/pod-exclude`.
+
+    The CSI driver reads it too: a volume belongs to the pod, so it then
+    holds its own package only, and none of the store paths the spec names.
+    """
     return any(v == "true" for v in _iter_annotations(pod_annotations, "pod-exclude", system))
 
 
