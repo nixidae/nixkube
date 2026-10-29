@@ -23,6 +23,12 @@ let
     inherit primary;
   };
   venv = pkgs.pythonSet.mkVirtualEnv "csi-composefs-env" { nixkube = [ ]; };
+  # A volume that holds Nix, as the NixOSRollout controller's does.
+  withNix = composefsImage {
+    roots = [ pkgs.nix ];
+    primary = pkgs.nix;
+    opaque = false;
+  };
 
   probe = pkgs.writeText "csi_composefs_probe.py" ''
     import json
@@ -105,6 +111,7 @@ in
       pkgs.nixkube
       pkgs.composefs
       pkgs.nix
+      withNix
     ];
     environment.systemPackages = [
       venv
@@ -178,5 +185,38 @@ in
     assert "${primary}" in paths.split(), f"the volume's database does not know hello: {paths}"
     print(f"[db] the volume's database lists {len(paths.split())} paths, hello among them")
     machine.succeed("umount /var/t")
+
+    # A read-write volume as a local store, as the NixOSRollout controller
+    # uses its own: `--eval-store auto` writes .drv files into the volume, so
+    # Nix opens the database for writing and creates /nix/store/.links.
+    machine.succeed(
+        "${venv}/bin/python -c 'import sys, anyio; from pathlib import Path;"
+        " from src.csi import composefs;"
+        " anyio.run(composefs.mount, Path(sys.argv[1]), Path(\"/var/w\"), False, Path(\"/var/wroot\"))'"
+        " ${builtins.unsafeDiscardStringContext (toString expected)}"
+    )
+    machine.succeed("echo a-drv-stand-in > /tmp/added")
+    rc, out = machine.execute(
+        "${pkgs.nix}/bin/nix-store --store 'local?root=/var/w' --add /tmp/added 2>&1"
+    )
+    print(f"[rw-store] rc={rc}: {out.strip()}")
+    assert rc == 0, f"a read-write volume is not a writable local store: {out.strip()}"
+    print("[rw-store] Nix writes a local store on a read-write volume")
+
+    # The controller's own view: kubelet binds <volume>/nix over /nix, and
+    # Nix runs from there with no daemon, so `auto` picks the local store.
+    machine.succeed(
+        "${venv}/bin/python -c 'import sys, anyio; from pathlib import Path;"
+        " from src.csi import composefs;"
+        " anyio.run(composefs.mount, Path(sys.argv[1]), Path(\"/var/n\"), False, Path(\"/var/nroot\"))'"
+        " ${builtins.unsafeDiscardStringContext (toString withNix)}"
+    )
+    rc, out = machine.execute(
+        "unshare --mount sh -c 'mount --bind /var/n/nix /nix &&"
+        " NIX_REMOTE= ${pkgs.nix}/bin/nix-store --add /tmp/added' 2>&1"
+    )
+    print(f"[rw-auto] rc={rc}: {out.strip()}")
+    assert rc == 0, f"Nix on a read-write volume bound at /nix cannot write its store: {out.strip()}"
+    print("[rw-auto] Nix writes its own store at /nix on a read-write volume")
   '';
 }
