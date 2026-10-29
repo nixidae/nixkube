@@ -13,7 +13,8 @@ switch that fails or is not confirmed in time is Reverted: the node is
 cordoned and the rollout halts until its spec changes.
 
 A switch Job that finds a new kernel, initrd or kernel modules changes
-nothing and exits with REBOOT_NEEDED. The node is then cordoned and drained
+nothing and completes with the termination message REBOOT_MESSAGE. The
+node is then cordoned and drained
 (Draining; DrainFailed halts on the timeout), the boot Job makes the system
 the boot default and schedules a reboot (Booting), and the controller waits
 for a new boot ID and Ready (Rebooting). The disarm Job then checks the
@@ -124,9 +125,10 @@ IN_FLIGHT: Final = frozenset(
 )
 HALTING: Final = frozenset({NodePhase.REVERTED, NodePhase.BUILD_FAILED, NodePhase.DRAIN_FAILED})
 
-# The switch Job's exit code when only a boot picks the change up, as
-# `REBOOT_NEEDED` in nixos_switch.py.
-REBOOT_NEEDED: Final = 100
+# The switch Job's termination message when only a boot picks the change
+# up, as `REBOOT_MESSAGE` in nixos_switch.py. A message, not an exit code: the
+# Job completes, so a Failed switch Job is always a failure.
+REBOOT_MESSAGE: Final = "reboot-needed"
 MIRROR: Final = "kubernetes.io/config.mirror"
 
 
@@ -398,11 +400,11 @@ def boot_id(node: Node) -> str:
     return node_doc(node).get("status", {}).get("nodeInfo", {}).get("bootID", "")
 
 
-def exit_code(pod: PodDoc) -> int | None:
-    """The switch container's exit code, once it has terminated."""
+def termination_message(pod: PodDoc) -> str | None:
+    """The switch container's termination message, once it has terminated."""
     for status in pod.get("status", {}).get("containerStatuses") or []:
         if terminated := (status.get("state") or {}).get("terminated"):
-            return terminated.get("exitCode")
+            return terminated.get("message")
     return None
 
 
@@ -754,6 +756,19 @@ class Controller:
         match job_state(job), phase:
             case None, _:
                 return
+            case "Complete", NodePhase.SWITCHING if await self.job_termination_message(entry["job"]) == REBOOT_MESSAGE:
+                with contextlib.suppress(NotFoundError):
+                    await (await Node.get(node)).cordon()
+                entry.update(
+                    {
+                        "phase": NodePhase.DRAINING,
+                        "since": stamp(now()),
+                        "bootID": boot_id(node_obj) if node_obj is not None else "",
+                        "drained": True,
+                        "message": "the kernel, initrd or modules change: draining to reboot",
+                    }
+                )
+                log.info("reboot_needed")
             case "Complete", NodePhase.SWITCHING:
                 # The kubelet's clock, not ours: a renewal later than this
                 # one came from a kubelet that ran after the switch.
@@ -777,19 +792,6 @@ class Controller:
                     with contextlib.suppress(NotFoundError):
                         await (await Node.get(node)).uncordon()
                 log.info("node_done", system=entry["target"])
-            case "Failed", NodePhase.SWITCHING if await self.job_exit_code(entry["job"]) == REBOOT_NEEDED:
-                with contextlib.suppress(NotFoundError):
-                    await (await Node.get(node)).cordon()
-                entry.update(
-                    {
-                        "phase": NodePhase.DRAINING,
-                        "since": stamp(now()),
-                        "bootID": boot_id(node_obj) if node_obj is not None else "",
-                        "drained": True,
-                        "message": "the kernel, initrd or modules change: draining to reboot",
-                    }
-                )
-                log.info("reboot_needed")
             case "Failed", _:
                 tail = await self.job_log(entry["job"])
                 await self.halt(rollout, node, entry, f"Job {entry['job']} failed: {tail}")
@@ -863,11 +865,11 @@ class Controller:
             if e.response is None or e.response.status_code != 409:
                 raise
 
-    async def job_exit_code(self, job: str) -> int | None:
+    async def job_termination_message(self, job: str) -> str | None:
         async for pod in Pod.list(namespace=self.namespace, label_selector={"job-name": job}):
             if not isinstance(pod, Pod):
                 raise RuntimeError(f"Pod.list yielded {type(pod).__name__}, not a Pod")
-            return exit_code(pod_doc(pod))
+            return termination_message(pod_doc(pod))
         return None
 
     async def drain(self, node: str, log: FilteringBoundLogger) -> list[str]:

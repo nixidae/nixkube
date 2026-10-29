@@ -33,8 +33,14 @@ class Action(StrEnum):
     REVERT = "revert"
 
 
-# `REBOOT_NEEDED` in nixos_rollout.py.
+# `switch`'s result when only a boot picks the system up. The Job reports it
+# as its termination message, `REBOOT_MESSAGE` in nixos_rollout.py, and exits
+# 0: an exit code would make a Job that did what it should a Failed one.
 REBOOT_NEEDED: Final = 100
+REBOOT_MESSAGE: Final = "reboot-needed"
+# Opened before the program enters the host's mount namespace, where the
+# container's copy is out of reach.
+TERMINATION_LOG: Final = Path("/dev/termination-log")
 REVERT_UNIT: Final = "nixkube-revert"
 PROFILE: Final = "/nix/var/nix/profiles/system"
 # Roots the target until the profile holds it, and through a revert that
@@ -347,9 +353,15 @@ def main() -> None:
         run(*copy_argv("local", [me]))
         if fetch_from and action in (Action.SWITCH, Action.BOOT):
             run(*copy_argv(fetch_from, [toplevel]))
+        termination = TERMINATION_LOG.open("w")
         enter_host()
         realise(me, SELF_ROOT)
-        sys.exit(act(action, toplevel, os.environ.get("REVERT_DELAY", "")))
+        code = act(action, toplevel, os.environ.get("REVERT_DELAY", ""))
+        if code == REBOOT_NEEDED:
+            termination.write(REBOOT_MESSAGE)
+            code = 0
+        termination.close()
+        sys.exit(code)
     except SwitchError as e:
         print(e, file=sys.stderr, flush=True)
         sys.exit(e.code)

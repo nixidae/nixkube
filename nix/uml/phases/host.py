@@ -29,7 +29,7 @@ import hashlib
 import json
 from typing import Any, TypedDict
 
-from nixkube_uml import READY_TIMEOUT
+from nixkube_uml import NAMESPACE, READY_TIMEOUT
 from vivarium_runner import Machine, MachineError, Machines
 from vivarium_runner.cluster import get_json, kubectl, until
 
@@ -218,6 +218,15 @@ async def test(vms: Machines) -> None:
     await kubectl(cp, f"delete nixosrollout {ROLLOUT}")
 
 
+async def failed_jobs(cp: Machine) -> set[str]:
+    jobs = await get_json(cp, f"get jobs --namespace {NAMESPACE}")
+    return {
+        j["metadata"]["name"]
+        for j in jobs["items"]
+        if any(c["type"] == "Failed" and c["status"] == "True" for c in j.get("status", {}).get("conditions", []))
+    }
+
+
 async def reboots(hosts: dict[str, Machine], settings: Settings) -> None:
     """worker's initrd changes: drained, rebooted, uncordoned. cp switches in place."""
     cp, worker = hosts["cp"], hosts["worker"]
@@ -245,6 +254,9 @@ async def reboots(hosts: dict[str, Machine], settings: Settings) -> None:
     )
     await kubectl(cp, f"wait --for=condition=Ready pod/{VICTIM} --timeout={READY_TIMEOUT}s")
     boots = {name: (await vm.succeed(BOOT_ID)).strip() for name, vm in hosts.items()}
+    # An earlier step's rollout fails on purpose (`broken_halts`), and its
+    # Failed Job is the right record of that.
+    failed_before = await failed_jobs(cp)
 
     await switch_to(hosts, target, timeout=REBOOT_TIMEOUT)
 
@@ -261,6 +273,10 @@ async def reboots(hosts: dict[str, Machine], settings: Settings) -> None:
     spec = (await get_json(cp, "get node worker"))["spec"]
     if spec.get("unschedulable"):
         raise MachineError("[worker] the rebooted node is still cordoned")
+    # Asking for a reboot is the switch Job doing its work. A Failed one would
+    # hold KubeJobFailed for the Job's whole TTL.
+    if failed := sorted(await failed_jobs(cp) - failed_before):
+        raise MachineError(f"[cp] the reboot rollout left Failed Jobs: {failed}")
     print(
         "[nixkube] the rollout drained and rebooted worker into its new initrd, and switched cp in place",
         flush=True,

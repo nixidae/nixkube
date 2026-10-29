@@ -10,7 +10,7 @@ from src.kube_docs import ContainerStatus, NodeEntry, ObjectMeta, PodDoc
 from src.nixos_rollout import (
     GROUP,
     MIRROR,
-    REBOOT_NEEDED,
+    REBOOT_MESSAGE,
     Action,
     Build,
     NodePhase,
@@ -18,12 +18,12 @@ from src.nixos_rollout import (
     build_argv,
     build_entries,
     evictable,
-    exit_code,
     git_env,
     job_name,
     plan,
     rollout_phase,
     selects,
+    termination_message,
 )
 
 A = "/nix/store/" + "a" * 32 + "-nixos-system-a"
@@ -184,12 +184,14 @@ def test_a_drain_evicts_what_kubectl_drain_would() -> None:
     assert not evictable(pod(labels={f"{GROUP}/rollout": "host"}))
 
 
-def test_exit_code_reads_the_terminated_container() -> None:
-    terminated: ContainerStatus = {"state": {"terminated": {"exitCode": REBOOT_NEEDED}}}
-    assert exit_code({"status": {"containerStatuses": [terminated]}}) == REBOOT_NEEDED
+def test_termination_message_reads_the_terminated_container() -> None:
+    terminated: ContainerStatus = {"state": {"terminated": {"exitCode": 0, "message": REBOOT_MESSAGE}}}
+    assert termination_message({"status": {"containerStatuses": [terminated]}}) == REBOOT_MESSAGE
+    switched: ContainerStatus = {"state": {"terminated": {"exitCode": 0}}}
+    assert termination_message({"status": {"containerStatuses": [switched]}}) is None
     running: ContainerStatus = {"state": {"running": {}}}
-    assert exit_code({"status": {"containerStatuses": [running]}}) is None
-    assert exit_code({}) is None
+    assert termination_message({"status": {"containerStatuses": [running]}}) is None
+    assert termination_message({}) is None
 
 
 def test_a_failed_drain_halts_until_the_spec_changes() -> None:

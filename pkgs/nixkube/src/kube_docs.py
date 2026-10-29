@@ -51,6 +51,7 @@ class LabelSelector(TypedDict, total=False):
 
 class Terminated(TypedDict, total=False):
     exitCode: int
+    message: str
 
 
 class ContainerStateRunning(TypedDict, total=False):
