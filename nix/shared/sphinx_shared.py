@@ -22,6 +22,9 @@ myst_enable_extensions = [
     "deflist",
 ]
 
+# The pages link to each other's sections, as `howto.md#run-a-test`.
+myst_heading_anchors = 3
+
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
