@@ -2,7 +2,7 @@
 
 One test per scenario, in the order `SCENARIOS` lists them, against the one
 cluster the earlier phases built. `-k` picks scenarios by name --
-`nix run --file . umlTest.driver -- --out ./o -- -k runtime` -- and so
+`nix run --file . internal.umlTest.driver -- --out ./o -- -k runtime` -- and so
 does `NIXKUBE_UML_SCENARIOS`, which `nix/uml/default.nix` turns into `-k`.
 
 Each scenario runs whether an earlier one failed or not, so one run says

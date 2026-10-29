@@ -32,21 +32,21 @@ let
   # interpolating the derivations instead would read as a tidy-up and would
   # make `build-manifests` need an aarch64 machine.
   archAudited = [
-    "push"
-    "kubenixApply.manifestJSONFile"
-    "kubenixApply.manifestYAMLFile"
-    "kubenixCI1.deploymentScript"
-    "kubenixCI2.deploymentScript"
-    "kubenixCITest.deploymentScript"
-    "nixImage.pushArch.x86_64-linux"
-    "nixImage.pushManifest"
-    "nixImage.tagRelease"
-    "scratchImage.push"
+    "internal.push"
+    "internal.kubenixApply.manifestJSONFile"
+    "internal.kubenixApply.manifestYAMLFile"
+    "internal.kubenixCI1.deploymentScript"
+    "internal.kubenixCI2.deploymentScript"
+    "internal.kubenixCITest.deploymentScript"
+    "internal.nixImage.pushArch.x86_64-linux"
+    "internal.nixImage.pushManifest"
+    "internal.nixImage.tagRelease"
+    "internal.scratchImage.push"
   ];
 
   # The two cluster tests, each on a guest that boots on the runner. The
   # test itself is nix/uml/ci.py, so a developer runs exactly what CI runs:
-  # `nix run --file . ciTest.driver -- --out ./out`.
+  # `nix run --file . internal.ciTest.driver -- --out ./out`.
   #
   # `./out` holds the run's evidence: events.jsonl, junit.xml, report.json
   # and each guest's console and journal. It is uploaded whatever the
@@ -61,7 +61,7 @@ let
       steps = [
         {
           name = "Deploy and test ${what}, on a guest";
-          run = "nix run --file . ${attr}.driver -- --out ./out";
+          run = "nix run --file . internal.${attr}.driver -- --out ./out";
         }
         (ghalib.steps.uploadArtifact {
           name = "Keep the run's evidence";
@@ -142,12 +142,14 @@ ghalib.evalWorkflow {
         # kubenixApply came to need 3120 aarch64 derivations on x86_64.
         {
           name = "Check that every CI attribute builds natively";
-          run = lib.concatStringsSep " \\\n  " ([ "nix run --file . arch-audit --" ] ++ archAudited) + "\n";
+          run =
+            lib.concatStringsSep " \\\n  " ([ "nix run --file . internal.arch-audit --" ] ++ archAudited)
+            + "\n";
         }
         {
           name = "Check formatting";
           run = ''
-            nix run --file . treefmt
+            nix run --file . internal.treefmt
             git diff --exit-code -- .
           '';
         }
@@ -172,7 +174,7 @@ ghalib.evalWorkflow {
           name = "Build and push environments";
           run = ''
             unlink nix-envs || true
-            nix build --show-trace --print-build-logs --file . push --out-link nix-envs
+            nix build --show-trace --print-build-logs --file . internal.push --out-link nix-envs
             ./nix-envs/bin/push
           '';
         }
@@ -182,7 +184,7 @@ ghalib.evalWorkflow {
           name = "Build amd64 nix image";
           run = ''
             unlink nix-nix || true
-            nix build --show-trace --print-build-logs --file . nixImage.pushArch.x86_64-linux --out-link nix-nix
+            nix build --show-trace --print-build-logs --file . internal.nixImage.pushArch.x86_64-linux --out-link nix-nix
           '';
         }
         {
@@ -227,7 +229,7 @@ ghalib.evalWorkflow {
           name = "Build and push environments";
           run = ''
             unlink nix-envs || true
-            nix build --show-trace --print-build-logs --max-jobs 1 --cores 4 --file . push --out-link nix-envs
+            nix build --show-trace --print-build-logs --max-jobs 1 --cores 4 --file . internal.push --out-link nix-envs
             ./nix-envs/bin/push
           '';
         }
@@ -237,7 +239,7 @@ ghalib.evalWorkflow {
           name = "Build arm64 nix image";
           run = ''
             unlink nix-nix || true
-            nix build --show-trace --print-build-logs --max-jobs 1 --cores 4 --file . nixImage.pushArch.aarch64-linux --out-link nix-nix
+            nix build --show-trace --print-build-logs --max-jobs 1 --cores 4 --file . internal.nixImage.pushArch.aarch64-linux --out-link nix-nix
           '';
         }
         {
@@ -268,8 +270,8 @@ ghalib.evalWorkflow {
         {
           name = "Assert both architectures' closures are fetchable";
           run = ''
-            nix build --show-trace --file . kubenixApply.manifestJSONFile --out-link manifest
-            nix run --file . assert-cached -- manifest
+            nix build --show-trace --file . internal.kubenixApply.manifestJSONFile --out-link manifest
+            nix run --file . internal.assert-cached -- manifest
           '';
         }
         # These write floating tags -- `nix:latest`, `scratch:latest` and the
@@ -284,8 +286,8 @@ ghalib.evalWorkflow {
           run = ''
             unlink nix-manifest || true
             unlink nix-scratches || true
-            nix build --show-trace --file . nixImage.pushManifest --out-link nix-manifest
-            nix build --show-trace --file . scratchImage.push --out-link nix-scratches
+            nix build --show-trace --file . internal.nixImage.pushManifest --out-link nix-manifest
+            nix build --show-trace --file . internal.scratchImage.push --out-link nix-scratches
           '';
         }
         {
@@ -306,7 +308,7 @@ ghalib.evalWorkflow {
 
       The same test and the same script a developer runs on a laptop:
 
-          nix run --file . umlTest.driver -- --out ./uml-out
+          nix run --file . internal.umlTest.driver -- --out ./uml-out
 
       `--out` is where the run's evidence goes: junit.xml with one case
       per chaos scenario, events.jsonl, each guest's console and journal.
@@ -327,7 +329,7 @@ ghalib.evalWorkflow {
       steps = [
         {
           name = "Run the node test as a virtual machine";
-          run = "nix run --file . umlTest.driver -- --out ./uml-out";
+          run = "nix run --file . internal.umlTest.driver -- --out ./uml-out";
         }
         (ghalib.steps.uploadArtifact {
           name = "Keep the run's evidence";
@@ -426,7 +428,7 @@ ghalib.evalWorkflow {
         {
           id = "digest";
           name = "Tag the release's image, and find its digest";
-          run = ''echo "digest=$(nix run --file . nixImage.tagRelease)" >> "$GITHUB_OUTPUT"'';
+          run = ''echo "digest=$(nix run --file . internal.nixImage.tagRelease)" >> "$GITHUB_OUTPUT"'';
         }
         # A release YAML nobody has checked is deployable is how #3 and #4
         # reached users. Every path it names has to be fetchable, because a
@@ -435,13 +437,13 @@ ghalib.evalWorkflow {
           name = "Render deployment manifest";
           env.DIGEST = "\${{ steps.digest.outputs.digest }}";
           run = ''
-            nix build --show-trace --file . --argstr releaseDigest "$DIGEST" kubenixRelease.manifestYAMLFile
+            nix build --show-trace --file . --argstr releaseDigest "$DIGEST" internal.kubenixRelease.manifestYAMLFile
             cp result nix-csi-deployment.yaml
           '';
         }
         {
           name = "Assert the release manifest is deployable";
-          run = "nix run --file . assert-cached -- nix-csi-deployment.yaml";
+          run = "nix run --file . internal.assert-cached -- nix-csi-deployment.yaml";
         }
         # **The release lives in nixidae/nixkube, where its users look.**
         # The tag there is `v<version>`, on the commit that repository holds

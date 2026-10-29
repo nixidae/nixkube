@@ -13,7 +13,7 @@ because the token is in the host's environment and not the guest's.
 Outside the build sandbox only -- the node pulls from registry.k8s.io and
 what it deploys comes from ghcr.io:
 
-    nix run --file . ciTest.driver -- --out ./o
+    nix run --file . internal.ciTest.driver -- --out ./o
 """
 
 import os

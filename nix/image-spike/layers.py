@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Print the layer table of a nix2container image, or of an OCI manifest.
 
-    nix build --file . spike.n2c.image --print-out-paths
+    nix build --file . internal.spike.n2c.image --print-out-paths
     ./nix/image-spike/layers.py <that path> [name ...]
 
 A nix2container image is a JSON file that names store paths per layer, so the

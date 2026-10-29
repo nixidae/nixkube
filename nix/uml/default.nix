@@ -2,7 +2,7 @@
 
 # nixkube on a real Kubernetes node, inside a Nix build sandbox.
 #
-#     nix build --file . umlTest
+#     nix build --file . internal.umlTest
 #
 # This runs the node as an ordinary process under User-Mode Linux -- no KVM,
 # no root, no tap device -- so the whole thing is a derivation that passes or
@@ -16,8 +16,8 @@
 # The phases are cluster, deploy, workloads, chaos (a pytest phase, one test
 # per scenario), runtimes, host and report. By hand, with the guest held open on a failure:
 #
-#     nix run --file . umlTest.driverDebug -- --out ./o
-#     nix run --file . umlTest.driver -- --out ./o -- -k runtime
+#     nix run --file . internal.umlTest.driverDebug -- --out ./o
+#     nix run --file . internal.umlTest.driver -- --out ./o -- -k runtime
 {
   pkgs,
   lib,
@@ -356,11 +356,11 @@ vivarium.mkTest (
         Empty runs all nine, which is what CI wants and what takes most of
         the run. Iterating on one costs the cluster and that scenario:
 
-            NIXKUBE_UML_SCENARIOS=runtime nix build --file . umlTest
+            NIXKUBE_UML_SCENARIOS=runtime nix build --file . internal.umlTest
 
         By hand, `-k` does the same without a new evaluation:
 
-            nix run --file . umlTest.driver -- --out ./o -- -k runtime
+            nix run --file . internal.umlTest.driver -- --out ./o -- -k runtime
       */
       scenarios = {
         env = "NIXKUBE_UML_SCENARIOS";
@@ -372,7 +372,7 @@ vivarium.mkTest (
         Empty runs all, which is the gate before landing. The `after` edges
         only order the phases, so name what a phase needs as well:
 
-            NIXKUBE_UML_PHASES=cluster,deploy,host nix build --file . umlTest
+            NIXKUBE_UML_PHASES=cluster,deploy,host nix build --file . internal.umlTest
       */
       phases = {
         env = "NIXKUBE_UML_PHASES";
@@ -383,7 +383,7 @@ vivarium.mkTest (
     // lib.optionalAttrs (matrixCell == null) {
 
       /*
-        QEMU by default, so `nix build --file . umlTest` is the machine CI
+        QEMU by default, so `nix build --file . internal.umlTest` is the machine CI
         runs and the one a developer runs.
 
         A UML guest is one process and one CPU whatever `cpus` says, which
@@ -406,7 +406,7 @@ vivarium.mkTest (
         The CRI the node runs: containerd, or crio. The same test either
         way, which is the question issue #74 asks of CRI-O.
 
-            NIXKUBE_UML_CRI=crio nix build --file . umlTest
+            NIXKUBE_UML_CRI=crio nix build --file . internal.umlTest
       */
       cri = {
         env = "NIXKUBE_UML_CRI";
@@ -419,7 +419,7 @@ vivarium.mkTest (
         a VM per pod, so the host needs nested virtualization, and a GitHub
         runner has none: by hand only.
 
-            NIXKUBE_UML_KATA=1 NIXKUBE_UML_CRI=crio nix build --file . umlTest
+            NIXKUBE_UML_KATA=1 NIXKUBE_UML_CRI=crio nix build --file . internal.umlTest
       */
       kata = {
         env = "NIXKUBE_UML_KATA";

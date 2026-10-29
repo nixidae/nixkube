@@ -2,8 +2,8 @@
 
 # What the kind jobs do, on a guest instead of on a container.
 #
-#     nix run --file . ciTest.driver -- --out ./o        # test-kind-nocache
-#     nix run --file . ciTestCache.driver -- --out ./o   # test-kind-cache
+#     nix run --file . internal.ciTest.driver -- --out ./o        # test-kind-nocache
+#     nix run --file . internal.ciTestCache.driver -- --out ./o   # test-kind-cache
 #
 # `nix/uml/default.nix` is the other cluster test and asks a different
 # question: it renders the manifest, applies it, and then breaks the node

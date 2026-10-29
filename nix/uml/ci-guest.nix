@@ -17,7 +17,7 @@ in
   /*
     Run the image this checkout built, not the one published last.
 
-    `nix run --file . ciTestCache.driver` is the only end-to-end test of the
+    `nix run --file . internal.ciTestCache.driver` is the only end-to-end test of the
     node boot path, and it deployed `imagePullPolicy = "Always"`. So kubelet
     went to ghcr.io however the guest was prepared, and the test ran an
     `appstarter` this repository did not build -- a change under `pkgs/`

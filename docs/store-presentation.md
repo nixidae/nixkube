@@ -25,7 +25,7 @@ or pynixd built. A pod gets one mount.
 `src/presentation.py` renders this chart from the functions that CSI and
 NRI call, and the `presentationChartIsCurrent` check fails when the
 committed chart differs. After you change a decision, run
-`nix run --file . presentation-chart-update`.
+`nix run --file . internal.presentation-chart-update`.
 
 The chart covers the decisions, not the call sites. The test cells check
 the call sites: each one asserts how its volumes and `/nix` mounts are

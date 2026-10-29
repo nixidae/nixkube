@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 let
-  default = import ./. { };
+  default = (import ./. { }).internal;
   inherit (default) pkgs;
 
   # One venv holding every project in this repository with its `test` extra.

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # GENERATED FILE -- do not edit by hand.
-# Edit ci/workflows/pages.nix, then run: nix run --file . ci-workflow-update
+# Edit ci/workflows/pages.nix, then run: nix run --file . internal.ci-workflow-update
 jobs:
   docs-build:
     if: github.ref == 'refs/heads/main'
@@ -29,7 +29,7 @@ jobs:
           name: nixkube
           useDaemon: false
       - name: Build documentation
-        run: nix build --file . nixkube-docs --out-link result --print-build-logs --print-out-paths
+        run: nix build --file . docs.default --out-link result --print-build-logs --print-out-paths
       - name: Verify docs closure
         run: nix store verify --recursive --no-trust "$(readlink -f result)"
         timeout-minutes: 15

@@ -12,12 +12,12 @@ share lifetime with Pods and are embedded into the Podspec.
 Stick your pubkeys in ./keys and they will be imported into the module system
 then run the following command and you'll have nixkube deployed.
 ```bash
-nix run --file . kubenixEval.deploymentScript -- --yes --prune
+nix run --file . internal.kubenixApply.deploymentScript -- --yes --prune
 ```
 
 If you'd rather mangle YAML yourself you can use
 ```bash
-nix build --file . easykubenix.manifestYAMLFile
+nix build --file . internal.kubenixApply.manifestYAMLFile
 ```
 and stuff the result into Kustomize, a blender or your Kubernetes cluster
 
@@ -32,7 +32,7 @@ store hash, and `scratch` by digest. A release pins the init image by
 digest too. To run an image this checkout did not build, set
 `nixkube.images.nix` (for example to `ghcr.io/nixidae/nixkube/nix:main`)
 and `nixkube.imagePullPolicy = "Always"`. To publish your own build of the
-init image, run `nix run --file . nixImage.pushArch.x86_64-linux`; it skips
+init image, run `nix run --file . internal.nixImage.pushArch.x86_64-linux`; it skips
 a tag that already holds the same image.
 
 ## Deploying workloads
@@ -168,7 +168,7 @@ runc 1.4.3, crun 1.29.1, youki 0.7.0, gVisor 20260406 and Kata 4.2.0 on
 nested QEMU. `umlMatrix.<backend>-<cri>[-kata]` is each combination as an
 attribute, by hand and not in CI:
 
-    nix run --file . umlMatrix.uml-crio.driver -- --out ./o
+    nix run --file . internal.umlMatrix.uml-crio.driver -- --out ./o
 
 Examples:
 * [multi-system example](https://github.com/Lillecarl/hetzkube/blob/4ed76ec77bfb104d1c2307b1ba178efa61dd34e2/kubenix/modules/cheapam.nix#L113)

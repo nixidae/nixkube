@@ -2,7 +2,7 @@
 #
 # `.github/workflows/pages.yaml` is rendered from this file. Edit this one;
 # `ciWorkflowCheck` compares the render against what is committed.
-# `nix run --file . ci-workflow-update` writes the new render.
+# `nix run --file . internal.ci-workflow-update` writes the new render.
 #
 # It is the one workflow of nixkube's own repository, which josh exports from
 # nixidae (nixidae/nixidae#4). The tests run in nixidae, from
@@ -41,7 +41,7 @@ ghalib.evalWorkflow {
       steps = [
         {
           name = "Build documentation";
-          run = "nix build --file . nixkube-docs --out-link result --print-build-logs --print-out-paths";
+          run = "nix build --file . docs.default --out-link result --print-build-logs --print-out-paths";
         }
         (ghalib.steps.verifyClosure { name = "Verify docs closure"; })
         (ghalib.steps.preparePages { })

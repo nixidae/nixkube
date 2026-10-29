@@ -52,8 +52,7 @@
         overrides.nixpkgs = nixpkgs.outPath;
       };
 
-      # No `pkgs` argument: this repository builds its own package set,
-      # because it applies an overlay of its own.
+      # No `pkgs` argument: default.nix imports the nixpkgs of `sources`.
       each = forEachSystem (system: import ./. { inherit sources system; });
     in
     {
@@ -70,6 +69,6 @@
       # consumer actually wants from this repository.
       easykubenixModules.default = ./kubenix;
 
-      formatter = forEachSystem (system: each.${system}.treefmt);
+      formatter = forEachSystem (system: each.${system}.internal.treefmt);
     };
 }

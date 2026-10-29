@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Before committing**, run from `nixkube/` what the CI `check` job runs:
 
 ```bash
-nix run --file . treefmt
+nix run --file . internal.treefmt
 nix build --file ./checks.nix all
 ```
 
@@ -100,13 +100,13 @@ nix develop --file shell.nix --command python -m pytest pkgs/nixkube/tests pkgs/
 
 **Run the root-only tests** (bind farm, CSI mount flags, farm builder):
 ```bash
-nix build --file . nixosTests.bind-farm nixosTests.csi-mount-rec nixosTests.farm-builder --no-link
+nix build --file . internal.nixosTests.bind-farm internal.nixosTests.csi-mount-rec internal.nixosTests.farm-builder --no-link
 ```
 
 ### CI
 
 **The workflows under `.github/workflows/` are generated. Do not edit them.**
-`ci/workflows/*.nix` are the source, and `nix run --file . ci-workflow-update`
+`ci/workflows/*.nix` are the source, and `nix run --file . internal.ci-workflow-update`
 writes the YAML again. The `check` job runs `ciWorkflowCheck`, which parses
 the committed YAML and compares it against the rendered value, so an edit to
 either one alone fails the build.
@@ -129,7 +129,7 @@ either one alone fails the build.
   test workloads from `kubenix/ci/test-workloads.nix`. The two differ in
   whether pynixd is enabled. Which Jobs have to finish, and which have to
   not, is `ci/test-jobs.nix`. The same script a developer runs: `nix run
-  --file . ciTest.driver -- --out ./out`. They gate `release`.
+  --file . internal.ciTest.driver -- --out ./out`. They gate `release`.
 - Every test job uploads its `--out` directory as an artifact, pass or fail.
 - `docs-build`, `docs-deploy`, `release`.
 
@@ -137,19 +137,19 @@ either one alone fails the build.
 
 **Build Kubernetes manifests:**
 ```bash
-nix build --file . kubenixApply.manifestJSONFile
+nix build --file . internal.kubenixApply.manifestJSONFile
 ```
 
 **Build all outputs for both architectures (requires builders):**
 ```bash
-nix build --file . push --no-link
+nix build --file . internal.push --no-link
 ```
 
 ### Deployment
 
 **Push to cachix and container registry:**
 ```bash
-nix run --file . push
+nix run --file . internal.push
 ```
 
 ### Development Environment
