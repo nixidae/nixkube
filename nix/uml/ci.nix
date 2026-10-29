@@ -51,7 +51,8 @@
   foreignHost ? false,
 }:
 let
-  vivarium = import (sources.vivarium + "/lib.nix") { inherit pkgs sources; };
+  vivariumSet = import sources.vivarium { inherit pkgs sources; };
+  vivarium = vivariumSet.lib;
 
   # Whether this deployment brings the pynixd cache with it, which is the
   # difference between the two kind jobs.  Asked of the instance rather
@@ -101,7 +102,7 @@ vivarium.mkTest {
   nodes.cp =
     { config, ... }:
     {
-      imports = [ (sources.vivarium + "/modules/k8s.nix") ];
+      imports = [ vivariumSet.nixosModules.k8s ];
 
       services.vivarium-k8s = {
         enable = true;

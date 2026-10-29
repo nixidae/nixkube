@@ -1080,7 +1080,7 @@ let
     # sandboxed build, a `.driver` run and an MCP session are the same test.
     nixosTests =
       let
-        inherit (import (sources.vivarium + "/lib.nix") { inherit pkgs sources; }) fromNixosTest;
+        inherit ((import sources.vivarium { inherit pkgs sources; }).lib) fromNixosTest;
       in
       {
         # Whether `nix build` works inside a store made of bind mounts. Issue

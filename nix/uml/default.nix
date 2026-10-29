@@ -40,7 +40,8 @@
   attrPath ? [ "umlTest" ],
 }:
 let
-  vivarium = import (sources.vivarium + "/lib.nix") { inherit pkgs sources; };
+  vivariumSet = import sources.vivarium { inherit pkgs sources; };
+  vivarium = vivariumSet.lib;
 
   # The rendered manifest, and the root of everything the node needs.
   #
@@ -72,7 +73,7 @@ let
   # What both nodes share. kubeadm hands the worker the control plane's
   # KubeletConfiguration, so `kubeletSettings` reaches both from here.
   nodeBase = index: role: {
-    imports = [ (sources.vivarium + "/modules/k8s.nix") ];
+    imports = [ vivariumSet.nixosModules.k8s ];
 
     services.vivarium-k8s = {
       enable = true;

@@ -20,9 +20,14 @@
 #            container fills by *substituting* into it. The one binary
 #            cache is the run's cache guest, and every role names it and
 #            nothing else.
-{ lib, sources, ... }:
+{
+  lib,
+  pkgs,
+  sources,
+  ...
+}:
 let
-  cache = import (sources.vivarium + "/modules/recipes/cache-facts.nix");
+  cache = (import sources.vivarium { inherit pkgs sources; }).lib.cacheFacts;
 
   # Every container in an object, whether it runs first or not.
   pullNever =

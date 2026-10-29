@@ -21,7 +21,7 @@
   knobs,
 }:
 let
-  facts = import (sources.vivarium + "/modules/recipes/cache-facts.nix");
+  facts = (import sources.vivarium { inherit pkgs sources; }).lib.cacheFacts;
   port = 8080;
   paths = lib.mapAttrs (_: source: "${source}") sources;
   pins = lib.mapAttrs (name: path: {

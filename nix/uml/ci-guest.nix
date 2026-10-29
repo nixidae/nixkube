@@ -5,9 +5,14 @@
 # ../../default.nix adds this to the module list `kubenixCI1` and
 # `kubenixCI2` are built from, so the guest deploys the same thing CI does
 # plus what is here. Each setting names the guest fact that forces it.
-{ lib, sources, ... }:
+{
+  lib,
+  pkgs,
+  sources,
+  ...
+}:
 let
-  cache = import (sources.vivarium + "/modules/recipes/cache-facts.nix");
+  cache = (import sources.vivarium { inherit pkgs sources; }).lib.cacheFacts;
   fromCache = {
     substituters = lib.mkForce [ cache.url ];
     trusted-public-keys = [ cache.trustedPublicKey ];

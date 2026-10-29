@@ -66,7 +66,9 @@ let
     base.passthru.eval.extendModules {
       specialArgs.ekn = base.passthru.eval._module.args.ekn // {
         lib = base.passthru.eval._module.args.ekn.lib // {
-          packageRef = import "${sources.easykubenix}/easykubenix/lib/packageRef.nix" { inherit enabled; };
+          packageRef = (import sources.easykubenix { inherit pkgs sources; }).lib.packageRef {
+            inherit enabled;
+          };
         };
       };
       modules = [
