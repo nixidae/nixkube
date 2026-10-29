@@ -265,24 +265,13 @@ rec {
 
   # The module options as CommonMark. `genModDoc` writes it into the tree and
   # `docOptionsCheck` compares the tree against it, so both read one binding.
-  optionsDocs = pkgs.nixosOptionsDoc {
+  optionsDocs = import ./nix/shared/options-reference.nix { inherit lib pkgs; } {
     inherit (kubenixCI1) options;
-    warningsAreErrors = false;
-    transformOptions =
-      opt:
-      opt
-      // {
-        # Remove internal options, modify declarations, etc.
-        visible =
-          opt.visible or true && (lib.hasPrefix "nix-csi" opt.name || lib.hasPrefix "nixkube" opt.name);
-        declarations = map (
-          decl:
-          let
-            prefix = builtins.toString ./.;
-          in
-          if lib.hasPrefix prefix (toString decl) then lib.removePrefix prefix (toString decl) else decl
-        ) opt.declarations;
-      };
+    prefixes = [
+      "nix-csi"
+      "nixkube"
+    ];
+    declarationsRoot = ./.;
   };
 
   genModDoc =
