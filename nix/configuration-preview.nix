@@ -95,7 +95,7 @@ let
     ) (throw "Missing builder store.") resources.PodTemplate.nixkube-builder.template.spec.volumes)
     .csi.volumeAttributes.${pkgs.stdenv.hostPlatform.system};
   resources = preview.config.kubernetes.resources.nixkube;
-  expected = "/nix/store/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-nixkube-pynixd-env-${pkgs.stdenv.hostPlatform.system}";
+  expected = "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-nixkube-pynixd-env-${pkgs.stdenv.hostPlatform.system}";
   node = resources.DaemonSet.nix-node.spec.template.spec;
   cache = resources.StatefulSet.pynixd.spec.template.spec;
   wanted =
@@ -116,7 +116,7 @@ let
     extraOptionsReachText = lib.hasInfix "# configuration preview check" generated.text;
     normalBuilderKeepsContext =
       builtins.getContext (builderVolume normalResources) == builtins.getContext "${contextPackage}";
-    nodeClosureIsDeferred = lib.hasInfix "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-nixkube-node-env-" (
+    nodeClosureIsDeferred = lib.hasInfix "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-nixkube-node-env-" (
       wanted node
     );
     cacheClosureIsDeferred = lib.hasInfix expected (wanted cache);
