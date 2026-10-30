@@ -33,7 +33,6 @@ from nixkube_uml import NAMESPACE, READY_TIMEOUT
 from vivarium_runner import Machine, MachineError, Machines
 from vivarium_runner.cluster import get_json, kubectl, until
 
-NAMESPACE = "nixkube"
 ROLLOUT = "host"
 REVERT_UNIT = "nixkube-revert"
 MARKER = "/etc/nixkube-host-generation"
