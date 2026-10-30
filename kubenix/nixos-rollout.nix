@@ -6,7 +6,8 @@
   a time through Jobs made from the `nixkube-nixos-host` PodTemplate.
 
   A rollout names either `systems`, prebuilt toplevels by node, or a
-  `source`: a git URL, a rev and an attribute, a function
+  `source`: a git URL and a rev, or a store path the apply pushed to
+  pynixd, and an attribute, a function
   `{ name, labels, system }: <toplevel>` that returns the derivation to
   build. The controller calls it once per node and builds the result through
   pynixd, never looking inside a module system, and the switch Job
@@ -154,13 +155,22 @@ let
                     additionalProperties = storePath;
                   };
                   source = {
-                    description = "A git repository whose attribute is a function `{ name, labels, system }: <toplevel>`, called once per selected node; the derivation it returns is built and switched to.";
+                    description = "A git repository, or a store path in pynixd, whose attribute is a function `{ name, labels, system }: <toplevel>`, called once per selected node; the derivation it returns is built and switched to.";
                     type = "object";
-                    required = [
-                      "url"
-                      "rev"
+                    # A source with both forms matches both and fails.
+                    oneOf = [
+                      {
+                        required = [
+                          "url"
+                          "rev"
+                        ];
+                      }
+                      { required = [ "path" ]; }
                     ];
                     properties = {
+                      path = storePath // {
+                        description = "The source as a store path that the apply pushes to pynixd: no fetch, no Secret.";
+                      };
                       url = str;
                       rev = {
                         type = "string";

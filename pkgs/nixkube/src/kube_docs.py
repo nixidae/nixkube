@@ -213,6 +213,7 @@ class SecretRef(TypedDict, total=False):
 
 
 class RolloutSource(TypedDict, total=False):
+    path: str
     url: str
     rev: str
     attribute: str

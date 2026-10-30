@@ -208,6 +208,8 @@ async def test(vms: Machines) -> None:
 
     await from_source(hosts, vms.cache, settings)
     await switch_to(hosts, first)
+    await from_store_path(hosts, settings)
+    await switch_to(hosts, first)
 
     await broken_halts(hosts, first, settings["hostBroken"], after["worker"])
     await kubectl(cp, "uncordon cp")
@@ -345,6 +347,13 @@ async def from_source(hosts: dict[str, Machine], cache: Machine, settings: Setti
         if marker != "built":
             raise MachineError(f"[{name}] {MARKER} says {marker!r} after the switch")
     print(f"[nixkube] the rollout built and switched both hosts: {built}", flush=True)
+
+
+async def from_store_path(hosts: dict[str, Machine], settings: Settings) -> None:
+    """The same file as a store path in pynixd: no fetch, no Secret, the same toplevels."""
+    built: dict[str, str] = settings["hostBuilt"]
+    await switch_to(hosts, built, {"path": settings["hostSource"]["tree"]})
+    print(f"[nixkube] the rollout evaluated a store-path source to the git source's toplevels: {built}", flush=True)
 
 
 async def broken_halts(hosts: dict[str, Machine], first: dict[str, str], broken: str, worker_next: str) -> None:

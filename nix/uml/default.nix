@@ -343,6 +343,7 @@ vivarium.mkTest (
           (hostReboot systems.worker)
           (hostBadBoot systems.worker)
           hostSource.repository
+          hostSource.tree
           # Every input of the toplevel, and not the toplevel.
           (hostBuilt systems.cp).inputDerivation
           (hostBuilt systems.worker).inputDerivation
@@ -583,6 +584,7 @@ vivarium.mkTest (
       hostSource = {
         inherit (hostSource) url user password;
         rev = builtins.unsafeDiscardStringContext "${hostSource.repository}/rev";
+        tree = builtins.unsafeDiscardStringContext "${hostSource.tree}";
       };
     };
   }

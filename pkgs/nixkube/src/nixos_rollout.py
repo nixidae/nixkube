@@ -232,22 +232,26 @@ def rollout_phase(entries: Mapping[str, NodeEntry]) -> Phase:
 
 
 ARCH_SYSTEMS: Final = {"amd64": "x86_64-linux", "arm64": "aarch64-linux"}
+# The pod's own store. Not the default: the mounted nix.conf names the
+# node's daemon, and this pod has no daemon socket.
+EVAL_STORE: Final = "auto"
 
 # Every value arrives with --argstr, so nothing from the CR is spliced into
-# Nix source. `allRefs`: a rev on any branch, not only the default one.
+# Nix source. A source is a store `path` or a git `url` and `rev`; the
+# other is empty. `allRefs`: a rev on any branch, not only the default one.
 # To select `attribute`, a root that is a function is called with `{ }`, as
 # `nix-build --file` does: many repositories have
 # `{ inputs ? ..., pkgs ? ... }: { ... }`. With no attribute the root is the
 # node function itself, and is called with the node. Whatever it returns is
 # built as it is: a toplevel, or any derivation that switches like one.
 BUILD_EXPR: Final = r"""
-{ url, rev, attribute, name, labels, system }:
+{ path, url, rev, attribute, name, labels, system }:
 let
-  src = builtins.fetchGit { inherit url rev; allRefs = true; };
+  src = if path != "" then builtins.storePath path else builtins.fetchGit { inherit url rev; allRefs = true; };
   imported = import src;
   root = if attribute != "" && builtins.isFunction imported then imported { } else imported;
-  path = builtins.filter builtins.isString (builtins.split "\\." attribute);
-  f = builtins.foldl' (v: k: v.${k}) root (if attribute == "" then [ ] else path);
+  attrPath = builtins.filter builtins.isString (builtins.split "\\." attribute);
+  f = builtins.foldl' (v: k: v.${k}) root (if attribute == "" then [ ] else attrPath);
 in
 f { inherit name system; labels = builtins.fromJSON labels; }
 """
@@ -261,8 +265,9 @@ def node_system(labels: Mapping[str, str]) -> str:
 def build_argv(source: RolloutSource, node: str, labels: Mapping[str, str], store: str) -> list[str]:
     """Evaluate in the pod's own store, build in pynixd's."""
     args = {
-        "url": source["url"],
-        "rev": source["rev"],
+        "path": source.get("path", ""),
+        "url": source.get("url", ""),
+        "rev": source.get("rev", ""),
         "attribute": source.get("attribute", ""),
         "name": node,
         "labels": json.dumps(dict(labels), sort_keys=True),
@@ -279,7 +284,7 @@ def build_argv(source: RolloutSource, node: str, labels: Mapping[str, str], stor
         # store path or read `builtins.currentSystem`.
         "--impure",
         "--eval-store",
-        "auto",
+        EVAL_STORE,
         "--store",
         store,
         "--expr",
@@ -288,6 +293,23 @@ def build_argv(source: RolloutSource, node: str, labels: Mapping[str, str], stor
     for key, value in args.items():
         argv += ["--argstr", key, value]
     return argv
+
+
+def source_copy_argv(path: str, store: str) -> list[str]:
+    """Copy a store-path source from pynixd into the pod's store, where the evaluation reads it."""
+    # pynixd is the cluster's trusted cache, as for the switch Job's copy.
+    return [
+        "nix",
+        "--extra-experimental-features",
+        "nix-command",
+        "copy",
+        "--no-check-sigs",
+        "--from",
+        store,
+        "--to",
+        EVAL_STORE,
+        path,
+    ]
 
 
 def git_env(kind: str, data: Mapping[str, bytes], directory: Path, url: str) -> dict[str, str]:
@@ -496,10 +518,17 @@ class Controller:
         node: str,
         labels: Mapping[str, str],
     ) -> None:
-        log = logger.bind(rollout=rollout, node=node, rev=source["rev"])
+        origin = {"path": source["path"]} if "path" in source else {"rev": source.get("rev", "")}
+        log = logger.bind(rollout=rollout, node=node, **origin)
         async with self.build_limit:
             log.info("build_started")
             try:
+                if "path" in source:
+                    copied = await anyio.run_process(source_copy_argv(source["path"], self.store), check=False)
+                    if copied.returncode != 0:
+                        build.error = copied.stderr.decode()[-1000:] or "the source copy failed"
+                        log.warning("source_copy_failed", returncode=copied.returncode)
+                        return
                 with tempfile.TemporaryDirectory() as tmp:
                     env = dict(os.environ)
                     if ref := source.get("secretRef"):

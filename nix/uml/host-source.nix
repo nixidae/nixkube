@@ -65,6 +65,14 @@ in
   inherit user password port;
   url = "http://${facts.address}:${toString port}/nixkube.git";
 
+  # The same file as a store path, for a rollout whose `source` is `path`:
+  # the cache guest serves it, so pynixd substitutes it as it would a path
+  # an apply pushed.
+  tree = pkgs.runCommand "nixkube-host-tree" { } ''
+    mkdir $out
+    cp ${expression} $out/default.nix
+  '';
+
   # Every source, for the cache guest to serve. Git compresses its objects,
   # so the repository's own closure names none of them.
   roots = lib.attrValues paths;

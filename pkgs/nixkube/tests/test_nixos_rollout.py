@@ -23,6 +23,7 @@ from src.nixos_rollout import (
     plan,
     rollout_phase,
     selects,
+    source_copy_argv,
     termination_message,
 )
 
@@ -107,6 +108,7 @@ def test_build_argv_passes_every_value_as_a_string() -> None:
     )
     args = {argv[i + 1]: argv[i + 2] for i, a in enumerate(argv) if a == "--argstr"}
     assert args == {
+        "path": "",
         "url": "https://x/y.git",
         "rev": "a" * 40,
         "attribute": "hosts.all",
@@ -117,6 +119,25 @@ def test_build_argv_passes_every_value_as_a_string() -> None:
     assert argv[argv.index("--store") + 1] == "ssh-ng://nix@pynixd"
     assert argv[argv.index("--eval-store") + 1] == "auto"
     assert "--impure" in argv
+
+
+def test_build_argv_takes_a_store_path_source() -> None:
+    argv = build_argv({"path": A, "attribute": "hosts.all"}, "n1", {}, "ssh-ng://nix@pynixd")
+    args = {argv[i + 1]: argv[i + 2] for i, a in enumerate(argv) if a == "--argstr"}
+    assert (args["path"], args["url"], args["rev"]) == (A, "", "")
+
+
+def argv_eval_store() -> str:
+    argv = build_argv({"path": A}, "n1", {}, "ssh-ng://nix@pynixd")
+    return argv[argv.index("--eval-store") + 1]
+
+
+def test_source_copy_argv_fetches_from_pynixd_into_the_pods_store() -> None:
+    argv = source_copy_argv(A, "ssh-ng://nix@pynixd")
+    assert argv[argv.index("--from") + 1] == "ssh-ng://nix@pynixd"
+    assert argv[-1] == A
+    # Into the store the build evaluates in, not nix.conf's daemon.
+    assert argv[argv.index("--to") + 1] == argv_eval_store()
 
 
 def test_git_env_basic_auth() -> None:
