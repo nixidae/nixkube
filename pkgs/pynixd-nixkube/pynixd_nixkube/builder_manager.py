@@ -5,6 +5,7 @@ import hashlib
 import socket
 import time
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -1396,15 +1397,21 @@ class BuilderManager:
         Aged builders are left to `_recycle_aged`, and do not count toward the
         minimum here either: an idle replacement must not be reaped while the
         builder it replaces drains.
+
+        The minimum is per system, as `_ensure_min_builders` keeps it. Counted
+        across systems, one system's builder lets the reaper delete another
+        system's only fresh builder: that system's aged builder never drains,
+        and a new replacement starts every `idle_timeout`.
         """
         while True:
             try:
                 fresh = [s for s in self._store_systems if s in self._registered and not self._is_aged_store(s)]
-                remaining = len(fresh)
+                remaining = Counter(self._store_systems[s] for s in fresh)
                 now = time.monotonic()
                 for store_id in fresh:
-                    if remaining <= self.min_builders:
-                        break
+                    system = self._store_systems[store_id]
+                    if remaining[system] <= self.min_builders:
+                        continue
                     store = self.server.stores.get(StoreId(store_id))
                     if store is None:
                         continue
@@ -1425,7 +1432,7 @@ class BuilderManager:
                     )
                     await self._delete_builder_job(store_id)
                     # The watch unregisters it later, so count it gone now.
-                    remaining -= 1
+                    remaining[system] -= 1
             except Exception:
                 log.exception("builder_idle_reap_error")
 

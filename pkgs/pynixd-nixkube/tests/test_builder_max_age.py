@@ -111,9 +111,9 @@ class FakeServer:
         self.stores[str(store.store_id)] = FakeStore(str(store.store_id))
 
 
-def job(name: str, age: float, now: datetime) -> Job:
+def job(name: str, age: float, now: datetime, system: str = SYSTEM) -> Job:
     started = (now - timedelta(seconds=age)).isoformat()
-    labels = {"nixkube/system": SYSTEM}
+    labels = {"nixkube/system": system}
     return Job({"metadata": {"name": name, "labels": labels}, "status": {"startTime": started}})
 
 
@@ -157,8 +157,8 @@ class Cluster:
         monkeypatch.setattr(m, "_get_job_pod_state", pod_state)
         monkeypatch.setattr(m, "_is_stale_builder", not_stale)
 
-    def add(self, name: str, age: float, ready: bool = True) -> None:
-        self.jobs[name] = job(name, age, self.now)
+    def add(self, name: str, age: float, ready: bool = True, system: str = SYSTEM) -> None:
+        self.jobs[name] = job(name, age, self.now, system)
         self.pods[name] = PodState(ip="10.0.0.1", ready=ready, phase="Running")
 
     def store(self, name: str) -> FakeStore:
@@ -312,3 +312,20 @@ async def test_the_idle_reaper_stops_at_the_minimum_in_one_pass(monkeypatch: pyt
     with anyio.move_on_after(0.5):
         await m._reap_idle()
     assert len(cluster.deleted) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_idle_reaper_keeps_the_minimum_of_each_system(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Measured on sg1: one fresh builder per system and a minimum of one.
+    Counted across systems, the reaper deleted the x86_64 builder, which was
+    the replacement an aged x86_64 builder waited for, every `idle_timeout`."""
+    m = manager(min_builders=1, idle_timeout=0)
+    m._available_systems = {SYSTEM, "aarch64-linux"}
+    cluster = Cluster(monkeypatch, m)
+    cluster.add("x86", age=60)
+    cluster.add("arm", age=60, system="aarch64-linux")
+    await cluster.tick()
+
+    with anyio.move_on_after(0.5):
+        await m._reap_idle()
+    assert cluster.deleted == []
