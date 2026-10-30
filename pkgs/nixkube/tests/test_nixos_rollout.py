@@ -67,6 +67,16 @@ def test_plan_done_stays_until_target_moves() -> None:
     assert out["n1"] == {"phase": NodePhase.PENDING, "target": B, "current": A}
 
 
+def test_plan_a_rebuild_to_the_running_system_switches_nothing() -> None:
+    building: dict[str, NodeEntry] = {"n1": {"phase": NodePhase.BUILDING, "current": A}}
+    out = plan(building, {"n1": A}, ["n1"], set(), 5)
+    assert out["n1"] == {"phase": NodePhase.DONE, "target": A, "current": A, "generation": 5}
+    # Drained by the controller: only the switch path uncordons it.
+    drained: dict[str, NodeEntry] = {"n1": {"phase": NodePhase.BUILDING, "current": A, "drained": True}}
+    assert plan(drained, {"n1": A}, ["n1"], set(), 5)["n1"]["phase"] == NodePhase.PENDING
+    assert plan(building, {"n1": B}, ["n1"], set(), 5)["n1"]["phase"] == NodePhase.PENDING
+
+
 def test_plan_keeps_in_flight_even_when_deselected() -> None:
     entries: dict[str, NodeEntry] = {"n1": {"phase": "Confirming", "target": A, "generation": 1}}
     assert plan(entries, {"n1": B}, ["n1"], {"n1"}, 2) == entries

@@ -212,6 +212,12 @@ def plan(
         if phase == NodePhase.DONE and entry.get("target") == target:
             out[node] = entry
             continue
+        # A new generation that built the system the node already runs: every
+        # change to a store-path source is a generation. Not a node the
+        # controller drained, which only the switch path uncordons.
+        if phase in (NodePhase.DONE, NodePhase.BUILDING) and entry.get("current") == target and "drained" not in entry:
+            out[node] = {"phase": NodePhase.DONE, "target": target, "current": target, "generation": generation}
+            continue
         pending = _kept(entry)
         pending.update({"phase": NodePhase.PENDING, "target": target})
         out[node] = pending
