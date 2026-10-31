@@ -45,7 +45,7 @@ in
     pathInputs = [
       pkgs.pkgsStatic.coreutils
       pkgs.gitMinimal
-      (pkgs.lib.getBin pkgs.nix)
+      (pkgs.lib.getBin self.nix)
       self.nix_init_db
       (pkgs.lib.getBin pkgs.openssh)
       (pkgs.lib.getBin pkgs.util-linuxMinimal)
@@ -63,7 +63,7 @@ in
       # The tools of nix/composefs.nix, as `composefsImage` passes them, so a
       # node writes CI's derivation and finds CI's image. src/csi/composefs.py.
       NIXKUBE_COMPOSEFS = pkgs.composefs;
-      NIXKUBE_NIX = pkgs.nix;
+      NIXKUBE_NIX = self.nix;
     };
     selfEnv = "NIXKUBE_PACKAGE";
   };
@@ -72,7 +72,15 @@ in
   #   python310 = pkgs.python3;
   # };
 
-  # No override on `nix`.
+  # Nix 2.35, not nixpkgs' default 2.34. A 2.34 store refuses every
+  # content-addressed path with a self-reference that 2.35 built: its
+  # RewritingSink calls `rewriteStrings(s, rewrites)` without `&matches`, so
+  # HashModuloSink hashes no `|offset` and the hash differs. pydd's Python
+  # outputs are such paths, and sg1's nodes run 2.35.3. Stock, so the binary
+  # cache still answers for it.
+  nix = pkgs.nixVersions.nix_2_35;
+
+  # No override on the derivation of `nix`.
   #
   # This used to be `pkgs.nix.overrideAttrs { doCheck = false;
   # doInstallCheck = false; }`, to skip Nix's own test suite. It changed the
@@ -120,7 +128,7 @@ in
     name = "appstarter";
     inherit (self) pythonSet;
     pathInputs = [
-      (pkgs.lib.getBin pkgs.nix)
+      (pkgs.lib.getBin self.nix)
       (pkgs.lib.getBin pkgs.openssh)
       pkgs.gitMinimal
     ];
