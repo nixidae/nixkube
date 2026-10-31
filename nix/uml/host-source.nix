@@ -23,7 +23,16 @@
 let
   facts = (import sources.vivarium { inherit pkgs sources; }).lib.cacheFacts;
   port = 8080;
-  paths = lib.mapAttrs (_: source: "${source}") sources;
+  # `builtins.path`, not `"${source}"`: through a daemon, Nix 2.35 keeps a
+  # locked GitHub pin in its Git cache, and the `path` fetch below opens the
+  # store path on disk. Same store path, now realised. nixidae/nixidae#1114.
+  paths = lib.mapAttrs (
+    _: source:
+    builtins.path {
+      path = source;
+      name = "source";
+    }
+  ) sources;
   pins = lib.mapAttrs (name: path: {
     url = "http://${facts.address}:${toString port}/sources/${name}.tar.gz";
     sha256 =
