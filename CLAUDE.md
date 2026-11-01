@@ -2,11 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Version Control
+## Before committing
 
-**Always use Jujutsu (jj) instead of Git** for all version control operations in this repository.
-
-**Before committing**, run from `nixkube/` what the CI `check` job runs:
+Run from `nixkube/` what the CI `check` job runs:
 
 ```bash
 nix run --file . internal.treefmt
