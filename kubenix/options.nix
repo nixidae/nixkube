@@ -221,6 +221,17 @@ in
       default = 5;
     };
 
+    nixosHost.storeWaitSeconds = lib.mkOption {
+      description = ''
+        Seconds the NixOSRollout controller waits for pynixd to answer
+        before a build that pynixd's absence failed becomes BuildFailed.
+        pynixd restarts on a nixidae bump, often in the same apply that
+        changes a rollout's source.
+      '';
+      type = lib.types.ints.positive;
+      default = 600;
+    };
+
     nixosHost.jobTTLSeconds = lib.mkOption {
       description = ''
         Seconds a finished switch, disarm or revert Job stays, with its pod

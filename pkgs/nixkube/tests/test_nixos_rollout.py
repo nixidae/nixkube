@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Unpack
 
@@ -11,8 +12,11 @@ from src.nixos_rollout import (
     GROUP,
     MIRROR,
     REBOOT_MESSAGE,
+    STORE_RETRY_MAX_SECONDS,
+    STORE_RETRY_SECONDS,
     Action,
     Build,
+    Controller,
     NodePhase,
     Phase,
     build_argv,
@@ -24,6 +28,7 @@ from src.nixos_rollout import (
     rollout_phase,
     selects,
     source_copy_argv,
+    store_retry_delay,
     termination_message,
 )
 
@@ -236,6 +241,77 @@ def test_a_failed_drain_halts_until_the_spec_changes() -> None:
     assert plan({"a": failed}, {"a": A}, ["a"], set(), 2)["a"] == failed
     again = plan({"a": failed}, {"a": B}, ["a"], set(), 3)["a"]
     assert again == {"phase": NodePhase.PENDING, "target": B, "drained": True}
+
+
+def test_store_retry_delay_backs_off_to_a_ceiling() -> None:
+    delays = [store_retry_delay(n) for n in range(1, 8)]
+    assert delays == sorted(delays)
+    assert delays[0] == STORE_RETRY_SECONDS
+    assert delays[-1] == STORE_RETRY_MAX_SECONDS
+
+
+def test_a_waiting_build_stays_building_with_its_reason() -> None:
+    entries = build_entries({}, {}, {"a": Build(waiting="waiting for the store")}, 1)
+    assert entries["a"] == {"phase": NodePhase.BUILDING, "message": "waiting for the store"}
+    assert rollout_phase(entries) == Phase.PROGRESSING
+
+
+UNREACHABLE = b"ssh: connect to host pynixd port 22: No route to host\n"
+
+
+class Processes:
+    """`anyio.run_process` with scripted answers: each step pops its kind's next one."""
+
+    def __init__(self, **answers: list[tuple[int, bytes]]) -> None:
+        self.answers = answers
+        self.calls: list[str] = []
+
+    async def __call__(self, argv: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
+        kind = "ping" if "ping" in argv else "copy" if "copy" in argv else "build"
+        self.calls.append(kind)
+        code, out = self.answers[kind].pop(0)
+        return subprocess.CompletedProcess(argv, code, out if code == 0 else b"", b"" if code == 0 else out)
+
+
+async def _build(monkeypatch: pytest.MonkeyPatch, processes: Processes, store_wait: float = 60) -> Build:
+    monkeypatch.setattr("src.nixos_rollout.anyio.run_process", processes)
+    monkeypatch.setattr("src.nixos_rollout.store_retry_delay", lambda failures: 0.0 if store_wait else 1.0)
+    controller = Controller("nixkube", 600, 5, "ssh-ng://nix@pynixd", 60, store_wait)
+    build = Build()
+    await controller.build(build, "r", {"path": A}, "a", {})
+    return build
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_store_is_retried_until_it_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1156: pynixd restarted as the rollout's source changed, and the copy failed."""
+    processes = Processes(
+        copy=[(1, UNREACHABLE), (0, b"")],
+        ping=[(1, UNREACHABLE), (1, UNREACHABLE), (0, b"")],
+        build=[(0, f"{B}\n".encode())],
+    )
+    build = await _build(monkeypatch, processes)
+    assert (build.toplevel, build.error, build.waiting) == (B, None, None)
+    assert processes.calls == ["copy", "ping", "ping", "ping", "copy", "build"]
+
+
+@pytest.mark.asyncio
+async def test_a_failure_while_the_store_answers_is_a_build_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    processes = Processes(copy=[(0, b"")], build=[(1, b"error: attribute 'a' missing\n")], ping=[(0, b"")])
+    build = await _build(monkeypatch, processes)
+    assert build.toplevel is None
+    assert build.error == "error: attribute 'a' missing\n"
+    assert processes.calls == ["copy", "build", "ping"]
+
+
+@pytest.mark.asyncio
+async def test_a_store_that_stays_unreachable_fails_the_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    processes = Processes(copy=[(1, UNREACHABLE)], ping=[(1, UNREACHABLE)])
+    build = await _build(monkeypatch, processes, store_wait=0)
+    assert build.toplevel is None
+    assert build.error is not None
+    assert build.error.startswith("the store ssh-ng://nix@pynixd did not answer for 0 s: ")
+    assert build.error.endswith(UNREACHABLE.decode())
 
 
 def test_reboot_steps_are_in_flight() -> None:

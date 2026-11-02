@@ -435,6 +435,7 @@ in
                     REVERT_DELAY.value = toString cfg.nixosHost.revertDelay;
                     RESYNC_SECONDS.value = toString cfg.nixosHost.resyncSeconds;
                     JOB_TTL_SECONDS.value = toString cfg.nixosHost.jobTTLSeconds;
+                    STORE_WAIT_SECONDS.value = toString cfg.nixosHost.storeWaitSeconds;
                     PYNIXD_STORE.value = "ssh-ng://nix@pynixd";
                   };
                   # Evaluating a NixOS system is the cost. On sg1 (2026-10-29,

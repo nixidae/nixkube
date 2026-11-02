@@ -22,7 +22,9 @@ running system, and the node is uncordoned.
 
 A rollout with a `source` first builds each node's system (Building). No
 node switches until every build is done, so a bad source halts the rollout
-(BuildFailed) before it touches a host. Builds live in memory, keyed by
+(BuildFailed) before it touches a host. A store that does not answer is
+not a bad source: the build stays Building and retries until the store
+answers, or for at most STORE_WAIT_SECONDS. Builds live in memory, keyed by
 generation: a restarted controller builds again, and pynixd answers from
 its store.
 """
@@ -318,6 +320,20 @@ def source_copy_argv(path: str, store: str) -> list[str]:
     ]
 
 
+def store_ping_argv(store: str) -> list[str]:
+    """Connect to `store` and nothing else: its exit code says only whether the store answers."""
+    return ["nix", "--extra-experimental-features", "nix-command", "store", "ping", "--store", store]
+
+
+STORE_RETRY_SECONDS: Final = 2.0
+STORE_RETRY_MAX_SECONDS: Final = 30.0
+
+
+def store_retry_delay(failures: int) -> float:
+    """Seconds before the next attempt, after `failures` attempts in a row found the store unreachable."""
+    return min(STORE_RETRY_SECONDS * 2.0 ** (failures - 1), STORE_RETRY_MAX_SECONDS)
+
+
 def git_env(kind: str, data: Mapping[str, bytes], directory: Path, url: str) -> dict[str, str]:
     """The environment that makes git, run by Nix's fetcher, use a Secret.
 
@@ -358,10 +374,14 @@ def git_env(kind: str, data: Mapping[str, bytes], directory: Path, url: str) -> 
 
 @dataclass
 class Build:
-    """One evaluation and build. Neither field is set while it runs."""
+    """One evaluation and build. Neither `toplevel` nor `error` is set while it runs.
+
+    `waiting` says why a running build waits: the store did not answer.
+    """
 
     toplevel: str | None = None
     error: str | None = None
+    waiting: str | None = None
 
 
 def build_entries(
@@ -387,6 +407,8 @@ def build_entries(
             entry.update({"phase": NodePhase.BUILD_FAILED, "message": build.error})
         else:
             entry["phase"] = NodePhase.BUILDING
+            if build.waiting:
+                entry["message"] = build.waiting
         out[node] = entry
     return out
 
@@ -460,12 +482,14 @@ class Controller:
         resync: float,
         store: str,
         job_ttl: int,
+        store_wait: float,
     ) -> None:
         self.namespace = namespace
         self.job_ttl = job_ttl
         self.revert_delay = revert_delay
         self.resync = resync
         self.store = store
+        self.store_wait = store_wait
         self.builds: dict[tuple[str, int, str], Build] = {}
         # One at a time: evaluating a NixOS system takes about 850 MB.
         self.build_limit = anyio.CapacityLimiter(1)
@@ -529,36 +553,69 @@ class Controller:
         async with self.build_limit:
             log.info("build_started")
             try:
-                if "path" in source:
-                    copied = await anyio.run_process(source_copy_argv(source["path"], self.store), check=False)
-                    if copied.returncode != 0:
-                        build.error = copied.stderr.decode()[-1000:] or "the source copy failed"
-                        log.warning("source_copy_failed", returncode=copied.returncode)
+                # pynixd restarts, and a copy or build through it then fails
+                # with exit code 1, as a bad source does (#1156). A ping after
+                # the failure tells the two apart: a store that does not
+                # answer is retried, not reported as BuildFailed.
+                while True:
+                    toplevel, error = await self.attempt(source, node, labels, log)
+                    if toplevel is not None:
+                        build.toplevel = toplevel
+                        log.info("build_done", toplevel=toplevel)
                         return
-                with tempfile.TemporaryDirectory() as tmp:
-                    env = dict(os.environ)
-                    if ref := source.get("secretRef"):
-                        secret = await Secret.get(ref["name"], namespace=self.namespace)
-                        doc = secret_doc(secret)
-                        data = {k: base64.b64decode(v) for k, v in (doc.get("data") or {}).items()}
-                        env |= git_env(doc.get("type", ""), data, Path(tmp), source["url"])
-                    result = await anyio.run_process(
-                        build_argv(source, node, labels, self.store),
-                        env=env,
-                        check=False,
-                    )
-                out = result.stdout.decode().split()
-                if result.returncode != 0 or not out:
-                    build.error = result.stderr.decode()[-1000:] or "no output"
-                    log.warning("build_failed", returncode=result.returncode)
-                    return
-                build.toplevel = out[-1]
-                log.info("build_done", toplevel=build.toplevel)
+                    deadline = anyio.current_time() + self.store_wait
+                    failures = 0
+                    while not await self.store_answers():
+                        failures += 1
+                        delay = store_retry_delay(failures)
+                        if anyio.current_time() + delay > deadline:
+                            build.error = f"the store {self.store} did not answer for {self.store_wait:g} s: {error}"
+                            log.warning("store_unreachable_gave_up", failures=failures)
+                            return
+                        build.waiting = f"waiting for the store {self.store}, which does not answer"
+                        log.info("store_unreachable_retrying", failures=failures, delay=delay)
+                        await anyio.sleep(delay)
+                    if failures == 0:
+                        build.error = error
+                        return
+                    build.waiting = None
+                    log.info("store_answers_again", failures=failures)
             # This runs in the controller's task group: an exception that
             # escaped would cancel the reconcile loop.
             except Exception as e:
                 build.error = f"{type(e).__name__}: {e}"
                 log.warning("build_failed", exc_info=True)
+
+    async def attempt(
+        self,
+        source: RolloutSource,
+        node: str,
+        labels: Mapping[str, str],
+        log: FilteringBoundLogger,
+    ) -> tuple[str | None, str]:
+        """One source copy and build: the toplevel, or None and the error."""
+        if "path" in source:
+            copied = await anyio.run_process(source_copy_argv(source["path"], self.store), check=False)
+            if copied.returncode != 0:
+                log.warning("source_copy_failed", returncode=copied.returncode)
+                return None, copied.stderr.decode()[-1000:] or "the source copy failed"
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ)
+            if ref := source.get("secretRef"):
+                secret = await Secret.get(ref["name"], namespace=self.namespace)
+                doc = secret_doc(secret)
+                data = {k: base64.b64decode(v) for k, v in (doc.get("data") or {}).items()}
+                env |= git_env(doc.get("type", ""), data, Path(tmp), source["url"])
+            result = await anyio.run_process(build_argv(source, node, labels, self.store), env=env, check=False)
+        out = result.stdout.decode().split()
+        if result.returncode != 0 or not out:
+            log.warning("build_failed", returncode=result.returncode)
+            return None, result.stderr.decode()[-1000:] or "no output"
+        return out[-1], ""
+
+    async def store_answers(self) -> bool:
+        pinged = await anyio.run_process(store_ping_argv(self.store), check=False)
+        return pinged.returncode == 0
 
     async def reconcile_all(self) -> None:
         rollouts = [r async for r in NixOSRollout.list() if isinstance(r, NixOSRollout)]
@@ -994,5 +1051,6 @@ def main() -> None:
         resync=float(os.environ["RESYNC_SECONDS"]),
         store=os.environ.get("PYNIXD_STORE", "ssh-ng://nix@pynixd"),
         job_ttl=int(os.environ["JOB_TTL_SECONDS"]),
+        store_wait=float(os.environ["STORE_WAIT_SECONDS"]),
     )
     anyio.run(controller.run, backend="asyncio")
