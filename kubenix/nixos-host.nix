@@ -64,21 +64,49 @@ in
                 REVERT_DELAY.value = toString cfg.nixosHost.revertDelay;
               };
               securityContext.privileged = true;
-              volumeMounts = lib.mkNamedList {
-                nix-store = {
+              # A plain list, not mkNamedList: that keys a mount by its
+              # volume's name, and `nix-store` is mounted twice.
+              volumeMounts = [
+                {
+                  name = "nix-store";
                   mountPath = "/nix";
                   subPath = "nix";
-                };
+                }
+                # The store read-only, as NixOS mounts it. The program runs as
+                # root on python3Minimal, which ships no bytecode: with a
+                # writable store CPython writes __pycache__ into that store
+                # path, and the copy of the program's closure to the host then
+                # fails its NAR hash (#1124). nix remounts the store writable
+                # in a private namespace when it must write, as on NixOS.
+                {
+                  name = "nix-store";
+                  mountPath = "/nix/store";
+                  subPath = "nix/store";
+                  readOnly = true;
+                }
                 # Read-only: the host's daemon writes the paths.
-                host-nix = {
+                {
+                  name = "host-nix";
                   mountPath = "/host/nix";
                   readOnly = true;
-                };
-                nix-config.mountPath = "/etc/nix";
-                ssh-config.mountPath = "/etc/ssh";
-                ssh-dynauth.mountPath = "/etc/ssh-dynauth";
-                ssh-key.mountPath = "/etc/ssh-key";
-              };
+                }
+                {
+                  name = "nix-config";
+                  mountPath = "/etc/nix";
+                }
+                {
+                  name = "ssh-config";
+                  mountPath = "/etc/ssh";
+                }
+                {
+                  name = "ssh-dynauth";
+                  mountPath = "/etc/ssh-dynauth";
+                }
+                {
+                  name = "ssh-key";
+                  mountPath = "/etc/ssh-key";
+                }
+              ];
             };
           };
           volumes = lib.mkNamedList {

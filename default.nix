@@ -1015,6 +1015,32 @@ let
       assert lib.hasInfix "ed25519" builder.path;
       pkgs.runCommand "builder-presents-pinned-host-key" { } "echo ok > $out";
 
+    # The switch Job sees its store read-only. As root on python3Minimal it
+    # otherwise writes __pycache__ into a store path, and the copy of its
+    # closure to a host that lacks that path fails its NAR hash. Measured on
+    # sg1's gx10-1759, 2026-11-02: the same Job failed without this mount
+    # and completed with it. Issue #1124.
+    switchStoreIsReadOnly =
+      let
+        spec =
+          (kubenixInstance {
+            module.nixkube.nixosHost.enable = true;
+          }).config.kubernetes.resources.nixkube.PodTemplate.nixkube-nixos-host.template.spec;
+        container = lib.head spec.containers;
+        at = path: lib.filter (m: m.mountPath == path) container.volumeMounts;
+        root = at "/nix";
+        store = at "/nix/store";
+      in
+      assert lib.assertMsg (
+        lib.length store == 1
+      ) "the switch container mounts /nix/store ${toString (lib.length store)} times";
+      assert lib.assertMsg ((lib.head store).readOnly or false
+      ) "the switch container's /nix/store is writable";
+      assert lib.assertMsg (
+        lib.length root == 1 && (lib.head root).name == (lib.head store).name
+      ) "/nix/store is not the same volume as /nix";
+      pkgs.runCommand "switch-store-is-read-only" { } "echo ok > $out";
+
     /**
       A CSI volume as a composefs image, built with this pkgs' tools.
       `nix/composefs.nix` says what it holds and why it takes its tools as
@@ -1454,6 +1480,7 @@ let
         ciWorkflowCheck
         presentationChartIsCurrent
         builderPresentsPinnedHostKey
+        switchStoreIsReadOnly
         noPrivateKeysInManifest
         probeWatchHasRbac
         umlImagesMatch
