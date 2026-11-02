@@ -9,6 +9,10 @@ the controller switches one node at a time, in name order: `cp`, then
 one file evaluates both guests plus ../host-built.nix, so the controller
 evaluates and pynixd builds systems no cache holds: `hostBuilt`.
 
+The same store path again, while pynixd's Service selects no pod: the
+nodes wait in Building, and the rollout finishes in that generation once
+pynixd answers (#1156).
+
 `hostBroken` also stops cp's kubelet: the switch Job cannot report, nothing
 can confirm or disarm, and only the host's armed timer brings it back. The
 controller must then halt the rollout before it starts on `worker`, mark cp
@@ -53,6 +57,8 @@ BUILD_TIMEOUT = 30 * 60
 # A boot is about 70 s, and the image import before kubelet more.
 REBOOT_TIMEOUT = 15 * 60
 VICTIM = "reboot-victim"
+# Added to pynixd's Service selector, so the Service has no endpoint.
+NO_POD = {"nixkube.nixidae.org/test": "no-pod"}
 BOOT_ID = "cat /proc/sys/kernel/random/boot_id"
 # Two tries of `nixkube.host.bootAssessment.timeout` (300 s) each, then a
 # boot of the old system.
@@ -67,6 +73,7 @@ class NodeStatus(TypedDict, total=False):
     target: str
     failedSystem: str
     leaseRenewTime: str
+    message: str
 
 
 class RolloutStatus(TypedDict, total=False):
@@ -93,6 +100,34 @@ async def apply(cp: Machine, obj: dict[str, object]) -> None:
     await cp.succeed(f"echo {encoded} | base64 --decode | kubectl apply --filename -")
 
 
+def rollout(
+    systems: dict[str, str],
+    source: dict[str, object] | None = None,
+    reboot_timeout: int | None = None,
+) -> dict[str, object]:
+    target: dict[str, object] = {"source": source} if source else {"systems": systems}
+    return {
+        "apiVersion": "nixkube.nixidae.org/v1alpha1",
+        "kind": "NixOSRollout",
+        "metadata": {"name": ROLLOUT},
+        "spec": {
+            "nodeSelector": {
+                "matchExpressions": [
+                    {
+                        "key": "kubernetes.io/hostname",
+                        "operator": "In",
+                        "values": sorted(systems),
+                    }
+                ]
+            },
+            **target,
+            "maxUnavailable": 1,
+            "confirmTimeout": CONFIRM_TIMEOUT,
+            **({"rebootTimeout": reboot_timeout} if reboot_timeout else {}),
+        },
+    }
+
+
 async def roll_to(
     cp: Machine,
     systems: dict[str, str],
@@ -106,30 +141,7 @@ async def roll_to(
     which the nodes left Pending. Fails as soon as two nodes are in flight at
     once, or one is in flight while another builds.
     """
-    target: dict[str, object] = {"source": source} if source else {"systems": systems}
-    await apply(
-        cp,
-        {
-            "apiVersion": "nixkube.nixidae.org/v1alpha1",
-            "kind": "NixOSRollout",
-            "metadata": {"name": ROLLOUT},
-            "spec": {
-                "nodeSelector": {
-                    "matchExpressions": [
-                        {
-                            "key": "kubernetes.io/hostname",
-                            "operator": "In",
-                            "values": sorted(systems),
-                        }
-                    ]
-                },
-                **target,
-                "maxUnavailable": 1,
-                "confirmTimeout": CONFIRM_TIMEOUT,
-                **({"rebootTimeout": reboot_timeout} if reboot_timeout else {}),
-            },
-        },
-    )
+    await apply(cp, rollout(systems, source, reboot_timeout))
     generation = (await get_json(cp, f"get nixosrollout {ROLLOUT}"))["metadata"]["generation"]
     started: list[str] = []
 
@@ -209,6 +221,8 @@ async def test(vms: Machines) -> None:
     await from_source(hosts, vms.cache, settings)
     await switch_to(hosts, first)
     await from_store_path(hosts, settings)
+    await switch_to(hosts, first)
+    await waits_for_the_store(hosts, settings)
     await switch_to(hosts, first)
 
     await broken_halts(hosts, first, settings["hostBroken"], after["worker"])
@@ -354,6 +368,49 @@ async def from_store_path(hosts: dict[str, Machine], settings: Settings) -> None
     built: dict[str, str] = settings["hostBuilt"]
     await switch_to(hosts, built, {"path": settings["hostSource"]["tree"]})
     print(f"[nixkube] the rollout evaluated a store-path source to the git source's toplevels: {built}", flush=True)
+
+
+async def waits_for_the_store(hosts: dict[str, Machine], settings: Settings) -> None:
+    """#1156: pynixd does not answer as a source rollout starts; the rollout waits, not halts.
+
+    On sg1 one apply restarted pynixd and changed the source, every node
+    went BuildFailed, and only a new generation cleared the halt. Here the
+    pynixd Service selects no pod, which fails ssh as the restart did.
+    """
+    cp = hosts["cp"]
+    built: dict[str, str] = settings["hostBuilt"]
+    source = {"path": settings["hostSource"]["tree"]}
+    service = f"--namespace {NAMESPACE} service/pynixd"
+    selector = (await get_json(cp, f"get {service}"))["spec"]["selector"]
+    await kubectl(cp, f"patch {service} --type merge --patch '{json.dumps({'spec': {'selector': NO_POD}})}'")
+    try:
+        await apply(cp, rollout(built, source))
+        generation = (await get_json(cp, f"get nixosrollout {ROLLOUT}"))["metadata"]["generation"]
+
+        async def waiting() -> tuple[bool, str]:
+            status: RolloutStatus = (await get_json(cp, f"get nixosrollout {ROLLOUT}")).get("status", {})
+            if status.get("phase") == "Halted":
+                raise MachineError(f"[cp] the rollout halted while pynixd did not answer: {status}")
+            # The controller builds one node at a time, so the other waits
+            # for its turn, Building with no message.
+            nodes = [status.get("nodes", {}).get(n, {}) for n in built]
+            done = (
+                status.get("observedGeneration") == generation
+                and all(e.get("phase") == "Building" for e in nodes)
+                and any("waiting for the store" in e.get("message", "") for e in nodes)
+            )
+            return done, json.dumps(status)
+
+        await until("the rollout waits for pynixd", waiting, READY_TIMEOUT, cp)
+    finally:
+        replace = [{"op": "replace", "path": "/spec/selector", "value": selector}]
+        await kubectl(cp, f"patch {service} --type json --patch '{json.dumps(replace)}'")
+
+    await switch_to(hosts, built, source)
+    after = (await get_json(cp, f"get nixosrollout {ROLLOUT}"))["metadata"]["generation"]
+    if after != generation:
+        raise MachineError(f"[cp] the rollout needed generation {after}, not {generation}, to finish")
+    print("[nixkube] the rollout waited for pynixd and finished in the same generation", flush=True)
 
 
 async def broken_halts(hosts: dict[str, Machine], first: dict[str, str], broken: str, worker_next: str) -> None:
