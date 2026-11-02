@@ -320,9 +320,9 @@ def source_copy_argv(path: str, store: str) -> list[str]:
     ]
 
 
-def store_ping_argv(store: str) -> list[str]:
+def store_info_argv(store: str) -> list[str]:
     """Connect to `store` and nothing else: its exit code says only whether the store answers."""
-    return ["nix", "--extra-experimental-features", "nix-command", "store", "ping", "--store", store]
+    return ["nix", "--extra-experimental-features", "nix-command", "store", "info", "--store", store]
 
 
 STORE_RETRY_SECONDS: Final = 2.0
@@ -614,8 +614,8 @@ class Controller:
         return out[-1], ""
 
     async def store_answers(self) -> bool:
-        pinged = await anyio.run_process(store_ping_argv(self.store), check=False)
-        return pinged.returncode == 0
+        answered = await anyio.run_process(store_info_argv(self.store), check=False)
+        return answered.returncode == 0
 
     async def reconcile_all(self) -> None:
         rollouts = [r async for r in NixOSRollout.list() if isinstance(r, NixOSRollout)]

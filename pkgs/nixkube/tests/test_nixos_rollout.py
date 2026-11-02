@@ -267,7 +267,7 @@ class Processes:
         self.calls: list[str] = []
 
     async def __call__(self, argv: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
-        kind = "ping" if "ping" in argv else "copy" if "copy" in argv else "build"
+        kind = "ping" if "info" in argv else "copy" if "copy" in argv else "build"
         self.calls.append(kind)
         code, out = self.answers[kind].pop(0)
         return subprocess.CompletedProcess(argv, code, out if code == 0 else b"", b"" if code == 0 else out)
