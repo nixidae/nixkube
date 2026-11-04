@@ -107,7 +107,7 @@ async def check_store_split(cp: Machine, nixos: bool) -> None:
 
 async def test(vms: Machines) -> None:
     settings = vms.settings
-    cp = await bring_up(vms, nix_images=False, addons=(KUBE_PROXY, KUBE_DNS))
+    cp = await bring_up(vms, addons=(KUBE_PROXY, KUBE_DNS))
 
     with tempfile.TemporaryDirectory(prefix="nixkube-ci-") as work:
         kubeconfig = os.path.join(work, "kubeconfig")
