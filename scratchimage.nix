@@ -2,7 +2,7 @@
 
 { pkgs }:
 let
-  version = "1.0.1";
+  version = "1.0.2";
 
   # The digest of the index below. A manifest pins it as a literal, so
   # rendering one builds no image; `index` fails when it builds anything else.
@@ -17,6 +17,13 @@ let
       ''
         umoci init --layout $out
         umoci new --image $out:${GOARCH}
+        # One layer of empty mount points. containerd's overlay snapshotter maps a
+        # zero-layer rootfs's owner twice, and a `hostUsers: false` pod then fails
+        # at mkdirat rootfs/proc (containerd/containerd#14532, nixidae/nixidae#1191).
+        umoci unpack --rootless --image $out:${GOARCH} bundle
+        mkdir bundle/rootfs/{proc,sys,dev,etc,run,tmp}
+        chmod 1777 bundle/rootfs/tmp
+        umoci repack --no-history --image $out:${GOARCH} bundle
         umoci config --image $out:${GOARCH} \
           --config.env PATH=/nix/var/result/bin \
           --architecture ${GOARCH} \

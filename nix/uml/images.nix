@@ -67,7 +67,7 @@ rec {
   # manifest, so a change on either side fails there rather than at ImagePull.
   tags = {
     nix = nixImage.refFor [ system ];
-    scratch = "ghcr.io/nixidae/nixkube/scratch:1.0.1";
+    scratch = "ghcr.io/nixidae/nixkube/scratch:1.0.2";
   };
 
   nix = convert {

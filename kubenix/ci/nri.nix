@@ -29,7 +29,7 @@ in
         restartPolicy = "Never";
         containers = lib.mkNamedList {
           hello = {
-            image = "ghcr.io/nixidae/nixkube/scratch:1.0.1";
+            image = "ghcr.io/nixidae/nixkube/scratch:1.0.2";
             command = [ "${curPkgs.hello}/bin/hello" ];
           };
         };
@@ -48,7 +48,7 @@ in
           restartPolicy = "Never";
           containers = lib.mkNamedList {
             hello = {
-              image = "ghcr.io/nixidae/nixkube/scratch:1.0.1";
+              image = "ghcr.io/nixidae/nixkube/scratch:1.0.2";
               command = [ "${curPkgs.hello}/bin/hello" ];
             };
           };

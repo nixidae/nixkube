@@ -28,7 +28,7 @@
 }:
 let
   system = pkgs.stdenv.hostPlatform.system;
-  scratch = "ghcr.io/nixidae/nixkube/scratch:1.0.1";
+  scratch = "ghcr.io/nixidae/nixkube/scratch:1.0.2";
 
   # Reached through the volume, and nowhere else -- /nix/store is bound into
   # every container in this guest, so a command under /nix/store would run

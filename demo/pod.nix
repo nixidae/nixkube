@@ -59,7 +59,7 @@ let
           kubernetes.resources.none.Pod.hello.spec = {
             containers = lib.mkNamedList {
               hello = {
-                image = "ghcr.io/nixidae/nixkube/scratch:1.0.1"; # 1.0.1 sets PATH to /nix/var/result/bin
+                image = "ghcr.io/nixidae/nixkube/scratch:1.0.2"; # sets PATH to /nix/var/result/bin
                 command = [
                   "bash"
                   "-c"

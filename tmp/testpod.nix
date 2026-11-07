@@ -41,7 +41,7 @@ let
             spec = {
               containers = lib.mkNamedList {
                 ${toString builtins.currentTime} = {
-                  image = "ghcr.io/nixidae/nixkube/scratch:1.0.1";
+                  image = "ghcr.io/nixidae/nixkube/scratch:1.0.2";
                   command = [
                     (lib.getExe pkgs.tini)
                     "--"
@@ -82,7 +82,7 @@ let
               containers = lib.mkNamedList {
                 ${toString builtins.currentTime} = {
                   # image = "gcr.io/distroless/static:latest";
-                  image = "ghcr.io/nixidae/nixkube/scratch:1.0.1";
+                  image = "ghcr.io/nixidae/nixkube/scratch:1.0.2";
 
                   env = lib.mkNamedList {
                     AFILE.value = pkgs.writeText "afile" "this is a file";

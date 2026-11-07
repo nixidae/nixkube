@@ -57,7 +57,7 @@ let
             automountServiceAccountToken = false;
             containers = lib.mkNamedList {
               nixos = {
-                image = "ghcr.io/nixidae/nixkube/scratch:1.0.1"; # 1.0.1 sets PATH to /nix/var/result/bin
+                image = "ghcr.io/nixidae/nixkube/scratch:1.0.2"; # sets PATH to /nix/var/result/bin
                 command = [
                   "/nix/var/result/init"
                   "--system"

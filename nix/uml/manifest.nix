@@ -96,7 +96,7 @@ in
 
     # The tag ./images.nix imports. The default pins scratch's index by
     # digest, and a docker-archive tarball carries a tag, not an index.
-    images.scratch = "ghcr.io/nixidae/nixkube/scratch:1.0.1";
+    images.scratch = "ghcr.io/nixidae/nixkube/scratch:1.0.2";
 
     /*
       The cache StatefulSet, for how it starts rather than for what it does.

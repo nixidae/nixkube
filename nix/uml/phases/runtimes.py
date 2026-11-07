@@ -8,7 +8,7 @@ one gets CSI, and NRI refuses it by name.
 from typing import Any
 
 from nixkube_uml import NAMESPACE, READY_TIMEOUT, check_sandboxed, check_vm, probe
-from vivarium_runner import Machine, MachineError, Machines
+from vivarium_runner import Machine, Machines
 from vivarium_runner.cluster import kubectl, until
 
 # The pid a sandboxed runtime reports is not the container's, so NRI cannot
@@ -33,31 +33,9 @@ async def test(vms: Machines) -> None:
     if settings["hostStore"]:
         await check_user_namespace_refused(cp, settings)
         return
-    if settings["cri"] != "containerd":
-        await probe(cp, settings, "a pod with hostUsers false", host_users=False)
-        return
-    # containerd cannot start a user-namespaced container from an image with
-    # zero layers, which the probe's scratch image is: Lillecarl/containerd#1,
-    # vivarium's `containerd-zero-layers`. Asserted, so the day containerd
-    # runs it this fails and the probe above takes over.
-    try:
-        await probe(cp, settings, "a pod with hostUsers false", host_users=False, wants=("ro",))
-    except MachineError as error:
-        if "StartError" not in str(error):
-            raise
-        await cp.succeed(
-            "kubectl delete jobs --namespace nixkube --wait=true --selector app.kubernetes.io/component=uml-probe",
-            timeout=300,
-        )
-        print(
-            "[nixkube] hostUsers false on containerd: fails as Lillecarl/containerd#1 says",
-            flush=True,
-        )
-        return
-    raise MachineError(
-        "[cp] containerd started a zero-layer pod with hostUsers false: Lillecarl/containerd#1 is"
-        " fixed here, so drop this branch and probe as on CRI-O"
-    )
+    # The scratch image has one layer: containerd cannot start a user-namespaced
+    # container from zero (Lillecarl/containerd#1, vivarium's `containerd-zero-layers`).
+    await probe(cp, settings, "a pod with hostUsers false", host_users=False)
 
 
 async def check_user_namespace_refused(cp: Machine, settings: dict[str, Any]) -> None:
