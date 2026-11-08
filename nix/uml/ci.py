@@ -21,7 +21,7 @@ import subprocess
 import tempfile
 
 from vivarium_runner import Machine, Machines
-from vivarium_runner.cluster import (
+from vivarium_k8s import (
     KUBE_DNS,
     KUBE_PROXY,
     bring_up,

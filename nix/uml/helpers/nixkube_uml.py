@@ -14,7 +14,7 @@ are real rather than go looking for them.
 """
 
 from vivarium_runner import Machine, MachineError
-from vivarium_runner.cluster import get_json, kubectl, until
+from vivarium_k8s import get_json, kubectl, until
 
 NAMESPACE = "nixkube"
 STATEFULSET = "pynixd"

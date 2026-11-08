@@ -9,7 +9,7 @@ from typing import Any
 
 from nixkube_uml import NAMESPACE, READY_TIMEOUT, check_sandboxed, check_vm, probe
 from vivarium_runner import Machine, Machines
-from vivarium_runner.cluster import kubectl, until
+from vivarium_k8s import kubectl, until
 
 # The pid a sandboxed runtime reports is not the container's, so NRI cannot
 # reach it. Measured for gVisor; see `check_sandboxed`.

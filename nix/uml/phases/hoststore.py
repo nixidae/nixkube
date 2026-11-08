@@ -15,7 +15,7 @@ the guest's nix-daemon. This asks what that has to mean:
 
 from nixkube_uml import NAMESPACE, READY_TIMEOUT, check_resident, probe
 from vivarium_runner import Machine, MachineError, Machines
-from vivarium_runner.cluster import get_json, until
+from vivarium_k8s import get_json, until
 
 STILL_ALIVE = "since it is still alive"
 

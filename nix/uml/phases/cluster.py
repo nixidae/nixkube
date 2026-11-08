@@ -1,7 +1,7 @@
 """A kubeadm cluster: the control plane `cp`, which runs the workloads, and `worker`."""
 
 from vivarium_runner import Machines
-from vivarium_runner.cluster import bring_up, kubectl
+from vivarium_k8s import bring_up, kubectl
 
 # The host phase rolls out to `worker`; nothing else runs there. The switch
 # Jobs set `nodeName` and tolerate every taint, so this keeps out only what
