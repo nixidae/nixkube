@@ -76,8 +76,6 @@ let
   # What both nodes share. kubeadm hands the worker the control plane's
   # KubeletConfiguration, so `kubeletSettings` reaches both from here.
   nodeBase = index: role: {
-    imports = [ vivariumSet.nixosModules.k8s ];
-
     services.vivarium-k8s = {
       enable = true;
       inherit role;
@@ -332,6 +330,7 @@ vivarium.mkTest (
       else
         "nixkube";
 
+    vivarium.recipes.kubernetes.enable = true;
     vivarium.recipes.cache = {
       enable = true;
       roots = map toString (

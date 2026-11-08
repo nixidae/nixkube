@@ -98,12 +98,11 @@ vivarium.mkTest {
     after = [ "boot" ];
   };
   backend = "qemu";
+  vivarium.recipes.kubernetes.enable = true;
 
   nodes.cp =
     { config, ... }:
     {
-      imports = [ vivariumSet.nixosModules.k8s ];
-
       services.vivarium-k8s = {
         enable = true;
         role = "control-plane";
