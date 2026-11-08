@@ -50,9 +50,9 @@ let
   #
   # `nixkube.discardStringContext = false` (see ./manifest.nix) keeps the
   # string context on the DaemonSet's store paths, so the node environment is
-  # in this file's closure. Naming it in `settings` does both jobs: it pulls
-  # the closure into the sandbox, and `mkTest` registers what `settings`
-  # names, which is what makes Nix inside the guest agree the paths are real.
+  # in this file's closure. Naming it in `settings` pulls the closure into
+  # the sandbox, and `vivarium.lateClosure` below registers it, which is
+  # what makes Nix inside the guest agree the paths are real.
   manifestFile = manifest.manifestYAMLFile;
 
   probes = pkgs.callPackage ./probe.nix { };
@@ -156,9 +156,9 @@ let
         hold the inputs of their toplevels. The builder mounts its store
         through the node DaemonSet, which runs here only.
 
-        No `nixDatabase` here. `mkTest` registers the closure of everything
-        in `settings`, which the phases read on the node: the manifest and
-        both probes. What the node runs it fetches from the cache guest.
+        No `nixDatabase` here. `lateClosure` registers what the phases read
+        on the node: the manifest and both probes. What the node runs it
+        fetches from the cache guest.
       */
       memory = "4096M";
       diskSize = 10240;
@@ -520,6 +520,19 @@ vivarium.mkTest (
       networking.firewall.allowedTCPPorts = [ hostSource.port ];
     };
 
+    # What the phases read on the nodes; the rest of `settings` is data.
+    defaults =
+      { settings, ... }:
+      {
+        vivarium.lateClosure = [
+          settings.manifest
+          settings.probeRo
+          settings.probeRw
+          settings.residentCat
+          settings.workloadStorePath
+        ];
+      };
+
     settings = {
       manifest = "${manifestFile}";
       # One pod using both mount paths, with a generated name, created after
@@ -560,9 +573,9 @@ vivarium.mkTest (
       # DaemonSet serves it. Issue #25.
       inherit hostStore;
       nodeDaemonSet = if hostStore then "nix-node-host" else "nix-node";
-      # Strings, not store paths: `settings` registers what it names on
-      # every guest, and the host phase has to fetch these from the cache
-      # guest, as a real host would.
+      # Strings without context, so they are not in the run's closure: the
+      # host phase has to fetch these from the cache guest, as a real host
+      # would.
       hostNext = lib.mapAttrs (_: node: builtins.unsafeDiscardStringContext "${hostNext node { }}") {
         inherit (systems) cp worker;
       };
