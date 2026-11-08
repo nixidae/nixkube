@@ -29,6 +29,8 @@
 let
   system = pkgs.stdenv.hostPlatform.system;
   scratch = "ghcr.io/nixidae/nixkube/scratch:1.0.2";
+  wroteMarker = "nixkube-probe-wrote-nix";
+  bin = "${pkgs.busybox}/bin";
 
   # Reached through the volume, and nowhere else -- /nix/store is bound into
   # every container in this guest, so a command under /nix/store would run
@@ -39,6 +41,8 @@ let
     {
       name,
       annotations ? { },
+      # Also write into /nix, as the container's root, and say so.
+      write ? false,
     }:
     pkgs.writeText "nixkube-probe-${name}.json" (
       builtins.toJSON {
@@ -79,11 +83,21 @@ let
                   imagePullPolicy = "Never";
                   # And its uid map, which says whether the pod has a user
                   # namespace of its own; see `hostUsers` in the probe.
-                  command = [
-                    "${pkgs.busybox}/bin/cat"
-                    "/proc/self/mountinfo"
-                    "/proc/self/uid_map"
-                  ];
+                  command =
+                    if write then
+                      [
+                        "${pkgs.busybox}/bin/sh"
+                        "-c"
+                        # Issue #1218: in a user namespace the mount was
+                        # read-write and every file in it nobody's.
+                        "${bin}/cat /proc/self/mountinfo /proc/self/uid_map; ${bin}/mkdir /nix/store/nixkube-probe && ${bin}/touch /nix/var/nix/db/nixkube-probe && echo ${wroteMarker}"
+                      ]
+                    else
+                      [
+                        "${pkgs.busybox}/bin/cat"
+                        "/proc/self/mountinfo"
+                        "/proc/self/uid_map"
+                      ];
                 }
               ];
               volumes = [
@@ -112,5 +126,6 @@ in
   rw = probe {
     name = "rw";
     annotations."nixkube/pod-rw" = "true";
+    write = true;
   };
 }

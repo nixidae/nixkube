@@ -328,6 +328,12 @@ async def probe(
                 f" the NRI plugin did not touch it. Its mount table was:\n{nri}"
             )
         options, fstype = mount
+        # ./probe.nix's `wroteMarker`: the rw probe's root wrote into /nix.
+        if want == "rw" and "nixkube-probe-wrote-nix" not in nri:
+            raise MachineError(
+                f"[cp] the rw probe's root could not write into /nix after {why}"
+                f" (hostUsers={host_users}). Its output was:\n{nri}"
+            )
         # The API server drops `hostUsers` when its feature gate is off, and
         # the pod then passes on the host's ids. Asked of the container.
         if own_user_namespace(nri) == host_users:

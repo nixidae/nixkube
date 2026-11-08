@@ -52,8 +52,10 @@ def nri(*, vm: bool, enabled: bool, kernel: bool, bind_farm: bool, host_store: b
 
     A VM runtime reads /nix through virtio-fs, which serves files, so it gets
     a hardlink tree, and a host-store node has none to give. No user
-    namespace rule, unlike `csi`: nobody idmaps this mount, because it
-    reaches the container after the runtime made it."""
+    namespace rule, unlike `csi`: the runtime never idmaps this mount,
+    because it reaches the container after the runtime made it. A read-write
+    one in a user namespace idmaps its own lower layer instead (issue
+    #1218, `nri/mount.py`)."""
     if vm:
         return Presentation.REFUSED if host_store else Presentation.HARDLINKS
     if enabled and kernel:

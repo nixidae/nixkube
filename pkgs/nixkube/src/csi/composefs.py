@@ -41,6 +41,7 @@ import structlog
 from ..constants import MNT_DETACH, MS_RDONLY, NIX_BUILD_TIMEOUT
 from ..errors import MountError
 from ..metrics import COMPOSEFS_AVAILABLE
+from ..mountattr import UserNamespace, bind_idmapped, own_upper
 from ..nix.build import _run_nix_build
 
 logger = structlog.get_logger("nixkube.csi.composefs")
@@ -174,22 +175,44 @@ def _mount_image(image: Path, at: Path) -> None:
     )
 
 
-def compose(image: Path, target: Path, basedir: str, scratch: Path, upper: Path | None) -> None:
+def compose(
+    image: Path,
+    target: Path,
+    basedir: str,
+    scratch: Path,
+    upper: Path | None,
+    userns: UserNamespace | None = None,
+) -> None:
     """The volume at `target`: the image at `scratch`/erofs, the overlay over
     it at `target`, then the image's own mount detached. The overlay holds
     the image, so the volume is one mount, and the loop device, if any, goes
-    with it."""
+    with it.
+
+    With `userns`, the overlay is writable by that namespace's root: the
+    image's mount is idmapped to it, and the upper is its root's. Only the
+    image: a file's owner comes from the image, and the base directory gives
+    content alone. Copy-up reads that content as the mounter. Measured on 7.2
+    with an unmapped base: the container's root created, appended to and
+    removed files, and the base was unchanged."""
     erofs = scratch / "erofs"
     erofs.mkdir(parents=True, exist_ok=True)
     target.mkdir(parents=True, exist_ok=True)
     if upper is not None:
         (upper / "upper").mkdir(parents=True, exist_ok=True)
         (upper / "work").mkdir(parents=True, exist_ok=True)
+        if userns is not None:
+            own_upper(upper, userns)
     _mount_image(image, erofs)
+    lower = erofs
     try:
+        if userns is not None:
+            lower = scratch / "erofs-idmapped"
+            bind_idmapped(erofs, lower, userns)
         flags = MS_RDONLY if upper is None else 0
-        _mount("overlay", target, "overlay", flags, overlay_options(erofs, basedir, upper))
+        _mount("overlay", target, "overlay", flags, overlay_options(lower, basedir, upper))
     finally:
+        if lower != erofs:
+            _libc.umount2(os.fsencode(lower), MNT_DETACH)
         _libc.umount2(os.fsencode(erofs), MNT_DETACH)
 
 
@@ -204,6 +227,9 @@ async def mount(image: Path, target: Path, readonly: bool, volume_root: Path) ->
             BASEDIR,
             volume_root,
             None if readonly else volume_root,
+            # A CSI pod in a user namespace never gets composefs; see
+            # `presentation.csi`.
+            None,
         )
     except (OSError, subprocess.SubprocessError) as error:
         stderr = getattr(error, "stderr", b"") or b""

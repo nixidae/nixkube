@@ -29,6 +29,15 @@ read-write access (nixkube/pod-rw or nixkube/{container}-rw):
     lowerdir=volume_root/nix, upperdir=volume_root/upper,
     workdir=volume_root/work, pre-created by prepare_volume.
 
+Read-write in a user namespace of its own (`hostUsers: false`): every layer
+is the host root's, which maps to nobody inside, so the container's root
+could write nothing. The kernel refuses to idmap an overlay, so each
+presentation fixes what it writes to. composefs idmaps the image's EROFS
+mount, the hardlink tree idmaps its lower directory (a chown would reach the
+node's store through the hardlinks), and the farm chowns the volume's own
+tree. The upper directory is chowned to the container's root, never
+idmapped: the kernel then mounts the overlay read-only.
+
 For FHS store mounts we use the traditional mount(2) MS_BIND approach (RW),
 executed inside the container namespace after /nix is attached so that
 /nix/store/... paths are reachable as bind-mount sources.
@@ -101,7 +110,7 @@ from ..constants import (
     MS_REMOUNT,
 )
 from ..csi.composefs import BASEDIR, compose
-from ..mountattr import set_readonly
+from ..mountattr import bind_idmapped, own_tree, own_upper, set_readonly, user_namespace_of
 from .farm import build_farm, detach_namespace
 
 logger = structlog.get_logger("nixkube.nri.mount")
@@ -335,6 +344,11 @@ def _mount_worker(
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
         libc.syscall.restype = ctypes.c_long
 
+        # A read-write /nix in a user namespace of its own: without this every
+        # file shows as nobody's, and the container's root writes nothing.
+        # Issue #1218.
+        userns = user_namespace_of(host_proc_path, container_pid) if nix_rw else None
+
         # Step 0: Build the farm, if this container gets one.
         #
         # Here and not in the daemon, because `fs.mount-max` is 100,000 per
@@ -343,6 +357,12 @@ def _mount_worker(
         # first, so the mounts belong to something that is about to exit.
         if farm_paths:
             detach_namespace()
+            if userns is not None:
+                # The farm's writable part is the volume's own tree, so it
+                # becomes the container's root's. The bound store paths stay
+                # the node's: they are never written.
+                (nix_tree_path / "store").mkdir(parents=True, exist_ok=True)
+                own_tree(nix_tree_path, userns)
             build_farm(nix_tree_path / "store", farm_paths)
 
         # Step 1: Build the /nix mount fd while source paths are still visible.
@@ -362,14 +382,24 @@ def _mount_worker(
             detach_namespace()
             volume = nix_tree_path.parent
             merged = volume / "merged"
-            compose(image, merged, BASEDIR, volume, volume if nix_rw else None)
+            compose(image, merged, BASEDIR, volume, volume if nix_rw else None, userns)
             nix_fd = _open_tree(libc, merged / "nix")
         elif nix_rw and not farm_paths:
+            volume = nix_tree_path.parent
+            lowerdir = nix_tree_path
+            if userns is not None:
+                # Idmapped in this process's namespace; the overlay holds it.
+                # The tree's files are hardlinks into the node's store, so a
+                # chown would change the node's store.
+                detach_namespace()
+                lowerdir = volume / "lower-idmapped"
+                bind_idmapped(nix_tree_path, lowerdir, userns)
+                own_upper(volume, userns)
             nix_fd = _make_overlay_fd(
                 libc,
-                lowerdir=nix_tree_path,
-                upperdir=nix_tree_path.parent / "upper",
-                workdir=nix_tree_path.parent / "work",
+                lowerdir=lowerdir,
+                upperdir=volume / "upper",
+                workdir=volume / "work",
             )
         else:
             nix_fd = _open_tree(libc, nix_tree_path)
