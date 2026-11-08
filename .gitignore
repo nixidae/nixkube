@@ -1,3 +1,37 @@
+# Default-deny at the top level: a new file or directory here stays
+# untracked until it is named below.
+/*
+!/.assets/
+!/.envrc
+!/.github/
+!/.gitignore
+!/AI/
+!/LICENSE
+!/README.md
+!/TODO.md
+!/bin/
+!/checks.nix
+!/ci/
+!/default.nix
+!/demo/
+!/dev/
+!/docs/
+!/environments/
+!/flake.lock
+!/flake.nix
+!/keys/
+!/kubenix/
+!/lib/
+!/metadata/
+!/nix/
+!/niximage.nix
+!/pkgs/
+!/ruff.toml
+!/scratchimage.nix
+!/shell.nix
+!/tests/
+!/tmp/
+
 result
 .aider*
 .privrc
