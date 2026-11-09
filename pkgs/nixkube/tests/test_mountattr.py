@@ -24,7 +24,9 @@ def test_own_namespace_is_none() -> None:
 
 def test_mapped_root_from_the_maps(tmp_path: Path) -> None:
     proc = fake_proc(tmp_path, "         0  514064384      65536\n", "0 514064385 65536\n")
-    assert user_namespace_of(str(proc), 7) == UserNamespace(path=proc / "7" / "ns" / "user", uid=514064384, gid=514064385)
+    assert user_namespace_of(str(proc), 7) == UserNamespace(
+        path=proc / "7" / "ns" / "user", uid=514064384, gid=514064385
+    )
 
 
 def test_root_found_on_a_later_line(tmp_path: Path) -> None:
