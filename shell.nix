@@ -90,6 +90,11 @@ pkgs.mkShell {
     pkgs.stern
     pkgs.dive
     default.treefmt
+    # The `vivarium` CLI, for the guest tests: `ctl`, `monitor`, `run`.
+    (import default.sources.vivarium {
+      inherit pkgs;
+      inherit (default) sources;
+    }).packages.vivarium
   ];
   # What `activate` sets. pylsp runs on its own venv, and jedi finds the
   # project's packages through this.
