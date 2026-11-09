@@ -11,7 +11,14 @@ buildGoModule {
   pname = "nri-test-server";
   version = "0.1.0";
 
-  src = lib.cleanSource ./go;
+  src = lib.fileset.toSource {
+    root = ./go;
+    fileset = lib.fileset.unions [
+      ./go/go.mod
+      ./go/go.sum
+      ./go/main.go
+    ];
+  };
   proxyVendor = true;
   vendorHash = "sha256-bpKT8mHSlA5eP67C3B2ws+BF2S/B+dMH5GYqV2edcXg=";
   doCheck = false;

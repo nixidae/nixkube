@@ -11,7 +11,14 @@ buildGoModule {
   pname = "ttrpc-test-server";
   version = "0.1.0";
 
-  src = lib.cleanSource ./go;
+  src = lib.fileset.toSource {
+    root = ./go;
+    fileset = lib.fileset.unions [
+      ./go/go.mod
+      ./go/go.sum
+      ./go/main.go
+    ];
+  };
   proxyVendor = true;
   vendorHash = "sha256-voE9iZ0rUp/iCNROLiKjuQdQS9rLVqPK0SlSGp0kPuU=";
   doCheck = false;

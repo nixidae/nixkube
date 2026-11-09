@@ -9,9 +9,6 @@ let
   sources = pkgs.nixkubeSources or (import ../nix/sources.nix);
 in
 {
-  # Overlay lib
-  lib = pkgs.lib.extend (import ../lib);
-
   # First argument is NIX_STATE_DIR which is where we init the dumped database
   nix_init_db =
     pkgs.writeScriptBin "nix_init_db" # bash
