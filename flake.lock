@@ -3,11 +3,11 @@
     "nixidae": {
       "flake": false,
       "locked": {
-        "lastModified": 1794185957,
-        "narHash": "sha256-6bv0GiD2QsL26/3+cxL88/scIUnxa4+cUqetAvu9QLo=",
+        "lastModified": 1794186730,
+        "narHash": "sha256-6Kw+iCUvzB/yvFeO4ZaNGbEkBjuS+Lkqfi4Oz2AR+4U=",
         "owner": "nixidae",
         "repo": "nixidae",
-        "rev": "b08c5e1f99c75b43d0eb3f079bc09f7fdd32a2ce",
+        "rev": "b1a1c77dd8e509af5942eb94061fa2af98f31602",
         "type": "github"
       },
       "original": {
