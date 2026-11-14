@@ -397,6 +397,31 @@ let
       pkgs.runCommand "pynixd-binds-every-interface" { } "echo ok > $out";
 
     /*
+      Only the node's nix.conf names a `store`.
+
+      A pynixd pod runs no daemon at `/nix/var/nix/daemon-socket/socket`.
+      pynixd builds there with no chroot, so a build reads the pod's
+      `/etc/nix/nix.conf`, and its `store` wins over the `NIX_REMOTE` that a
+      recursive-nix build gets. Measured on sg1 with `store = daemon`: every
+      recursive-nix planner failed with "cannot connect to socket at
+      '/nix/var/nix/daemon-socket/socket'".
+    */
+    onlyTheNodeNamesAStore =
+      let
+        resources =
+          (kubenixInstance {
+            module.nixkube.pynixd.enable = true;
+          }).config.kubernetes.resources.nixkube;
+        stores =
+          name:
+          lib.filter (lib.hasPrefix "store ") (lib.splitString "\n" resources.ConfigMap.${name}.data."nix.conf");
+      in
+      assert stores "nix-node" == [ "store = daemon" ];
+      assert stores "pynixd" == [ ];
+      assert stores "builder" == [ ];
+      pkgs.runCommand "only-the-node-names-a-store" { } "echo ok > $out";
+
+    /*
       Every `appstarter-init` is exempt from NRI injection, and the exemption
       names it.
 
@@ -1475,6 +1500,7 @@ let
         nixkubeNamesComposefsTools
         pynixdPodMonitorShape
         pynixdBindsEveryInterface
+        onlyTheNodeNamesAStore
         pynixdProbesSurviveAPush
         sourcesAreLocked
         ciWorkflowCheck

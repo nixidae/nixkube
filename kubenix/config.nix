@@ -38,26 +38,20 @@ in
         narinfo-cache-negative-ttl = 0;
         narinfo-cache-positive-ttl = 0;
         warn-dirty = false;
-        store = "daemon";
         system-features = [
           "nixos-test"
           "benchmark"
           "big-parallel"
         ];
       };
-      # One settings set, three roles, and `store = "daemon"` above is true of
-      # only two of them: the builder Pod runs no system nix-daemon.
-      #
-      # Measured, and it does no harm there. pynixd spawns the builder's daemon
-      # itself and passes `--store /` on its command line, which overrides the
-      # `store` of nix.conf. Nothing else in that Pod runs the nix CLI.
-      #
-      # So this is a smell rather than a fault, and it was not the cause of
-      # issue #19 although it looks like it. Splitting the set per role is
-      # still right -- a role should not be able to inherit a setting it cannot
-      # satisfy -- but it needs a decision about what the builder's `store`
-      # becomes, and unsetting it changes the CLI default to `auto`.
-      node.nixConfig.settings = cfg.nixConfig.settings;
+      # Only the node runs a daemon at the default socket. A pynixd pod has
+      # none, and pynixd builds there with no chroot: a `store` in the pod's
+      # nix.conf wins over the `NIX_REMOTE` of a recursive-nix build, which
+      # then dials a socket that does not exist (`onlyTheNodeNamesAStore`).
+      node.nixConfig.settings = lib.mkMerge [
+        cfg.nixConfig.settings
+        { store = lib.mkDefault "daemon"; }
+      ];
       pynixd.builder.nixConfig.settings = cfg.nixConfig.settings;
       pynixd.controller.nixConfig.settings = cfg.nixConfig.settings;
     };
