@@ -414,7 +414,9 @@ let
           }).config.kubernetes.resources.nixkube;
         stores =
           name:
-          lib.filter (lib.hasPrefix "store ") (lib.splitString "\n" resources.ConfigMap.${name}.data."nix.conf");
+          lib.filter (lib.hasPrefix "store ") (
+            lib.splitString "\n" resources.ConfigMap.${name}.data."nix.conf"
+          );
       in
       assert stores "nix-node" == [ "store = daemon" ];
       assert stores "pynixd" == [ ];
