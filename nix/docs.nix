@@ -1,50 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 {
-  lib,
-  stdenvNoCC,
-  python,
-  sphinx,
-  myst-parser,
-  furo,
-  graphviz,
+  callPackage,
   nixvenv,
+  graphviz,
   optionsReference,
 }:
-let
-  pythonEnv = nixvenv {
-    inherit python;
-    packages = _: [
-      sphinx
-      myst-parser
-      furo
-    ];
-    executables = [ "sphinx-build" ];
-  };
-in
-stdenvNoCC.mkDerivation {
-  pname = "nixkube-docs";
-  version = "0";
-
-  src = lib.fileset.toSource {
-    root = ../.;
-    fileset = lib.fileset.unions [
-      ../docs
-      ../nix/shared/sphinx_shared.py
-    ];
-  };
-
-  nativeBuildInputs = [
-    pythonEnv
-    graphviz
-  ];
-
-  buildPhase = ''
-    runHook preBuild
-    cp ${optionsReference} docs/options.md
-    NIXIDAE_DOCS_OFFLINE=1 sphinx-build -b html docs "$out" -W
-    runHook postBuild
-  '';
-
-  dontInstall = true;
+callPackage ./shared/sphinx-site.nix { inherit nixvenv; } {
+  name = "nixkube";
+  root = ../.;
+  tools = [ graphviz ];
+  pages."options.md" = optionsReference;
 }
