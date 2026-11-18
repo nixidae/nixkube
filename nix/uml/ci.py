@@ -20,7 +20,6 @@ import os
 import subprocess
 import tempfile
 
-from vivarium_runner import Machine, Machines
 from vivarium_k8s import (
     KUBE_DNS,
     KUBE_PROXY,
@@ -30,6 +29,7 @@ from vivarium_k8s import (
     until,
     wait_for_pods,
 )
+from vivarium_runner import Machine, Machines
 
 # kubeadm gives the API server a certificate for the addresses the node
 # has. The host reaches it on a 127.0.0.x the runner picks when the guest

@@ -34,8 +34,8 @@ import json
 from typing import Any, TypedDict
 
 from nixkube_uml import NAMESPACE, READY_TIMEOUT
-from vivarium_runner import Machine, MachineError, Machines
 from vivarium_k8s import get_json, kubectl, until
+from vivarium_runner import Machine, MachineError, Machines
 
 ROLLOUT = "host"
 REVERT_UNIT = "nixkube-revert"

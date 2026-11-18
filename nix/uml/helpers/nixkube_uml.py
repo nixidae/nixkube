@@ -13,8 +13,8 @@ the manifest names -- and `vivarium.nixDatabase` is what makes Nix agree they
 are real rather than go looking for them.
 """
 
-from vivarium_runner import Machine, MachineError
 from vivarium_k8s import get_json, kubectl, until
+from vivarium_runner import Machine, MachineError
 
 NAMESPACE = "nixkube"
 STATEFULSET = "pynixd"
