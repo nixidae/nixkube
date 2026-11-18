@@ -42,10 +42,12 @@ async def check_user_namespace_refused(cp: Machine, settings: dict[str, Any]) ->
     """On a host-store node a pod with hostUsers false gets no CSI volume,
     and its publish says why: the kernel cannot idmap the composefs overlay,
     and the host's store has no hardlink tree. Issues #25 and #68."""
-    created = await cp.succeed(
-        f"jq '.spec.template.spec.hostUsers = false' {settings['probeRo']}"
-        f" | kubectl create --namespace {NAMESPACE} --filename - --output name"
-    )
+    created = (
+        await cp.succeed(
+            f"jq '.spec.template.spec.hostUsers = false' {settings['probeRo']}"
+            f" | kubectl create --namespace {NAMESPACE} --filename - --output name"
+        )
+    ).stdout
     job = created.strip().splitlines()[-1].split("/")[-1]
 
     async def refused() -> tuple[bool, str]:

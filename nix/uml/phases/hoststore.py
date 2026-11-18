@@ -21,9 +21,9 @@ STILL_ALIVE = "since it is still alive"
 
 
 async def refuses_delete(cp: Machine, path: str, why: str) -> None:
-    rc, out = await cp.execute(f"nix-store --delete {path} 2>&1", timeout=300)
-    if rc == 0 or STILL_ALIVE not in out:
-        raise MachineError(f"[cp] the host's GC could take {why}, {path}: rc={rc} {out}")
+    done = await cp.execute(f"nix-store --delete {path} 2>&1", timeout=300)
+    if done.returncode == 0 or STILL_ALIVE not in done.stdout:
+        raise MachineError(f"[cp] the host's GC could take {why}, {path}: rc={done.returncode} {done.stdout}")
     print(f"[nixkube] the host's GC keeps {why}", flush=True)
 
 
@@ -54,15 +54,15 @@ async def test(vms: Machines) -> None:
 
     # The negative control: an unrooted path goes at once, so a refusal
     # below is a root and not a delete that cannot work here.
-    loose = (await cp.succeed("echo loose > /tmp/loose && nix-store --add /tmp/loose")).strip()
+    loose = (await cp.succeed("echo loose > /tmp/loose && nix-store --add /tmp/loose")).stdout.strip()
     await cp.succeed(f"nix-store --delete {loose}")
     print(f"[nixkube] an unrooted path is deleted: {loose}", flush=True)
-    running = (await cp.succeed("readlink /nix/var/nix/gcroots/appstarter/node")).strip()
+    running = (await cp.succeed("readlink /nix/var/nix/gcroots/appstarter/node")).stdout.strip()
     await refuses_delete(cp, running, "the node's running environment")
     await refuses_delete(cp, settings["workloadStorePath"], "the resident pod's volume")
 
     async def retired():
-        rc, _ = await cp.execute(f"test -e {settings['hostMountPath']}")
+        rc = (await cp.execute(f"test -e {settings['hostMountPath']}")).returncode
         return rc != 0, f"{settings['hostMountPath']} is still there"
 
     await until("the separate store to be retired", retired, READY_TIMEOUT, cp)

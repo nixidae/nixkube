@@ -50,14 +50,14 @@ async def host_kubeconfig(cp: Machine) -> str:
         "6443 is not forwarded, so the host cannot reach the API server -- see vivarium.forward in nix/uml/ci.nix"
     )
     # kubeadm always names it `kubernetes`, but ask rather than assume.
-    cluster = (await cp.succeed("kubectl config view --output jsonpath='{.clusters[0].name}'")).strip()
+    cluster = (await cp.succeed("kubectl config view --output jsonpath='{.clusters[0].name}'")).stdout.strip()
     conf = "/tmp/host-kubeconfig"
     await cp.succeed(f"cp /etc/kubernetes/admin.conf {conf}")
     await cp.succeed(f"kubectl --kubeconfig {conf} config set-cluster {cluster} --server=https://{reachable[0]}")
     if INSECURE:
         await cp.succeed(f"kubectl --kubeconfig {conf} config unset clusters.{cluster}.certificate-authority-data")
         await cp.succeed(f"kubectl --kubeconfig {conf} config set clusters.{cluster}.insecure-skip-tls-verify true")
-    return await cp.succeed(f"cat {conf}")
+    return (await cp.succeed(f"cat {conf}")).stdout
 
 
 def write(path: str, text: str) -> None:
@@ -123,12 +123,12 @@ async def test(vms: Machines) -> None:
         print("[test] nixkube deployed through kubenixDeploy")
 
         async def rolled_out() -> tuple[bool, list[str]]:
-            rc, out = await cp.execute(
+            done = await cp.execute(
                 "kubectl rollout status daemonset"
                 " --selector app.kubernetes.io/component=node"
-                " --namespace nixkube --timeout=10s"
+                " --namespace nixkube --timeout=10s 2>&1"
             )
-            return rc == 0, out.strip().splitlines()[-1:] or ["(no answer yet)"]
+            return done.returncode == 0, done.stdout.strip().splitlines()[-1:] or ["(no answer yet)"]
 
         await until("the node DaemonSet", rolled_out, 300, cp)
         print("[test] the node DaemonSet rolled out")
@@ -222,4 +222,7 @@ async def test(vms: Machines) -> None:
         # guessed: the images this node pulled, every store path the jobs
         # asked for, and pynixd's volume when there is one. A runner has
         # 14 GB for the whole guest.
-        print("[test] node disk\n" + await cp.succeed("df -h /; du -sh /var/lib/vivarium-storage 2>/dev/null || true"))
+        print(
+            "[test] node disk\n"
+            + (await cp.succeed("df -h /; du -sh /var/lib/vivarium-storage 2>/dev/null || true")).stdout
+        )

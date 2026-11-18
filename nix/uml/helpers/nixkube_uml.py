@@ -286,11 +286,13 @@ async def probe(
             edits.append(f'.spec.template.spec.runtimeClassName = "{runtime_class}"')
         if not host_users:
             edits.append(".spec.template.spec.hostUsers = false")
-        created = await cp.succeed(
-            f"jq '{' | '.join(edits)}' {settings[key]}"
-            f" | kubectl create --namespace {NAMESPACE} --filename - --output name",
-            timeout=APPLY_TIMEOUT,
-        )
+        created = (
+            await cp.succeed(
+                f"jq '{' | '.join(edits)}' {settings[key]}"
+                f" | kubectl create --namespace {NAMESPACE} --filename - --output name",
+                timeout=APPLY_TIMEOUT,
+            )
+        ).stdout
         name = created.strip().splitlines()[-1].split("/")[-1]
 
         async def done(name: str = name, want: str = want) -> tuple[bool, str]:
@@ -378,10 +380,12 @@ async def run_job(cp: Machine, source: str, jq_filter: str, what: str) -> tuple[
     Returns its pod as JSON and its logs. The pod ends either way here, so
     nothing is raised on failure: the caller says which outcome it wanted.
     """
-    created = await cp.succeed(
-        f"jq '{jq_filter}' {source} | kubectl create --namespace {NAMESPACE} --filename - --output name",
-        timeout=APPLY_TIMEOUT,
-    )
+    created = (
+        await cp.succeed(
+            f"jq '{jq_filter}' {source} | kubectl create --namespace {NAMESPACE} --filename - --output name",
+            timeout=APPLY_TIMEOUT,
+        )
+    ).stdout
     name = created.strip().splitlines()[-1].split("/")[-1]
     selector = f"--namespace {NAMESPACE} --selector job-name={name}"
 
@@ -404,7 +408,7 @@ async def run_job(cp: Machine, source: str, jq_filter: str, what: str) -> tuple[
 
     await until(what, ended, READY_TIMEOUT, cp)
     pod = (await get_json(cp, f"get pods {selector}"))["items"][0]
-    _, logs = await cp.execute(f"kubectl logs {selector} --all-containers")
+    logs = (await cp.execute(f"kubectl logs {selector} --all-containers 2>&1")).stdout
     await kubectl(cp, f"delete job {name} --namespace {NAMESPACE} --wait=true")
     return pod, logs
 
@@ -539,7 +543,7 @@ async def check_reconciled(cp: Machine, settings: dict, what: str) -> None:
     """Nothing the driver kept outlives what the node still has."""
 
     async def clean():
-        _, out = await cp.execute(reconciled(settings), timeout=120)
+        out = (await cp.execute(reconciled(settings), timeout=120)).stdout
         left = [line.strip() for line in out.splitlines() if line.strip()]
         return not left, f"{len(left)} stale -- " + "; ".join(left[:6])
 
@@ -547,15 +551,15 @@ async def check_reconciled(cp: Machine, settings: dict, what: str) -> None:
     print(f"[nixkube] nothing stale on the node after {what}", flush=True)
 
 
-async def on_node(cp: Machine, command: str, timeout: int = 120) -> tuple[int, str]:
+async def on_node(cp: Machine, command: str, timeout: int = 120) -> None:
     """Do something to the node, and say what came of it.
 
     `execute` rather than `succeed`: several of these are expected to return
     non-zero, and the interesting failures are the ones that come afterwards.
     """
-    rc, out = await cp.execute(command, timeout=timeout)
-    print(f"[nixkube] $ {command}\n  rc={rc} {out.strip()[:300]}", flush=True)
-    return rc, out
+    done = await cp.execute(command, timeout=timeout)
+    text = " ".join(filter(None, [done.stdout.strip()[:300], done.stderr.strip()[:300]]))
+    print(f"[nixkube] $ {command}\n  rc={done.returncode} {text}", flush=True)
 
 
 NODE_SELECTOR = "--selector app.kubernetes.io/component=node"
@@ -651,8 +655,8 @@ async def wait_for_apiserver(cp: Machine) -> None:
     """
 
     async def up():
-        rc, out = await cp.execute("kubectl get --raw /healthz", timeout=60)
-        return rc == 0, out.strip()[:80] or f"rc={rc}"
+        done = await cp.execute("kubectl get --raw /healthz 2>&1", timeout=60)
+        return done.returncode == 0, done.stdout.strip()[:80] or f"rc={done.returncode}"
 
     await until("the api server to answer", up, READY_TIMEOUT, cp)
 
@@ -694,11 +698,13 @@ async def replace_served_pods(cp: Machine) -> None:
     is needed. `--wait` by default, so the old resident is gone before
     `check_resident` counts pods and finds the new one.
     """
-    _, out = await cp.execute(
-        'grep --files-with-matches \'"driverName":"nixkube"\' '
-        "/var/lib/kubelet/pods/*/volumes/kubernetes.io~csi/*/vol_data.json | cut -d/ -f6 | sort -u",
-        timeout=60,
-    )
+    out = (
+        await cp.execute(
+            'grep --files-with-matches \'"driverName":"nixkube"\' '
+            "/var/lib/kubelet/pods/*/volumes/kubernetes.io~csi/*/vol_data.json | cut -d/ -f6 | sort -u",
+            timeout=60,
+        )
+    ).stdout
     uids = set(out.split())
     pods = await get_json(cp, "get pods --all-namespaces")
     for pod in pods["items"]:
@@ -770,7 +776,7 @@ async def check_presentation(cp: Machine, settings: dict) -> None:
     asked. Without this a node that falls back to hardlinks -- a probe that
     fails, a kernel without EROFS -- passes every other check. Issue #68."""
     wanted = "composefs" if settings["csiComposefs"] else "hardlinks"
-    seen = csi_presentations(await cp.succeed("cat /proc/1/mountinfo"))
+    seen = csi_presentations((await cp.succeed("cat /proc/1/mountinfo")).stdout)
     if not seen:
         raise MachineError("[cp] no CSI volume is mounted on the node to look at")
     wrong = {p: kind for p, kind in seen.items() if kind != wanted}
@@ -800,6 +806,12 @@ async def check_unmount(cp: Machine, settings: dict) -> None:
     await check_reconciled(cp, settings, "the workload jobs are deleted")
 
 
+async def said(cp: Machine, command: str) -> tuple[int, str]:
+    """*command*'s exit status and all it printed, stdout and stderr in order."""
+    done = await cp.execute(f"{{ {command}\n}} 2>&1", timeout=120)
+    return done.returncode, done.stdout
+
+
 async def report(cp: Machine) -> None:
     """What the driver's own containers said, pass or fail.
 
@@ -810,7 +822,7 @@ async def report(cp: Machine) -> None:
         f"get all --namespace {NAMESPACE}",
         f"get events --namespace {NAMESPACE} --sort-by=.lastTimestamp",
     ):
-        rc, out = await cp.execute(f"kubectl {what}", timeout=120)
+        rc, out = await said(cp, f"kubectl {what}")
         print(f"[nixkube] kubectl {what} (rc={rc}):\n{out}", flush=True)
 
     # What the node container's /nix is made of, from the node's side.
@@ -820,22 +832,22 @@ async def report(cp: Machine) -> None:
     # resolve, runc says only that it is "not found", so these three answer
     # the question runc will not: is the link there, does it point at
     # something, and did kubelet's subPath bind carry the store.
-    rc, out = await cp.execute(
+    rc, out = await said(
+        cp,
         "ls -l /nix/var/result;"
         " ls /nix/var/result/bin 2>&1 | head -n 5;"
         " findmnt --output TARGET,SOURCE,FSTYPE | grep -i nix;"
         " ls -d /var/lib/kubelet/pods/*/volume-subpaths/*/*/* 2>&1 | head -n 10",
-        timeout=120,
     )
     print(f"[nixkube] the node's /nix (rc={rc}):\n{out}", flush=True)
 
     # What the NRI sweep did, and why a volume outlived its container: a
     # sweep that skipped it, failed on it, or never ran.
-    rc, out = await cp.execute(
+    rc, out = await said(
+        cp,
         f"kubectl logs --namespace {NAMESPACE} --selector app.kubernetes.io/component=node"
         " --container nix-node --tail 5000 --timestamps"
         " | grep --text -E '\"(gc_[a-z_]+|synchronize)\"|REMOVE_CONTAINER' | tail -n 80",
-        timeout=120,
     )
     print(f"[nixkube] the NRI sweep (rc={rc}):\n{out}", flush=True)
 
@@ -848,21 +860,22 @@ async def report(cp: Machine) -> None:
     # own journal keeps the whole thing. Measured: the event ended at
     # "[nri-wait] OCI state: id=hello pid=2081 bundle=..." and the verdict
     # was 900 characters further on.
-    rc, out = await cp.execute(
+    rc, out = await said(
+        cp,
         f"journalctl --unit {RUNTIME_UNIT} --no-pager --lines 4000 | grep --text nri-wait | tail -n 20",
-        timeout=120,
     )
     print(f"[nixkube] what nri-wait said (rc={rc}):\n{out}", flush=True)
 
     # The NixOSRollout controller: what its builds said, and its /nix as the
     # container sees it, read through /proc/<pid>/root from the node. A
     # source build writes .drv files into that /nix, through the CSI volume.
-    rc, out = await cp.execute(
+    rc, out = await said(
+        cp,
         f"kubectl logs --namespace {NAMESPACE} deploy/nixkube-nixos-rollout --tail 80",
-        timeout=120,
     )
     print(f"[nixkube] logs deploy/nixkube-nixos-rollout (rc={rc}):\n{out}", flush=True)
-    rc, out = await cp.execute(
+    rc, out = await said(
+        cp,
         "id=$(crictl ps --name controller --quiet | head -n 1);"
         " pid=$(crictl inspect --output go-template --template '{{.info.pid}}' $id);"
         " root=/proc/$pid/root;"
@@ -884,7 +897,6 @@ async def report(cp: Machine) -> None:
         " ls -la $root/nix/store/.links 2>&1 | head -n 3;"
         " mkdir $root/nix/store/.uml-probe && echo 'mkdir in /nix/store: ok';"
         " rmdir $root/nix/store/.uml-probe 2>/dev/null; true",
-        timeout=120,
     )
     print(f"[nixkube] the controller's /nix (rc={rc}):\n{out}", flush=True)
 
@@ -906,12 +918,11 @@ async def report(cp: Machine) -> None:
             " --output jsonpath={.items[*].metadata.name}",
             timeout=120,
         )
-        for pod in pods[1].split():
+        for pod in pods.stdout.split():
             for container in containers:
                 for flags in ("", " --previous"):
-                    rc, out = await cp.execute(
-                        f"kubectl logs --namespace {NAMESPACE} {pod} --container {container}{flags} --tail 60",
-                        timeout=120,
+                    rc, out = await said(
+                        cp, f"kubectl logs --namespace {NAMESPACE} {pod} --container {container}{flags} --tail 60"
                     )
                     if rc == 0 and out.strip():
                         print(
@@ -924,8 +935,8 @@ async def report(cp: Machine) -> None:
     # what the pod asked for -- and the container's own output separates
     # them.
     for job in WORKLOADS:
-        rc, out = await cp.execute(
+        rc, out = await said(
+            cp,
             f"kubectl logs --namespace {NAMESPACE} job/{job} --tail 40",
-            timeout=120,
         )
         print(f"[nixkube] logs job/{job} (rc={rc}):\n{out}", flush=True)

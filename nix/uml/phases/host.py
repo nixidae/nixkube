@@ -83,15 +83,15 @@ class RolloutStatus(TypedDict, total=False):
 
 
 async def running(vm: Machine) -> str:
-    return (await vm.succeed("readlink /run/current-system")).strip()
+    return (await vm.succeed("readlink /run/current-system")).stdout.strip()
 
 
 async def profile(vm: Machine) -> str:
-    return (await vm.succeed("readlink --canonicalize /nix/var/nix/profiles/system")).strip()
+    return (await vm.succeed("readlink --canonicalize /nix/var/nix/profiles/system")).stdout.strip()
 
 
 async def armed(vm: Machine) -> bool:
-    rc, _ = await vm.execute(f"systemctl is-active --quiet {REVERT_UNIT}.timer")
+    rc = (await vm.execute(f"systemctl is-active --quiet {REVERT_UNIT}.timer")).returncode
     return rc == 0
 
 
@@ -206,14 +206,14 @@ async def test(vms: Machines) -> None:
 
     await switch_to(hosts, after)
     for name, vm in hosts.items():
-        marker = (await vm.succeed(f"cat {MARKER}")).strip()
+        marker = (await vm.succeed(f"cat {MARKER}")).stdout.strip()
         if marker != "next":
             raise MachineError(f"[{name}] {MARKER} says {marker!r} after the switch")
     print(f"[nixkube] the rollout switched both hosts: {after}", flush=True)
 
     await switch_to(hosts, first)
     for name, vm in hosts.items():
-        rc, _ = await vm.execute(f"test -e {MARKER}")
+        rc = (await vm.execute(f"test -e {MARKER}")).returncode
         if rc == 0:
             raise MachineError(f"[{name}] {MARKER} survived the switch back")
     print(f"[nixkube] the rollout switched both hosts back: {first}", flush=True)
@@ -268,18 +268,18 @@ async def reboots(hosts: dict[str, Machine], settings: Settings) -> None:
         },
     )
     await kubectl(cp, f"wait --for=condition=Ready pod/{VICTIM} --timeout={READY_TIMEOUT}s")
-    boots = {name: (await vm.succeed(BOOT_ID)).strip() for name, vm in hosts.items()}
+    boots = {name: (await vm.succeed(BOOT_ID)).stdout.strip() for name, vm in hosts.items()}
     # An earlier step's rollout fails on purpose (`broken_halts`), and its
     # Failed Job is the right record of that.
     failed_before = await failed_jobs(cp)
 
     await switch_to(hosts, target, timeout=REBOOT_TIMEOUT)
 
-    if (await worker.succeed(BOOT_ID)).strip() == boots["worker"]:
+    if (await worker.succeed(BOOT_ID)).stdout.strip() == boots["worker"]:
         raise MachineError("[worker] the rollout to a new initrd did not reboot it")
-    if (await cp.succeed(BOOT_ID)).strip() != boots["cp"]:
+    if (await cp.succeed(BOOT_ID)).stdout.strip() != boots["cp"]:
         raise MachineError("[cp] a plain change rebooted the host")
-    booted = (await worker.succeed("readlink /run/booted-system")).strip()
+    booted = (await worker.succeed("readlink /run/booted-system")).stdout.strip()
     if booted != target["worker"]:
         raise MachineError(f"[worker] booted {booted}, not {target['worker']}")
     pods = await get_json(cp, "get pods --namespace default")
@@ -314,11 +314,11 @@ async def falls_back(hosts: dict[str, Machine], settings: Settings) -> None:
         raise MachineError(f"[worker] the rollout to {bad} ended {status}")
     if node.get("failedSystem") != bad:
         raise MachineError(f"[worker] failedSystem is {node.get('failedSystem')}")
-    booted = (await worker.succeed("readlink /run/booted-system")).strip()
+    booted = (await worker.succeed("readlink /run/booted-system")).stdout.strip()
     if booted != old["worker"]:
         raise MachineError(f"[worker] booted {booted}, not {old['worker']}")
     # systemd-boot names a spent entry `<id>+0-<tries>.conf`.
-    entry = await worker.succeed(f"grep -l 'init={bad}/init' /boot/loader/entries/*.conf")
+    entry = (await worker.succeed(f"grep -l 'init={bad}/init' /boot/loader/entries/*.conf")).stdout
     if not entry.strip().endswith("+0-2.conf"):
         raise MachineError(f"[worker] the entry of {bad} is {entry.strip()}")
     spec = (await get_json(cp, "get node worker"))["spec"]
@@ -339,7 +339,7 @@ async def from_source(hosts: dict[str, Machine], cache: Machine, settings: Setti
     # Built here or nowhere: no guest has these, and no cache.
     for name, vm in {**hosts, "cache": cache}.items():
         for toplevel in built.values():
-            rc, _ = await vm.execute(f"nix-store --check-validity {toplevel}")
+            rc = (await vm.execute(f"nix-store --check-validity {toplevel}")).returncode
             if rc == 0:
                 raise MachineError(f"[{name}] holds {toplevel} before the build")
 
@@ -350,14 +350,14 @@ async def from_source(hosts: dict[str, Machine], cache: Machine, settings: Setti
         f" --from-literal username={source['user']}"
         f" --from-literal password={source['password']}",
     )
-    rev = (await cache.succeed(f"cat {source['rev']}")).strip()
+    rev = (await cache.succeed(f"cat {source['rev']}")).stdout.strip()
     await switch_to(
         hosts,
         built,
         {"url": source["url"], "rev": rev, "secretRef": {"name": SOURCE_SECRET}},
     )
     for name, vm in hosts.items():
-        marker = (await vm.succeed(f"cat {MARKER}")).strip()
+        marker = (await vm.succeed(f"cat {MARKER}")).stdout.strip()
         if marker != "built":
             raise MachineError(f"[{name}] {MARKER} says {marker!r} after the switch")
     print(f"[nixkube] the rollout built and switched both hosts: {built}", flush=True)
