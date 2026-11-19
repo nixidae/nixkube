@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-from pathlib import Path
 
 import anyio
 import structlog
-from pynixd.config import LocalSocketStoreSpec, PynixdSettings
+from pynixd.config import PynixdSettings
 from pynixd.instance import Server
 from pynixd.serde import StoreId
 from pynixd.store import Store
 
 from .builder_manager import BuilderManager
+from .central_store import LOCAL, central_local_spec
 from .config import NixkubeCentralSettings
 from .setup import configure_logging, install_nss
 
@@ -22,26 +22,16 @@ async def _main() -> None:
     log.info("pynixd_nixkube_central_starting")
     install_nss()
 
-    # `spec.to_store`, not `LocalSocketStore(spec)`. That name is a legacy
-    # re-export of `LocalStore`, so naming the class here picks the store
-    # without the SQLite fast paths and makes `use_db` inert -- the argument
-    # was read by nothing. Every pod logged `local_store_db_disabled` and
-    # answered every QueryValidPaths over the daemon socket.
-    local_store = LocalSocketStoreSpec(
-        store_id=StoreId("local"),
-        store_path=Path("/data"),
-        monitor=False,
-    ).to_store(str(StoreId("local")))
-
     pynixd_settings = PynixdSettings()
     settings = NixkubeCentralSettings()
 
-    stores: dict[StoreId, Store] = {StoreId("local"): local_store}
-    if pynixd_settings.stores:
-        config_stores = pynixd_settings.to_stores()
-        for store_id, store in config_stores.items():
-            if store_id != StoreId("local"):
-                stores[store_id] = store
+    # `to_stores` and so `spec.to_store`, never `LocalSocketStore(spec)`. That
+    # name is a legacy re-export of `LocalStore`: it picks the store without
+    # the SQLite fast paths and makes `use_db` inert. Every pod logged
+    # `local_store_db_disabled` and answered every QueryValidPaths over the
+    # daemon socket.
+    pynixd_settings.stores[str(LOCAL)] = central_local_spec(pynixd_settings)
+    stores: dict[StoreId, Store] = pynixd_settings.to_stores()
 
     server = Server(stores=stores, settings=pynixd_settings)
 
