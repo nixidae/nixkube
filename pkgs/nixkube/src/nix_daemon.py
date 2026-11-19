@@ -5,17 +5,27 @@
 Runs `nix daemon --store local --log-format internal-json` as a child process,
 forwards its structured JSON log lines through structlog, and restarts on exit
 with crash-loop detection via CrashLoopTracker.
+
+On a host-store node the daemon serves the host's /nix on a socket of its own,
+`NIX_DAEMON_SOCKET_PATH`, which every nix call in the pod reads too. Before it
+starts, `check_host_version` refuses a Nix newer than the host daemon's: a
+newer Nix can migrate the store's database, and the host's Nix then cannot
+read it. Issue #25.
 """
 
 import json
+import os
 import re
 import subprocess
+from pathlib import Path
+from typing import Final
 
 import anyio
 import structlog
 from anyio.abc import ByteReceiveStream
 
-from .subprocessing import iter_lines
+from .constants import HOST_STORE
+from .subprocessing import iter_lines, run_captured
 from .supervision import CrashLoopTracker
 
 logger = structlog.get_logger("nixkube.nix_daemon")
@@ -35,6 +45,54 @@ def _nix_level_to_structlog(verbosity: int) -> str:
     return "debug"
 
 
+# The host's own daemon, at Nix's default socket for /nix.
+HOST_DAEMON: Final = "unix:///nix/var/nix/daemon-socket/socket"
+
+_VERSION_RE = re.compile(r"(\d+)\.(\d+)")
+
+
+class NewerThanHostError(RuntimeError):
+    pass
+
+
+def minor_version(text: str) -> tuple[int, int] | None:
+    """(major, minor) of the first version in `text`: `nix (Nix) 2.35.2`."""
+    found = _VERSION_RE.search(text)
+    return (int(found[1]), int(found[2])) if found else None
+
+
+def host_version_refusal(ours: str, host: str) -> str | None:
+    """Why nixkube's Nix must not open the host's store, or None. Nix
+    migrates the database only forward, so only a newer Nix of ours can
+    leave it unreadable for the host."""
+    mine, theirs = minor_version(ours), minor_version(host)
+    if mine is None or theirs is None or mine <= theirs:
+        return None
+    return f"nixkube's Nix ({ours.strip()}) is newer than the host daemon's ({host.strip()})"
+
+
+async def check_host_version() -> None:
+    """Refuse to start nixkube's daemon on the host's store with a newer Nix.
+    A host with no daemon at the default socket gives nothing to compare."""
+    ours = (await run_captured("nix", "--version", timeout=30)).stdout
+    info = await run_captured("nix", "store", "info", "--json", "--store", HOST_DAEMON, timeout=30)
+    if info.returncode != 0:
+        logger.warning("host_daemon_version_unknown", store=HOST_DAEMON, error=info.stderr.strip())
+        return
+    host = str(json.loads(info.stdout).get("version", ""))
+    logger.info("host_daemon_version", ours=ours.strip(), host=host)
+    refusal = host_version_refusal(ours, host)
+    if refusal is not None:
+        raise NewerThanHostError(refusal)
+
+
+def prepare_socket(path: Path) -> None:
+    """Nix binds the socket and creates no directory for it, and a socket
+    file left by the last daemon makes the bind fail."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+
+
 async def supervise_nix_daemon() -> None:
     """Supervised loop for the nix daemon subprocess.
 
@@ -42,8 +100,15 @@ async def supervise_nix_daemon() -> None:
     Raises CrashLoopError after too many rapid restarts.
     """
     tracker = CrashLoopTracker(max_restarts=5, window=60.0, name="nix-daemon")
+    socket = os.environ.get("NIX_DAEMON_SOCKET_PATH")
+    if HOST_STORE:
+        if not socket:
+            raise RuntimeError("a host-store node needs NIX_DAEMON_SOCKET_PATH: the default socket is the host's")
+        await check_host_version()
 
     while True:
+        if socket:
+            prepare_socket(Path(socket))
         logger.info("nix_daemon_starting")
         async with await anyio.open_process(
             [

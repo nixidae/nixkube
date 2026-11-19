@@ -121,6 +121,7 @@ in
       nodeDaemonSet =
         store:
         let
+          hostDaemonSocket = "/nix/var/nix-csi/daemon-socket/socket";
           storeLabel = lib.optionalAttrs (store != null) { "nixkube/store" = store; };
           labels' = labels // storeLabel;
           matchLabels' = matchLabels // storeLabel;
@@ -173,6 +174,11 @@ in
                     }
                   ];
                 }
+                # Nix names a temporary-roots file after the pid, and deletes a
+                # file of its own pid as stale. In a pid namespace of its own,
+                # nixkube's daemon shares pids with the host's processes, so
+                # either side could delete the other's live roots.
+                // lib.optionalAttrs (store == "host") { hostPID = true; }
                 // {
                   serviceAccountName = "nixkube";
                   priorityClassName = "system-node-critical";
@@ -325,6 +331,12 @@ in
                       env = lib.mkNamedList (
                         lib.optionalAttrs (store != null) {
                           HOST_STORE.value = lib.boolToString (store == "host");
+                        }
+                        # nixkube's own daemon on the host's /nix, beside the
+                        # host's daemon at the default socket. Both the daemon
+                        # and every nix client in this container read it.
+                        // lib.optionalAttrs (store == "host") {
+                          NIX_DAEMON_SOCKET_PATH.value = hostDaemonSocket;
                         }
                         // {
                           PYNIXD_ENABLED.value = lib.boolToString cfg.pynixd.enable;

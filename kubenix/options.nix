@@ -148,17 +148,25 @@ in
         Issue #25.
 
         The node DaemonSet becomes two. `nix-node-host` mounts the host's
-        /nix and talks to the host's nix-daemon; `nix-node-separate` keeps
-        nixkube's own store at `hostMountPath` everywhere else. They split
-        on the `nixkube/host=nixos` Node label, which each pod's first init
+        /nix; `nix-node-separate` keeps nixkube's own store at
+        `hostMountPath` everywhere else. They split on the
+        `nixkube/host=nixos` Node label, which each pod's first init
         container, `nixkube-host-check`, sets or removes: a pod on the wrong
         host moves its node to the other DaemonSet and never starts.
 
+        The store is shared, the daemon is not. nixkube runs its own
+        nix-daemon on the host's /nix, at
+        /nix/var/nix-csi/daemon-socket/socket, with nixkube's substituters,
+        keys and SSH configuration; the host's daemon cannot reach those.
+        The two coordinate through the store's own locks, as any two Nix
+        processes on one store do. The pod shares the host's pid namespace,
+        because Nix names temporary roots by pid. nixkube refuses to start
+        its daemon with a Nix newer than the host daemon's, which could
+        migrate the store's database past what the host reads.
+
         In host mode the host owns garbage collection. nixkube keeps its GC
         roots, under /nix/var/nix/gcroots, correct and never sweeps or copies
-        the store. Its state (/nix/var/nix-csi) lives in the host's /nix/var,
-        and its nix client talks to the host's nix-daemon, whose version the
-        host chooses; nothing here tests a version skew.
+        the store. Its state (/nix/var/nix-csi) lives in the host's /nix/var.
       '';
       type = lib.types.bool;
       default = false;

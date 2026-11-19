@@ -141,14 +141,17 @@ def log_effective_app_config() -> None:
 def store_loops(*, host_store: bool) -> frozenset[str]:
     """The loops that look after the store.
 
-    A host-store node runs no nix-daemon and no sweep: the socket is the
-    host's nix-daemon, and a second daemon would take it, and the sweep
-    deletes every unrooted path older than an hour and copies the whole
-    store to the cache -- the host's users' paths and the host's whole store.
-    It retires the separate store it used before instead. Issue #25.
+    A host-store node runs its own nix-daemon on its own socket
+    (`NIX_DAEMON_SOCKET_PATH`): the store is shared, the daemon is not. The
+    host's daemon cannot reach nixkube's substituters -- an in-cluster name
+    and nixkube's SSH key -- so a pod whose closure the host lacked never
+    started (sg1, 2026-11-19). No sweep: it deletes every unrooted path older
+    than an hour and copies the whole store to the cache, the host's users'
+    paths and the host's whole store. The host owns GC, and nixkube retires
+    the separate store it used before. Issue #25.
     """
     if host_store:
-        return frozenset({"retire"})
+        return frozenset({"nix-daemon", "retire"})
     return frozenset({"nix-daemon", "gc"})
 
 

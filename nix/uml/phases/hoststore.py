@@ -1,12 +1,13 @@
 """The node runs from the guest's own /nix, as on a NixOS host. Issue #25.
 
 The guest is NixOS, so `nixkube-host-check` labels it, the separate-store
-pod steps aside, and `nix-node-host` serves it with the guest's store and
-the guest's nix-daemon. This asks what that has to mean:
+pod steps aside, and `nix-node-host` serves it with the guest's store and a
+nix-daemon of nixkube's own. This asks what that has to mean:
 
   - the node carries `nixkube/host=nixos`, and the separate DaemonSet
     schedules nothing on it
-  - no nix-daemon of nixkube's own: the guest's serves the socket
+  - nixkube's own nix-daemon serves the guest's store on nixkube's socket,
+    and the guest's daemon keeps the default socket
   - what the node runs, and what a volume reads, are rooted for the host's
     GC: Nix refuses to delete them, and deletes an unrooted path at once
   - the separate store at `hostMountPath`, which the step-aside pod's
@@ -18,6 +19,8 @@ from vivarium_k8s import get_json, until
 from vivarium_runner import Machine, MachineError, Machines
 
 STILL_ALIVE = "since it is still alive"
+# kubenix/daemonset.nix, NIX_DAEMON_SOCKET_PATH of the host DaemonSet.
+OWN_SOCKET = "/nix/var/nix-csi/daemon-socket/socket"
 
 
 async def refuses_delete(cp: Machine, path: str, why: str) -> None:
@@ -44,11 +47,13 @@ async def test(vms: Machines) -> None:
     # the pattern, and a grep for it finds the shell.
     # pynixd's own daemon runs `--store /data`, and is not this.
     own = [p for p in await cp.processes() if p["cmdline"].startswith("nix daemon --store local")]
-    if own:
-        raise MachineError(f"[cp] nixkube runs nix-daemons of its own: {own}")
+    if len(own) != 1:
+        raise MachineError(f"[cp] nixkube should run one nix-daemon of its own, not {own}")
+    await cp.succeed(f"test -S {OWN_SOCKET}")
+    await cp.succeed(f"nix --extra-experimental-features nix-command store info --store unix://{OWN_SOCKET}")
     await cp.succeed("systemctl is-active nix-daemon.socket")
     print(
-        "[nixkube] no nix-daemon of nixkube's own; the guest's serves the socket",
+        f"[nixkube] nixkube's daemon serves {OWN_SOCKET}; the guest's keeps the default socket",
         flush=True,
     )
 

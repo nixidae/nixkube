@@ -555,6 +555,13 @@ let
         ];
       assert (envOf host).HOST_STORE == "true";
       assert (envOf separate).HOST_STORE == "false";
+      # nixkube's own daemon on the host's /nix, off the host's socket, in
+      # the host's pid namespace. The separate store keeps the default.
+      assert (envOf host).NIX_DAEMON_SOCKET_PATH == "/nix/var/nix-csi/daemon-socket/socket";
+      assert !((envOf separate) ? NIX_DAEMON_SOCKET_PATH);
+      assert (pod host).spec.hostPID or false;
+      assert !((pod separate).spec.hostPID or false);
+      assert !((pod off.nix-node).spec.hostPID or false);
       assert volume host "nix-root" == "/nix";
       assert volume separate "nix-root" == "${hostMountPath}/nix";
       assert !(lib.any (lib.hasPrefix hostMountPath) (hostPaths host));
