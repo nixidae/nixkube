@@ -157,6 +157,16 @@ vivarium.mkTest {
         persistentVolumes = if pynixd then 1 else 0;
       };
 
+      /*
+        With the host store, the guest's own daemon substitutes from
+        nowhere, so every path a pod gets must come through nixkube's
+        daemon and nixkube's substituters. On sg1 (2026-11-19) the host's
+        daemon fetched for nixkube, could not reach nixkube's cache, and no
+        new pod started; here both named the same cache, which hid it.
+        Above `mkForce`, which the cache recipe uses.
+      */
+      nix.settings.substituters = lib.mkIf (hostStore && !foreignHost) (lib.mkOverride 40 [ ]);
+
       vivarium = {
         memory = "14336M";
         cpus = 4;

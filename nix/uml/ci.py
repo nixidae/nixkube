@@ -97,12 +97,32 @@ async def check_store_split(cp: Machine, nixos: bool) -> None:
     )
     serving = "nix-node-host" if nixos else "nix-node-separate"
     idle = "nix-node-separate" if nixos else "nix-node-host"
-    for name, want in ((serving, 1), (idle, 0)):
-        status = (await get_json(cp, f"get daemonset {name} --namespace nixkube"))["status"]
-        ready = status.get("numberReady", 0)
-        scheduled = status.get("desiredNumberScheduled", 0)
-        assert (ready, scheduled) == (want, want), f"{name} has {ready} ready of {scheduled} scheduled, not {want}"
+
+    # Waited for, not read once: the node moves only after the other
+    # DaemonSet's pod has relabelled it, so `rollout status` can pass while
+    # the serving pod is seconds old. Measured: 0.4 s, and the check failed.
+    async def settled() -> tuple[bool, list[str]]:
+        seen = []
+        for name, want in ((serving, 1), (idle, 0)):
+            status = (await get_json(cp, f"get daemonset {name} --namespace nixkube"))["status"]
+            ready = status.get("numberReady", 0)
+            scheduled = status.get("desiredNumberScheduled", 0)
+            seen.append(f"{name} has {ready} ready of {scheduled} scheduled, not {want}")
+            if (ready, scheduled) != (want, want):
+                return False, seen
+        return True, seen
+
+    await until(f"{serving} to serve the node", settled, 300, cp)
     print(f"[test] {serving} serves the node, {idle} schedules nothing")
+    if nixos:
+        # ./ci.nix leaves the guest's own daemon no substituters, so every
+        # path the workloads get comes through nixkube's own daemon.
+        nix = "nix --extra-experimental-features nix-command"
+        subs = (await cp.succeed(f"{nix} config show substituters")).stdout.strip()
+        assert not subs, f"the guest's daemon substitutes from {subs!r}, which hides who fetched"
+        own = "/nix/var/nix-csi/daemon-socket/socket"
+        await cp.succeed(f"test -S {own} && {nix} store info --store unix://{own}")
+        print(f"[test] the guest's daemon substitutes from nowhere; nixkube's serves {own}")
 
 
 async def test(vms: Machines) -> None:
