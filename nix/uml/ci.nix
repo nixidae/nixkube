@@ -182,28 +182,13 @@ vivarium.mkTest {
         diskSize = 8192;
         /*
           The API server, reachable from the host, because kluctl runs
-          there.
-
-          On port 16443 and not 6443. The runner gives a guest a
-          127.0.0.x of its own and needs every port in a rule free on it,
-          and a developer machine that is itself running Kubernetes has
-          `*:6443` bound already -- which takes every loopback address at
-          once and fails the run before the guest boots, with "no free
-          address in 127.0.0.2-254".
-
-          Two ports in one rule rather than two rules: both would be given
-          the same address anyway.
+          there. On any free host port, which `cp.reachable(6443)` names:
+          a developer machine that runs Kubernetes itself has `*:6443`
+          bound already.
         */
-        forward = [
-          {
-            ports = [
-              config.vivarium.sshPort
-              {
-                host = 16443;
-                guest = 6443;
-              }
-            ];
-          }
+        inbound = [
+          { guest = config.vivarium.sshPort; }
+          { guest = 6443; }
         ];
         inherit lan;
       };

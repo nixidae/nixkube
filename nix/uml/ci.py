@@ -47,7 +47,7 @@ async def host_kubeconfig(cp: Machine) -> str:
     """
     reachable = cp.reachable(6443)
     assert reachable, (
-        "6443 is not forwarded, so the host cannot reach the API server -- see vivarium.forward in nix/uml/ci.nix"
+        "6443 is not forwarded, so the host cannot reach the API server -- see vivarium.inbound in nix/uml/ci.nix"
     )
     # kubeadm always names it `kubernetes`, but ask rather than assume.
     cluster = (await cp.succeed("kubectl config view --output jsonpath='{.clusters[0].name}'")).stdout.strip()
