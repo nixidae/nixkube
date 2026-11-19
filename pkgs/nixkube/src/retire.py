@@ -15,13 +15,20 @@ directory -- does not hold it, and is not counted.
 The host's mountinfo names a mount's source by device and by the path inside
 that filesystem, not by a host path. `locate` turns the host path into the
 same terms first, from pid 1's mountinfo.
+
+**A composefs volume has no source inside it.** Its EROFS layer is mounted
+detached, so no mountinfo line shows it, and the overlay's source reads
+`overlay`. Only the overlay's `lowerdir` names the volume's directory, as
+the separate DaemonSet saw it: `/nix/var/nix-csi/volumes/<id>/erofs`.
+`overlay_users` finds those. Measured on sg1, 2026-11-19: without it the
+store went under 46 running pods, whose files then failed to open.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -91,6 +98,44 @@ def users(old: Located, mountinfos: Iterable[str]) -> list[str]:
     return found
 
 
+# Where the separate DaemonSet keeps each volume's and container's own
+# directory, as that pod sees it. The names under it are unique, so the
+# same name inside the old store means a mount from the old store.
+STATE_PREFIX = "/nix/var/nix-csi/"
+
+
+def overlay_lowers(line: str) -> list[str]:
+    """The lower layers of an overlay mountinfo line; [] for any other
+    filesystem. `lowerdir=a:b::c` (`::` before a data-only layer) and the
+    `lowerdir+=`/`datadir+=` options each name layers."""
+    fields = line.split()
+    try:
+        sep = fields.index("-")
+    except ValueError:
+        return []
+    if len(fields) < sep + 4 or fields[sep + 1] != "overlay":
+        return []
+    lowers = []
+    for option in fields[sep + 3].split(","):
+        key, _, value = option.partition("=")
+        if key == "lowerdir":
+            lowers += [unescape(p) for p in value.split(":") if p]
+        elif key in ("lowerdir+", "datadir+"):
+            lowers.append(unescape(value))
+    return lowers
+
+
+def overlay_users(in_old_store: Callable[[str], bool], mountinfos: Iterable[str]) -> list[str]:
+    """Every overlay mount point whose layers include a volume's or a
+    container's directory that `in_old_store` finds in the old store."""
+    found = []
+    for mountinfo in mountinfos:
+        for line in mountinfo.splitlines():
+            if any(p.startswith(STATE_PREFIX) and in_old_store(p) for p in overlay_lowers(line)):
+                found.append(unescape(line.split()[4]))
+    return found
+
+
 def _namespaces(proc: Path) -> Iterator[str]:
     """Each mount namespace's mountinfo, once, by its namespace inode."""
     seen: set[int] = set()
@@ -114,7 +159,9 @@ def scan(host_path: str) -> list[str] | None:
     old = locate(host_path, (proc / "1" / "mountinfo").read_text())
     if old is None:
         return None
-    return users(old, _namespaces(proc))
+    root = HOST_ROOT / host_path.lstrip("/")
+    mountinfos = list(_namespaces(proc))
+    return users(old, mountinfos) + overlay_users(lambda p: (root / p.lstrip("/")).exists(), mountinfos)
 
 
 def disk_usage(path: Path) -> int:

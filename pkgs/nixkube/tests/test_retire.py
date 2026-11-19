@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from src.retire import Located, disk_usage, locate, unsafe, users
+from src.retire import Located, disk_usage, locate, overlay_lowers, overlay_users, unsafe, users
 
 # The host's own view: / on 8:1, /var on its own filesystem 8:2.
 HOST = """\
@@ -87,3 +87,38 @@ def test_disk_usage_counts_a_hardlinked_inode_once(tmp_path: Path) -> None:
     assert disk_usage(tmp_path) > once
     # The link added nothing.
     assert once == disk_usage(tmp_path) - (tmp_path / "c").stat().st_blocks * 512
+
+
+# A composefs CSI volume on sg1-n1, 2026-11-19, as the host's mountinfo
+# shows it: the source is `overlay`, and only `lowerdir` names the volume.
+COMPOSEFS = (
+    "5310 105 0:414 / /var/lib/kubelet/pods/25a2/volumes/kubernetes.io~csi/nix/mount"
+    " ro,relatime shared:2581 - overlay overlay"
+    " ro,lowerdir=/nix/var/nix-csi/volumes/csi-6896/erofs::/nix/store,redirect_dir=on,metacopy=on"
+)
+
+
+def test_overlay_lowers_reads_data_only_layers() -> None:
+    assert overlay_lowers(COMPOSEFS) == ["/nix/var/nix-csi/volumes/csi-6896/erofs", "/nix/store"]
+
+
+def test_overlay_lowers_reads_the_append_options() -> None:
+    line = "1 0 0:9 / /m ro - overlay overlay ro,lowerdir+=/nix/var/nix-csi/containers/c/erofs,datadir+=/nix/store"
+    assert overlay_lowers(line) == ["/nix/var/nix-csi/containers/c/erofs", "/nix/store"]
+
+
+def test_overlay_lowers_ignores_other_filesystems() -> None:
+    assert overlay_lowers("91 80 8:2 /lib/nix-csi/nix /nix rw - xfs x rw,lowerdir=/x") == []
+
+
+def test_a_composefs_volume_from_the_old_store_holds_it() -> None:
+    old = {"/nix/var/nix-csi/volumes/csi-6896/erofs"}
+    assert overlay_users(old.__contains__, [COMPOSEFS]) == [
+        "/var/lib/kubelet/pods/25a2/volumes/kubernetes.io~csi/nix/mount"
+    ]
+
+
+def test_a_composefs_volume_from_the_host_store_does_not() -> None:
+    # The same layout, made in the host's store: its directory is not in
+    # the old one. `/nix/store` is in both and never counts.
+    assert overlay_users({"/nix/store"}.__contains__, [COMPOSEFS]) == []
