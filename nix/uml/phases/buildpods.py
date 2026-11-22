@@ -11,17 +11,24 @@ turning it off means:
   - with the mode off, the node DaemonSet rolls and each node removes the
     directory, and the same pod no longer starts (the negative control)
   - with the mode on again, the profile is back
+  - a CSI volume that asks for a farm (`presentation: farm`) arrives as one
+    read-only bind per closure path, which the build pods take their inputs
+    from; the same volume without the attribute has no binds (the negative
+    control); a `hostUsers: false` pod's farm is reported, not asserted, as
+    the runtime's idmap of each bind is unmeasured; the node keeps no farm
+    mount after the pods go
 
 Through kr8s, from the host, at `<out>/access/kubeconfig`, which the cluster
 phase's `bring_up` writes.
 """
 
 import json
+import re
 
 import anyio
 import kr8s.asyncio
 from kr8s.asyncio.objects import DaemonSet, Pod
-from nixkube_uml import NAMESPACE, PriorityClass, Settings, cluster, logs as pod_logs, raw
+from nixkube_uml import NAMESPACE, NODE_CONTAINER, PriorityClass, Settings, cluster, logs as pod_logs, raw
 from vivarium_k8s import until
 from vivarium_runner import Machine, MachineError, Machines
 
@@ -60,6 +67,81 @@ async def _profile_pod(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) -
     said = await pod_logs(pod, "csi") if _ran(pod) else ""
     await pod.delete()
     return pod, said
+
+
+FARM_MOUNT = "/mnt/csi"
+FARM_POINT = re.compile(r"/volumes/[^/]+/nix/store(/|$)")
+WROTE = "nixkube-farm-wrote"
+
+
+async def _farm_pod(api: kr8s.asyncio.Api, cp: Machine, settings: Settings, *, farm: bool, host_users: bool) -> str:
+    """The probe's CSI container alone, on `cp`, saying what its volume holds: its log, or why it never ran."""
+    job = json.loads(await anyio.Path(settings["probeRo"]).read_text())
+    spec = job["spec"]["template"]["spec"]
+    spec["restartPolicy"] = "Never"
+    spec["nodeSelector"] = {"kubernetes.io/hostname": cp.name}
+    if not host_users:
+        spec["hostUsers"] = False
+    (container,) = (c for c in spec["containers"] if c["name"] == "csi")
+    spec["containers"] = [container]
+    if farm:
+        (volume,) = spec["volumes"]
+        volume["csi"]["volumeAttributes"]["presentation"] = "farm"
+    store = f"{FARM_MOUNT}/store" if farm else f"{FARM_MOUNT}/nix/store"
+    hello = settings["workloadStorePath"].removeprefix("/nix/store/")
+    bin_ = f"{settings['busybox']}/bin"
+    container["command"] = [
+        f"{bin_}/sh",
+        "-c",
+        f"{store}/{hello}/bin/hello; echo binds=$({bin_}/grep -c ' {store}/' /proc/self/mountinfo);"
+        f" {bin_}/touch {store}/w 2>/dev/null && echo {WROTE}-store;"
+        f" {bin_}/touch {store}/{hello}/w 2>/dev/null && echo {WROTE}-bind;"
+        f" {bin_}/touch {FARM_MOUNT}/w 2>/dev/null && echo top-writable; true",
+    ]
+    pod = Pod({"metadata": {"generateName": "buildpods-farm-", "namespace": NAMESPACE}, "spec": spec}, api=api)
+    await pod.create()
+
+    async def ended() -> tuple[bool, str]:
+        await pod.refresh()
+        states = [s.get("state", {}) for s in raw(pod).get("status", {}).get("containerStatuses", [])]
+        waiting = [s.get("waiting", {}).get("reason") for s in states]
+        done = bool(states) and all("terminated" in s or w in NOT_STARTED for s, w in zip(states, waiting, strict=True))
+        return done, json.dumps(raw(pod).get("status", {}))
+
+    await until(f"pod {pod.name}", ended, POD_TIMEOUT, cp)
+    said = await pod_logs(pod, "csi") if _ran(pod) else f"never ran: {_waiting(pod)}"
+    await pod.delete()
+    return said
+
+
+async def _check_farm(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) -> None:
+    # The volume holds every store path the pod names: hello, and the busybox its command runs.
+    roots = f"{settings['workloadStorePath']} {settings['busybox']}"
+    closure = len(set((await cp.succeed(f"nix-store --query --requisites {roots}")).stdout.split()))
+    said = await _farm_pod(api, cp, settings, farm=True, host_users=True)
+    if "Hello, world!" not in said or f"binds={closure}" not in said or WROTE in said:
+        raise MachineError(f"[cp] a farm volume is not {closure} read-only binds:\n{said}")
+    print(f"[nixkube] a farm volume holds {closure} read-only binds, and runs hello", flush=True)
+    # mount(2) ignores MS_RDONLY when it makes a bind, so the publish's top mount reaches kubelet writable, for every
+    # bind volume; a volumeMount with readOnly closes it. Reported, as it is not the farm's.
+    print(f"[nixkube] the farm target's top is writable without readOnly on the mount: {'top-writable' in said}")
+
+    said = await _farm_pod(api, cp, settings, farm=False, host_users=True)
+    if "Hello, world!" not in said or "binds=0" not in said:
+        raise MachineError(f"[cp] the same volume without the attribute is not bind-free:\n{said}")
+    print("[nixkube] without presentation: farm the volume has no binds (the control)", flush=True)
+
+    said = await _farm_pod(api, cp, settings, farm=True, host_users=False)
+    print(f"[nixkube] a hostUsers: false pod's farm: {' '.join(said.split())[:300]}", flush=True)
+
+    async def detached() -> tuple[bool, str]:
+        # The mount point, field 5: a composefs overlay names `<volume>/erofs::/nix/store` in its options.
+        table = (await cp.succeed(f"crictl exec {NODE_CONTAINER} cat /proc/self/mountinfo")).stdout
+        left = [line.split()[4] for line in table.splitlines() if FARM_POINT.search(line.split()[4])]
+        return not left, f"farm mounts in the node container: {left[:5]}"
+
+    await until("the node detaches every farm", detached, POD_TIMEOUT, cp)
+    print("[nixkube] the node keeps no farm mount after the pods go", flush=True)
 
 
 def _ran(pod: Pod) -> bool:
@@ -146,3 +228,5 @@ async def test(vms: Machines) -> None:
     await _set_mode(api, cp, settings, enabled=True)
     for node in nodes:
         await _holds(node, settings)
+
+    await _check_farm(api, cp, settings)

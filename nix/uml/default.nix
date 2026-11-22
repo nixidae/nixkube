@@ -547,6 +547,7 @@ vivarium.mkTest (
           settings.residentCat
           settings.workloadStorePath
           settings.buildPodSeccomp
+          settings.busybox
         ];
       };
 
@@ -581,6 +582,8 @@ vivarium.mkTest (
       # What the node DaemonSet installs, and where. phases/buildpods.py.
       buildPodSeccomp = "${pkgs.pynixd-builder-seccomp}";
       buildPodSeccompProfile = manifest.config.nixkube.buildPods.seccompProfile;
+      # The farm pod's shell (phases/buildpods.py): the NRI plugin gives it this closure.
+      busybox = "${pkgs.busybox}";
       workloadImage = "vivarium.test/busybox:1";
       runtimes = runtimesFor { inherit backend cri kata; };
       inherit cri;
