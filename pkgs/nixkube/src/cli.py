@@ -10,6 +10,7 @@ import anyio
 import structlog
 
 from . import metrics
+from .build_pods import install_profiles
 from .cache import cache_probe_loop
 from .constants import (
     BUILDERS_ENABLED,
@@ -218,6 +219,13 @@ async def async_main() -> None:
         metrics.serve(port=METRICS_PORT, addr=METRICS_ADDR)
 
     await run_setup()
+    # Not fatal: a crash here would stop CSI and NRI on the node for a mode only
+    # build pods use. A build pod without its profile fails at container
+    # create, where its own events say so.
+    try:
+        await anyio.to_thread.run_sync(install_profiles)
+    except (OSError, RuntimeError):
+        logger.exception("seccomp_profiles_failed")
 
     async with anyio.create_task_group() as tg:
         loops = store_loops(host_store=HOST_STORE)

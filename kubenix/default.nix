@@ -13,6 +13,7 @@
     ./namespace.nix
     ./daemonset.nix
     ./csidriver.nix
+    ./build-pods.nix
     ./config.nix
     ./pynixd.nix
     ./nixos-host.nix

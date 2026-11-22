@@ -382,6 +382,37 @@ let
       both to the same value now; these lines are what keeps a deployment
       right against an image that does not.
     */
+    /*
+      `buildPods.enable` puts the PriorityClass on the cluster and tells each
+      node to hold the seccomp profile; off, neither. The env value is also
+      what rolls the DaemonSet on a toggle, since nixkube reconciles the
+      profile only at start. nixidae/nixidae#1560.
+    */
+    buildPodsToggle =
+      let
+        render =
+          enable:
+          (kubenixInstance {
+            module.nixkube.buildPods.enable = enable;
+          }).config.kubernetes.resources;
+        off = render false;
+        on = render true;
+        nodeEnv =
+          resources:
+          let
+            pod = resources.nixkube.DaemonSet.nix-node.spec.template;
+            node = lib.head (lib.filter (c: c.name == "nix-node") pod.spec.containers);
+          in
+          lib.listToAttrs (map (e: lib.nameValuePair e.name (e.value or null)) node.env);
+        priority = on.none.PriorityClass.pynixd-build;
+      in
+      assert !(off.none ? PriorityClass);
+      assert priority.value == -1;
+      assert priority.preemptionPolicy == "Never";
+      assert (nodeEnv off).BUILD_PODS_ENABLED == "false";
+      assert (nodeEnv on).BUILD_PODS_ENABLED == "true";
+      pkgs.runCommand "build-pods-toggle" { } "echo ok > $out";
+
     pynixdBindsEveryInterface =
       let
         resources =
@@ -1509,6 +1540,7 @@ let
         nixkubeNamesComposefsTools
         pynixdPodMonitorShape
         pynixdBindsEveryInterface
+        buildPodsToggle
         onlyTheNodeNamesAStore
         pynixdProbesSurviveAPush
         sourcesAreLocked

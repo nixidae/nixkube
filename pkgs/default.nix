@@ -61,6 +61,8 @@ in
       # node writes CI's derivation and finds CI's image. src/csi/composefs.py.
       NIXKUBE_COMPOSEFS = pkgs.composefs;
       NIXKUBE_NIX = self.nix;
+      # What `src/build_pods.py` installs under the kubelet's seccomp directory.
+      NIXKUBE_BUILD_POD_SECCOMP = self.pynixd-builder-seccomp;
     };
     selfEnv = "NIXKUBE_PACKAGE";
   };
@@ -218,6 +220,7 @@ in
   # records, so CI and a working copy ship different `cacheEnv`s and a node
   # asks its substituters for a path nobody built.
   pynixd = (import sources.pynixd { inherit pkgs sources; }).packages.pynixd-lib;
+  pynixd-builder-seccomp = (import sources.pynixd { inherit pkgs sources; }).packages.builder-seccomp;
   pynixd-nixkube-fake-nss = pkgs.callPackage ./pynixd-nixkube/fake-nss.nix { };
 
   pynixd-nixkube = self.mkApp {

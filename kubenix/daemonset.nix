@@ -340,6 +340,9 @@ in
                         }
                         // {
                           PYNIXD_ENABLED.value = lib.boolToString cfg.pynixd.enable;
+                          # Also what rolls the DaemonSet when the mode changes:
+                          # nixkube installs or removes the profile only at start.
+                          BUILD_PODS_ENABLED.value = lib.boolToString cfg.buildPods.enable;
                           ENABLE_COMPAT_DRIVER.value = lib.boolToString cfg.node.compat;
                           NRI_ENABLED.value = "true";
                           NRI_VM_RUNTIME_HANDLERS.value = lib.concatStringsSep "," cfg.nri.vmRuntimeHandlers;

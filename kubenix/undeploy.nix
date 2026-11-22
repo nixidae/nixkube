@@ -53,10 +53,28 @@ in
                 };
                 securityContext.privileged = true;
               };
+              # The build pods' seccomp profile, which nix-node writes. `build_pods.py`.
+              seccomp-cleanup = {
+                name = "seccomp-cleanup";
+                image = "busybox:latest";
+                command = [
+                  "rm"
+                  "-rf"
+                  "/kubelet/seccomp/nixkube"
+                ];
+                volumeMounts = lib.mkNamedList {
+                  kubelet.mountPath = "/kubelet";
+                };
+                securityContext.privileged = true;
+              };
             };
 
             volumes = lib.mkNamedList {
               nix-store.hostPath.path = cfg.hostMountPath;
+              kubelet.hostPath = {
+                path = "/var/lib/kubelet";
+                type = "Directory";
+              };
             };
           };
         };

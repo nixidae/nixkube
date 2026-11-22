@@ -126,6 +126,13 @@ HOST_STORE = os.environ.get("HOST_STORE", "false") == "true"
 # everywhere, which a test cell uses so that path keeps running.
 CSI_COMPOSEFS = os.environ.get("CSI_COMPOSEFS", "true") == "true"
 
+# pynixd's build-pod mode: this node holds the seccomp profile of a build
+# pod's sandbox container while it is on, and none while it is off.
+# `build_pods.py`. nixidae/nixidae#1560.
+BUILD_PODS_ENABLED = os.environ.get("BUILD_PODS_ENABLED", "false") == "true"
+BUILD_POD_SECCOMP = os.environ.get("NIXKUBE_BUILD_POD_SECCOMP", "")
+KUBELET_SECCOMP_DIR = Path(os.environ.get("KUBELET_SECCOMP_DIR", "/var/lib/kubelet/seccomp"))
+
 # The same for an NRI container's /nix, which falls back to the bind farm.
 NRI_COMPOSEFS = os.environ.get("NRI_COMPOSEFS", "true") == "true"
 
