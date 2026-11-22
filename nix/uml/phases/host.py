@@ -28,13 +28,25 @@ left systemd-boot boots `hostReboot` again. The rollout's disarm Job then
 finds the old system, and the rollout halts with worker cordoned.
 """
 
-import base64
 import hashlib
 import json
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
-from nixkube_uml import NAMESPACE, READY_TIMEOUT
-from vivarium_k8s import get_json, kubectl, until
+import kr8s.asyncio
+from kr8s.asyncio.objects import Deployment, Job, Node, Pod, Secret, Service
+from nixkube_uml import (
+    NAMESPACE,
+    READY_TIMEOUT,
+    NixOSRollout,
+    apply,
+    cluster,
+    delete,
+    listed,
+    pod_state,
+    raw,
+    wait_rolled_out,
+)
+from vivarium_k8s import until
 from vivarium_runner import Machine, MachineError, Machines
 
 ROLLOUT = "host"
@@ -95,9 +107,20 @@ async def armed(vm: Machine) -> bool:
     return rc == 0
 
 
-async def apply(cp: Machine, obj: dict[str, object]) -> None:
-    encoded = base64.b64encode(json.dumps(obj).encode()).decode()
-    await cp.succeed(f"echo {encoded} | base64 --decode | kubectl apply --filename -")
+async def the_rollout(api: kr8s.asyncio.Api) -> dict[str, Any]:
+    return raw(await NixOSRollout.get(ROLLOUT, api=api))
+
+
+async def rollout_status(api: kr8s.asyncio.Api) -> RolloutStatus:
+    return cast(RolloutStatus, (await the_rollout(api)).get("status", {}))
+
+
+async def uncordon(api: kr8s.asyncio.Api, name: str) -> None:
+    await (await Node.get(name, api=api)).patch({"spec": {"unschedulable": False}}, type="merge")
+
+
+async def cordoned(api: kr8s.asyncio.Api, name: str) -> bool:
+    return bool(raw(await Node.get(name, api=api))["spec"].get("unschedulable"))
 
 
 def rollout(
@@ -128,7 +151,8 @@ def rollout(
     }
 
 
-async def roll_to(
+async def roll_to(  # noqa: PLR0913 -- each keyword is one way a step varies the rollout
+    api: kr8s.asyncio.Api,
     cp: Machine,
     systems: dict[str, str],
     source: dict[str, object] | None = None,
@@ -141,12 +165,12 @@ async def roll_to(
     which the nodes left Pending. Fails as soon as two nodes are in flight at
     once, or one is in flight while another builds.
     """
-    await apply(cp, rollout(systems, source, reboot_timeout))
-    generation = (await get_json(cp, f"get nixosrollout {ROLLOUT}"))["metadata"]["generation"]
+    await apply(api, rollout(systems, source, reboot_timeout))
+    generation = (await the_rollout(api))["metadata"]["generation"]
     started: list[str] = []
 
     async def settled() -> tuple[bool, str]:
-        status: RolloutStatus = (await get_json(cp, f"get nixosrollout {ROLLOUT}")).get("status", {})
+        status = await rollout_status(api)
         if status.get("observedGeneration") != generation:
             return False, json.dumps(status)
         nodes = status.get("nodes", {})
@@ -166,16 +190,17 @@ async def roll_to(
 
     timeout = timeout or (BUILD_TIMEOUT if source else READY_TIMEOUT)
     await until(f"rollout to {systems}", settled, timeout, cp)
-    return (await get_json(cp, f"get nixosrollout {ROLLOUT}"))["status"], started
+    return await rollout_status(api), started
 
 
 async def switch_to(
+    api: kr8s.asyncio.Api,
     vms: dict[str, Machine],
     systems: dict[str, str],
     source: dict[str, object] | None = None,
     timeout: int | None = None,
 ) -> None:
-    status, started = await roll_to(vms["cp"], systems, source, timeout)
+    status, started = await roll_to(api, vms["cp"], systems, source, timeout)
     if status["phase"] != "Complete":
         raise MachineError(f"[cp] the rollout to {systems} ended {status}")
     for name, toplevel in systems.items():
@@ -194,60 +219,57 @@ async def switch_to(
 async def test(vms: Machines) -> None:
     cp, settings = vms.cp, vms.settings
     hosts = {"cp": vms.cp, "worker": vms.worker}
-    await kubectl(
-        cp,
-        f"rollout status --namespace {NAMESPACE} deployment/nixkube-nixos-rollout --timeout={READY_TIMEOUT}s",
-    )
+    api = await cluster(vms)
+    await wait_rolled_out(await Deployment.get("nixkube-nixos-rollout", namespace=NAMESPACE, api=api), cp)
     first = {name: await running(vm) for name, vm in hosts.items()}
     after: dict[str, str] = settings["hostNext"]
     for name in hosts:
         if first[name] == after[name]:
             raise MachineError(f"[{name}] hostNext is the system the guest booted")
 
-    await switch_to(hosts, after)
+    await switch_to(api, hosts, after)
     for name, vm in hosts.items():
         marker = (await vm.succeed(f"cat {MARKER}")).stdout.strip()
         if marker != "next":
             raise MachineError(f"[{name}] {MARKER} says {marker!r} after the switch")
     print(f"[nixkube] the rollout switched both hosts: {after}", flush=True)
 
-    await switch_to(hosts, first)
+    await switch_to(api, hosts, first)
     for name, vm in hosts.items():
         rc = (await vm.execute(f"test -e {MARKER}")).returncode
         if rc == 0:
             raise MachineError(f"[{name}] {MARKER} survived the switch back")
     print(f"[nixkube] the rollout switched both hosts back: {first}", flush=True)
 
-    await from_source(hosts, vms.cache, settings)
-    await switch_to(hosts, first)
-    await from_store_path(hosts, settings)
-    await switch_to(hosts, first)
-    await waits_for_the_store(hosts, settings)
-    await switch_to(hosts, first)
+    await from_source(api, hosts, vms.cache, settings)
+    await switch_to(api, hosts, first)
+    await from_store_path(api, hosts, settings)
+    await switch_to(api, hosts, first)
+    await waits_for_the_store(api, hosts, settings)
+    await switch_to(api, hosts, first)
 
-    await broken_halts(hosts, first, settings["hostBroken"], after["worker"])
-    await kubectl(cp, "uncordon cp")
-    await reboots(hosts, settings)
+    await broken_halts(api, hosts, first, settings["hostBroken"], after["worker"])
+    await uncordon(api, "cp")
+    await reboots(api, hosts, settings)
     if settings["hostBadBoot"]:
-        await falls_back(hosts, settings)
-    await kubectl(cp, f"delete nixosrollout {ROLLOUT}")
+        await falls_back(api, hosts, settings)
+    await delete(await NixOSRollout.get(ROLLOUT, api=api), cp)
 
 
-async def failed_jobs(cp: Machine) -> set[str]:
-    jobs = await get_json(cp, f"get jobs --namespace {NAMESPACE}")
+async def failed_jobs(api: kr8s.asyncio.Api) -> set[str]:
     return {
-        j["metadata"]["name"]
-        for j in jobs["items"]
-        if any(c["type"] == "Failed" and c["status"] == "True" for c in j.get("status", {}).get("conditions", []))
+        j.name
+        for j in await listed(Job, api, namespace=NAMESPACE)
+        if any(c["type"] == "Failed" and c["status"] == "True" for c in raw(j).get("status", {}).get("conditions", []))
     }
 
 
-async def reboots(hosts: dict[str, Machine], settings: Settings) -> None:
+async def reboots(api: kr8s.asyncio.Api, hosts: dict[str, Machine], settings: Settings) -> None:
     """worker's initrd changes: drained, rebooted, uncordoned. cp switches in place."""
     cp, worker = hosts["cp"], hosts["worker"]
     target: dict[str, str] = settings["hostReboot"]
-    await apply(
-        cp,
+    victim = await apply(
+        api,
         {
             "apiVersion": "v1",
             "kind": "Pod",
@@ -267,13 +289,20 @@ async def reboots(hosts: dict[str, Machine], settings: Settings) -> None:
             },
         },
     )
-    await kubectl(cp, f"wait --for=condition=Ready pod/{VICTIM} --timeout={READY_TIMEOUT}s")
+
+    async def ready() -> tuple[bool, str]:
+        await victim.refresh()
+        pod = raw(victim)
+        conditions = pod.get("status", {}).get("conditions", [])
+        return any(c["type"] == "Ready" and c["status"] == "True" for c in conditions), pod_state(pod)
+
+    await until(f"pod {VICTIM} to be Ready", ready, READY_TIMEOUT, cp)
     boots = {name: (await vm.succeed(BOOT_ID)).stdout.strip() for name, vm in hosts.items()}
     # An earlier step's rollout fails on purpose (`broken_halts`), and its
     # Failed Job is the right record of that.
-    failed_before = await failed_jobs(cp)
+    failed_before = await failed_jobs(api)
 
-    await switch_to(hosts, target, timeout=REBOOT_TIMEOUT)
+    await switch_to(api, hosts, target, timeout=REBOOT_TIMEOUT)
 
     if (await worker.succeed(BOOT_ID)).stdout.strip() == boots["worker"]:
         raise MachineError("[worker] the rollout to a new initrd did not reboot it")
@@ -282,15 +311,13 @@ async def reboots(hosts: dict[str, Machine], settings: Settings) -> None:
     booted = (await worker.succeed("readlink /run/booted-system")).stdout.strip()
     if booted != target["worker"]:
         raise MachineError(f"[worker] booted {booted}, not {target['worker']}")
-    pods = await get_json(cp, "get pods --namespace default")
-    if any(p["metadata"]["name"] == VICTIM for p in pods["items"]):
+    if any(p.name == VICTIM for p in await listed(Pod, api, namespace="default")):
         raise MachineError(f"[worker] the drain left pod {VICTIM}")
-    spec = (await get_json(cp, "get node worker"))["spec"]
-    if spec.get("unschedulable"):
+    if await cordoned(api, "worker"):
         raise MachineError("[worker] the rebooted node is still cordoned")
     # Asking for a reboot is the switch Job doing its work. A Failed one would
     # hold KubeJobFailed for the Job's whole TTL.
-    if failed := sorted(await failed_jobs(cp) - failed_before):
+    if failed := sorted(await failed_jobs(api) - failed_before):
         raise MachineError(f"[cp] the reboot rollout left Failed Jobs: {failed}")
     print(
         "[nixkube] the rollout drained and rebooted worker into its new initrd, and switched cp in place",
@@ -298,12 +325,13 @@ async def reboots(hosts: dict[str, Machine], settings: Settings) -> None:
     )
 
 
-async def falls_back(hosts: dict[str, Machine], settings: Settings) -> None:
+async def falls_back(api: kr8s.asyncio.Api, hosts: dict[str, Machine], settings: Settings) -> None:
     """worker boots a system with no kubelet, twice, then its old one."""
     cp, worker = hosts["cp"], hosts["worker"]
     old: dict[str, str] = settings["hostReboot"]
     bad: str = settings["hostBadBoot"]
     status, _ = await roll_to(
+        api,
         cp,
         {**old, "worker": bad},
         timeout=FALLBACK_TIMEOUT,
@@ -321,19 +349,17 @@ async def falls_back(hosts: dict[str, Machine], settings: Settings) -> None:
     entry = (await worker.succeed(f"grep -l 'init={bad}/init' /boot/loader/entries/*.conf")).stdout
     if not entry.strip().endswith("+0-2.conf"):
         raise MachineError(f"[worker] the entry of {bad} is {entry.strip()}")
-    spec = (await get_json(cp, "get node worker"))["spec"]
-    if not spec.get("unschedulable"):
+    if not await cordoned(api, "worker"):
         raise MachineError("[worker] the node that fell back is not cordoned")
-    await kubectl(cp, "uncordon worker")
+    await uncordon(api, "worker")
     print(
         f"[nixkube] worker failed two boots of {bad}, fell back to {old['worker']}, and the rollout halted",
         flush=True,
     )
 
 
-async def from_source(hosts: dict[str, Machine], cache: Machine, settings: Settings) -> None:
+async def from_source(api: kr8s.asyncio.Api, hosts: dict[str, Machine], cache: Machine, settings: Settings) -> None:
     """The controller evaluates the git source, pynixd builds, the hosts fetch."""
-    cp = hosts["cp"]
     built: dict[str, str] = settings["hostBuilt"]
     source = settings["hostSource"]
     # Built here or nowhere: no guest has these, and no cache.
@@ -343,15 +369,18 @@ async def from_source(hosts: dict[str, Machine], cache: Machine, settings: Setti
             if rc == 0:
                 raise MachineError(f"[{name}] holds {toplevel} before the build")
 
-    await kubectl(
-        cp,
-        f"create secret generic {SOURCE_SECRET} --namespace {NAMESPACE}"
-        " --type kubernetes.io/basic-auth"
-        f" --from-literal username={source['user']}"
-        f" --from-literal password={source['password']}",
+    secret = Secret(
+        {
+            "metadata": {"name": SOURCE_SECRET, "namespace": NAMESPACE},
+            "type": "kubernetes.io/basic-auth",
+            "stringData": {"username": source["user"], "password": source["password"]},
+        },
+        api=api,
     )
+    await secret.create()
     rev = (await cache.succeed(f"cat {source['rev']}")).stdout.strip()
     await switch_to(
+        api,
         hosts,
         built,
         {"url": source["url"], "rev": rev, "secretRef": {"name": SOURCE_SECRET}},
@@ -363,14 +392,14 @@ async def from_source(hosts: dict[str, Machine], cache: Machine, settings: Setti
     print(f"[nixkube] the rollout built and switched both hosts: {built}", flush=True)
 
 
-async def from_store_path(hosts: dict[str, Machine], settings: Settings) -> None:
+async def from_store_path(api: kr8s.asyncio.Api, hosts: dict[str, Machine], settings: Settings) -> None:
     """The same file as a store path in pynixd: no fetch, no Secret, the same toplevels."""
     built: dict[str, str] = settings["hostBuilt"]
-    await switch_to(hosts, built, {"path": settings["hostSource"]["tree"]})
+    await switch_to(api, hosts, built, {"path": settings["hostSource"]["tree"]})
     print(f"[nixkube] the rollout evaluated a store-path source to the git source's toplevels: {built}", flush=True)
 
 
-async def waits_for_the_store(hosts: dict[str, Machine], settings: Settings) -> None:
+async def waits_for_the_store(api: kr8s.asyncio.Api, hosts: dict[str, Machine], settings: Settings) -> None:
     """#1156: pynixd does not answer as a source rollout starts; the rollout waits, not halts.
 
     On sg1 one apply restarted pynixd and changed the source, every node
@@ -380,15 +409,15 @@ async def waits_for_the_store(hosts: dict[str, Machine], settings: Settings) -> 
     cp = hosts["cp"]
     built: dict[str, str] = settings["hostBuilt"]
     source = {"path": settings["hostSource"]["tree"]}
-    service = f"--namespace {NAMESPACE} service/pynixd"
-    selector = (await get_json(cp, f"get {service}"))["spec"]["selector"]
-    await kubectl(cp, f"patch {service} --type merge --patch '{json.dumps({'spec': {'selector': NO_POD}})}'")
+    service = await Service.get("pynixd", namespace=NAMESPACE, api=api)
+    selector = raw(service)["spec"]["selector"]
+    await service.patch({"spec": {"selector": NO_POD}}, type="merge")
     try:
-        await apply(cp, rollout(built, source))
-        generation = (await get_json(cp, f"get nixosrollout {ROLLOUT}"))["metadata"]["generation"]
+        await apply(api, rollout(built, source))
+        generation = (await the_rollout(api))["metadata"]["generation"]
 
         async def waiting() -> tuple[bool, str]:
-            status: RolloutStatus = (await get_json(cp, f"get nixosrollout {ROLLOUT}")).get("status", {})
+            status = await rollout_status(api)
             if status.get("phase") == "Halted":
                 raise MachineError(f"[cp] the rollout halted while pynixd did not answer: {status}")
             # The controller builds one node at a time, so the other waits
@@ -403,21 +432,23 @@ async def waits_for_the_store(hosts: dict[str, Machine], settings: Settings) -> 
 
         await until("the rollout waits for pynixd", waiting, READY_TIMEOUT, cp)
     finally:
-        replace = [{"op": "replace", "path": "/spec/selector", "value": selector}]
-        await kubectl(cp, f"patch {service} --type json --patch '{json.dumps(replace)}'")
+        # A JSON patch: a merge patch would keep NO_POD's key beside the old ones.
+        await service.patch([{"op": "replace", "path": "/spec/selector", "value": selector}], type="json")
 
-    await switch_to(hosts, built, source)
-    after = (await get_json(cp, f"get nixosrollout {ROLLOUT}"))["metadata"]["generation"]
+    await switch_to(api, hosts, built, source)
+    after = (await the_rollout(api))["metadata"]["generation"]
     if after != generation:
         raise MachineError(f"[cp] the rollout needed generation {after}, not {generation}, to finish")
     print("[nixkube] the rollout waited for pynixd and finished in the same generation", flush=True)
 
 
-async def broken_halts(hosts: dict[str, Machine], first: dict[str, str], broken: str, worker_next: str) -> None:
+async def broken_halts(
+    api: kr8s.asyncio.Api, hosts: dict[str, Machine], first: dict[str, str], broken: str, worker_next: str
+) -> None:
     """cp's switch fails, so the rollout halts and never starts on worker."""
     cp, worker = hosts["cp"], hosts["worker"]
     # The host's timer fires `nixosHost.revertDelay` (30 s) after the switch.
-    status, started = await roll_to(cp, {"cp": broken, "worker": worker_next})
+    status, started = await roll_to(api, cp, {"cp": broken, "worker": worker_next})
     node = status["nodes"]["cp"]
     if status["phase"] != "Halted" or node.get("phase") != "Reverted":
         raise MachineError(f"[cp] the rollout to {broken} ended {status}")
@@ -427,8 +458,7 @@ async def broken_halts(hosts: dict[str, Machine], first: dict[str, str], broken:
         raise MachineError(f"[cp] the host is not back on {first['cp']}")
     if await armed(cp):
         raise MachineError("[cp] the revert is still armed after the revert")
-    spec = (await get_json(cp, "get node cp"))["spec"]
-    if not spec.get("unschedulable"):
+    if not await cordoned(api, "cp"):
         raise MachineError("[cp] the reverted node is not cordoned")
 
     if "worker" in started or status["nodes"]["worker"].get("phase") != "Pending":
@@ -436,16 +466,14 @@ async def broken_halts(hosts: dict[str, Machine], first: dict[str, str], broken:
     if await running(worker) != first["worker"]:
         raise MachineError("[worker] the host left its system under a halted rollout")
 
-    jobs = await get_json(
-        cp,
-        f"get jobs --namespace {NAMESPACE} --selector nixkube.nixidae.org/action=switch",
-    )
+    jobs = [
+        raw(j)
+        for j in await listed(Job, api, namespace=NAMESPACE, label_selector={"nixkube.nixidae.org/action": "switch"})
+    ]
     # A succeeded switch Job means the timer reverted, not the Job's own
     # failure branch.
     switch = [
-        j
-        for j in jobs["items"]
-        if any(e.get("value") == broken for e in j["spec"]["template"]["spec"]["containers"][0]["env"])
+        j for j in jobs if any(e.get("value") == broken for e in j["spec"]["template"]["spec"]["containers"][0]["env"])
     ]
     if not switch or not switch[0].get("status", {}).get("succeeded"):
         raise MachineError(f"[cp] the switch to {broken} did not succeed, so the timer went untested")
@@ -453,7 +481,7 @@ async def broken_halts(hosts: dict[str, Machine], first: dict[str, str], broken:
     # and generation.
     key = f"{ROLLOUT}\0worker\0{worker_next}\0{status['observedGeneration']}"
     late = f"nixos-switch-{hashlib.sha256(key.encode()).hexdigest()[:16]}"
-    if any(j["metadata"]["name"] == late for j in jobs["items"]):
+    if any(j["metadata"]["name"] == late for j in jobs):
         raise MachineError(f"[worker] the halted rollout made switch Job {late}")
     print(
         f"[nixkube] the timer reverted cp from {broken}; the rollout halted before worker",

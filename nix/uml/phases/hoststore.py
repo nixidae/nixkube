@@ -14,8 +14,9 @@ nix-daemon of nixkube's own. This asks what that has to mean:
     hostPath volumes created, is retired once nothing mounts from it
 """
 
-from nixkube_uml import NAMESPACE, READY_TIMEOUT, check_resident, probe
-from vivarium_k8s import get_json, until
+from kr8s.asyncio.objects import DaemonSet, Node
+from nixkube_uml import NAMESPACE, READY_TIMEOUT, check_resident, cluster, probe, raw
+from vivarium_k8s import until
 from vivarium_runner import Machine, MachineError, Machines
 
 STILL_ALIVE = "since it is still alive"
@@ -32,12 +33,13 @@ async def refuses_delete(cp: Machine, path: str, why: str) -> None:
 
 async def test(vms: Machines) -> None:
     cp, settings = vms.cp, vms.settings
+    api = await cluster(vms)
 
-    node = await get_json(cp, "get node cp")
+    node = raw(await Node.get("cp", api=api))
     label = node["metadata"].get("labels", {}).get("nixkube/host")
     if label != "nixos":
         raise MachineError(f"[cp] the node's nixkube/host label is {label!r}, not nixos")
-    separate = await get_json(cp, f"get daemonset nix-node-separate --namespace {NAMESPACE}")
+    separate = raw(await DaemonSet.get("nix-node-separate", namespace=NAMESPACE, api=api))
     scheduled = separate["status"].get("desiredNumberScheduled", 0)
     if scheduled != 0:
         raise MachineError(f"[cp] the separate DaemonSet still schedules {scheduled} pods")
@@ -66,12 +68,12 @@ async def test(vms: Machines) -> None:
     await refuses_delete(cp, running, "the node's running environment")
     await refuses_delete(cp, settings["workloadStorePath"], "the resident pod's volume")
 
-    async def retired():
+    async def retired() -> tuple[bool, str]:
         rc = (await cp.execute(f"test -e {settings['hostMountPath']}")).returncode
         return rc != 0, f"{settings['hostMountPath']} is still there"
 
     await until("the separate store to be retired", retired, READY_TIMEOUT, cp)
     print(f"[nixkube] {settings['hostMountPath']} is retired", flush=True)
 
-    await check_resident(cp, settings, "the host store checks")
-    await probe(cp, settings, "the host store checks")
+    await check_resident(api, cp, settings, "the host store checks")
+    await probe(api, cp, settings, "the host store checks")

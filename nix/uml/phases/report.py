@@ -5,9 +5,9 @@
 the error it raises; what it cannot know about is this namespace.
 """
 
-from nixkube_uml import report
+from nixkube_uml import cluster, report
 from vivarium_runner import Machines
 
 
 async def test(vms: Machines) -> None:
-    await report(vms.cp)
+    await report(await cluster(vms), vms.cp)

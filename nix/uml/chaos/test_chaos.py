@@ -10,7 +10,7 @@ which of the nine break the driver, not only the first.
 """
 
 import pytest
-from nixkube_uml import SCENARIOS, break_and_recover
+from nixkube_uml import SCENARIOS, break_and_recover, cluster
 from vivarium_runner import Machine, Machines
 
 
@@ -20,4 +20,4 @@ from vivarium_runner import Machine, Machines
     ids=[scenario[0].replace(" ", "-") for scenario in SCENARIOS],
 )
 async def test_a_pod_still_starts_after(cp: Machine, vms: Machines, name: str) -> None:
-    await break_and_recover(cp, vms.settings, name)
+    await break_and_recover(await cluster(vms), cp, vms.settings, name)

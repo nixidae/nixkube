@@ -17,29 +17,14 @@ phase's `bring_up` writes.
 """
 
 import json
-from typing import Any, cast
 
 import anyio
 import kr8s.asyncio
-from kr8s.asyncio.objects import APIObject, DaemonSet, Pod, new_class
+from kr8s.asyncio.objects import DaemonSet, Pod
+from nixkube_uml import NAMESPACE, PriorityClass, Settings, cluster, logs as pod_logs, raw
 from vivarium_k8s import until
 from vivarium_runner import Machine, MachineError, Machines
 
-# The test's settings: JSON from ./default.nix, read by key.
-type Settings = dict[str, Any]
-# An object as the API server returns it.
-type Manifest = dict[str, Any]
-
-
-def _raw(obj: APIObject) -> Manifest:
-    # kr8s types `raw` as a Box, whose methods carry no types.
-    return cast(Manifest, obj.raw)
-
-
-# kr8s guesses a plural by adding "s" to a kind it does not know.
-PriorityClass = new_class("PriorityClass", version="scheduling.k8s.io/v1", namespaced=False, plural="priorityclasses")
-
-NAMESPACE = "nixkube"
 SECCOMP_DIR = "/var/lib/kubelet/seccomp"
 ROLL_TIMEOUT = 5 * 60
 POD_TIMEOUT = 5 * 60
@@ -64,7 +49,7 @@ async def _profile_pod(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) -
 
     async def ended() -> tuple[bool, str]:
         await pod.refresh()
-        statuses = _raw(pod).get("status", {}).get("containerStatuses", [])
+        statuses = raw(pod).get("status", {}).get("containerStatuses", [])
         states = [s.get("state", {}) for s in statuses]
         done = bool(states) and all(
             "terminated" in state or state.get("waiting", {}).get("reason") in NOT_STARTED for state in states
@@ -72,17 +57,17 @@ async def _profile_pod(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) -
         return done, json.dumps(states)
 
     await until(f"pod {pod.name}", ended, POD_TIMEOUT, cp)
-    logs = "\n".join([line async for line in pod.logs(container="csi")]) if _ran(pod) else ""
+    said = await pod_logs(pod, "csi") if _ran(pod) else ""
     await pod.delete()
-    return pod, logs
+    return pod, said
 
 
 def _ran(pod: Pod) -> bool:
-    return any("terminated" in s.get("state", {}) for s in _raw(pod)["status"].get("containerStatuses", []))
+    return any("terminated" in s.get("state", {}) for s in raw(pod)["status"].get("containerStatuses", []))
 
 
 def _waiting(pod: Pod) -> list[str]:
-    return [s.get("state", {}).get("waiting", {}).get("reason", "") for s in _raw(pod)["status"]["containerStatuses"]]
+    return [s.get("state", {}).get("waiting", {}).get("reason", "") for s in raw(pod)["status"]["containerStatuses"]]
 
 
 async def _holds(node: Machine, settings: Settings) -> None:
@@ -94,7 +79,7 @@ async def _holds(node: Machine, settings: Settings) -> None:
 async def _set_mode(api: kr8s.asyncio.Api, cp: Machine, settings: Settings, *, enabled: bool) -> None:
     """Set `BUILD_PODS_ENABLED` on the node DaemonSet, and wait until every node runs the new pod."""
     daemonset = await DaemonSet.get(settings["nodeDaemonSet"], namespace=NAMESPACE, api=api)
-    containers = _raw(daemonset)["spec"]["template"]["spec"]["containers"]
+    containers = raw(daemonset)["spec"]["template"]["spec"]["containers"]
     index = next(i for i, c in enumerate(containers) if c["name"] == "nix-node")
     env = next(i for i, e in enumerate(containers[index]["env"]) if e["name"] == "BUILD_PODS_ENABLED")
     path = f"/spec/template/spec/containers/{index}/env/{env}"
@@ -109,8 +94,8 @@ async def _set_mode(api: kr8s.asyncio.Api, cp: Machine, settings: Settings, *, e
 
     async def rolled() -> tuple[bool, str]:
         await daemonset.refresh()
-        generation = _raw(daemonset)["metadata"]["generation"]
-        status = _raw(daemonset).get("status", {})
+        generation = raw(daemonset)["metadata"]["generation"]
+        status = raw(daemonset).get("status", {})
         want = status.get("desiredNumberScheduled", 0)
         done = (
             status.get("observedGeneration") == generation
@@ -127,9 +112,9 @@ async def _set_mode(api: kr8s.asyncio.Api, cp: Machine, settings: Settings, *, e
 async def test(vms: Machines) -> None:
     cp, settings = vms.cp, vms.settings
     nodes = [vms.cp, vms.worker]
-    api = await kr8s.asyncio.api(kubeconfig=str(vms.access / "kubeconfig"), namespace=NAMESPACE)
+    api = await cluster(vms)
 
-    priority = _raw(await PriorityClass.get("pynixd-build", api=api))
+    priority = raw(await PriorityClass.get("pynixd-build", api=api))
     if priority.get("value") != -1 or priority.get("preemptionPolicy") != "Never":
         raise MachineError(f"[cp] the build pods' PriorityClass is not -1 and Never: {priority}")
     print("[nixkube] the PriorityClass pynixd-build is -1, Never", flush=True)
