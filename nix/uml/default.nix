@@ -353,7 +353,17 @@ vivarium.mkTest (
 
     # What every phase and the chaos tests import: waits, probes, checks.
     # Not `lib/`, which .gitignore takes for a Python build directory.
-    pythonPath = [ ./helpers ];
+    pythonPath = [
+      ./helpers
+    ]
+    # kr8s for phases that reach the API server from the host, through
+    # `<out>/access/kubeconfig`. The fork: it honours that file's
+    # `tls-server-name`, which names the API server behind the host's forward.
+    ++ map (module: "${module}/${pkgs.python3.sitePackages}") (
+      pkgs.python3.pkgs.requiredPythonModules [
+        (pkgs.python3Packages.callPackage "${sources.nanopynix}/nix/kr8s.nix" { src = sources.kr8s; })
+      ]
+    );
 
     knobs = {
       /*
@@ -450,6 +460,12 @@ vivarium.mkTest (
           script = ./phases/workloads.py;
           after = [ "deploy" ];
         };
+        # After workloads: it rolls the node DaemonSet twice, and a roll while
+        # the manifest's Jobs mount their volumes fails them (measured).
+        buildpods = {
+          script = ./phases/buildpods.py;
+          after = [ "workloads" ];
+        };
         # After chaos, so a scheduler that picks chaos first cannot leave
         # these waiting behind a breakpoint on it.
         runtimes = {
@@ -465,7 +481,7 @@ vivarium.mkTest (
             tests = ./chaos;
             args = scenarioFilter config.resolved.scenarios.value;
           };
-          after = [ "workloads" ] ++ lib.optional hostStore "hoststore";
+          after = [ "buildpods" ] ++ lib.optional hostStore "hoststore";
         };
         report = {
           script = ./phases/report.py;
@@ -530,6 +546,7 @@ vivarium.mkTest (
           settings.probeRw
           settings.residentCat
           settings.workloadStorePath
+          settings.buildPodSeccomp
         ];
       };
 
@@ -561,6 +578,9 @@ vivarium.mkTest (
       # What a workload will ask the CSI driver to mount. A store path this
       # file names is a path the sandbox has.
       workloadStorePath = "${pkgs.hello}";
+      # What the node DaemonSet installs, and where. phases/buildpods.py.
+      buildPodSeccomp = "${pkgs.pynixd-builder-seccomp}";
+      buildPodSeccompProfile = manifest.config.nixkube.buildPods.seccompProfile;
       workloadImage = "vivarium.test/busybox:1";
       runtimes = runtimesFor { inherit backend cri kata; };
       inherit cri;

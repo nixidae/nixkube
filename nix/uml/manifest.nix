@@ -116,6 +116,8 @@ in
 
     # The host phase switches the guest's own system. Issue #24.
     nixosHost.enable = true;
+    # phases/buildpods.py turns it off and on again on the live node.
+    buildPods.enable = true;
     # The switch Job runs from the store the CSI driver mounts, so a node a
     # rollout switches needs the node DaemonSet. phases/cluster.py taints
     # worker to keep the other phases' workloads off it, not nixkube.
