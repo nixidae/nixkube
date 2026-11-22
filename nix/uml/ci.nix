@@ -97,6 +97,18 @@ vivarium.mkTest {
     script = ./ci.py;
     after = [ "boot" ];
   };
+  # The node test's helpers, and kr8s for them: they reach the API server
+  # from the host, through `<out>/access/kubeconfig`. The fork: it honours
+  # that file's `tls-server-name`, which names the API server behind the
+  # host's forward.
+  pythonPath = [
+    ./helpers
+  ]
+  ++ map (module: "${module}/${pkgs.python3.sitePackages}") (
+    pkgs.python3.pkgs.requiredPythonModules [
+      (pkgs.python3Packages.callPackage "${sources.nanopynix}/nix/kr8s.nix" { src = sources.kr8s; })
+    ]
+  );
   backend = "qemu";
   vivarium.recipes.kubernetes.enable = true;
 

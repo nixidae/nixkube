@@ -20,15 +20,10 @@ import os
 import subprocess
 import tempfile
 
-from vivarium_k8s import (
-    KUBE_DNS,
-    KUBE_PROXY,
-    bring_up,
-    get_json,
-    kubectl,
-    until,
-    wait_for_pods,
-)
+import kr8s.asyncio
+from kr8s.asyncio.objects import DaemonSet, Event, Job, Node, PersistentVolumeClaim, Pod
+from nixkube_uml import NAMESPACE, cluster, delete, listed, pod_ready, pod_state, pod_summary, raw, rolled_out
+from vivarium_k8s import KUBE_DNS, KUBE_PROXY, bring_up, until
 from vivarium_runner import Machine, Machines
 
 # kubeadm gives the API server a certificate for the addresses the node
@@ -88,9 +83,9 @@ def run(script: str, kubeconfig: str, *args: str) -> None:
         )
 
 
-async def check_store_split(cp: Machine, nixos: bool) -> None:
+async def check_store_split(api: kr8s.asyncio.Api, cp: Machine, nixos: bool) -> None:
     """With `nixkube.hostStore.enable`, the node's OS picks its DaemonSet."""
-    node = await get_json(cp, "get node cp")
+    node = raw(await Node.get("cp", api=api))
     label = node["metadata"].get("labels", {}).get("nixkube/host")
     assert label == ("nixos" if nixos else None), (
         f"the node's nixkube/host label is {label!r} on a {'NixOS' if nixos else 'non-NixOS'} node"
@@ -104,7 +99,7 @@ async def check_store_split(cp: Machine, nixos: bool) -> None:
     async def settled() -> tuple[bool, list[str]]:
         seen = []
         for name, want in ((serving, 1), (idle, 0)):
-            status = (await get_json(cp, f"get daemonset {name} --namespace nixkube"))["status"]
+            status = raw(await DaemonSet.get(name, namespace=NAMESPACE, api=api))["status"]
             ready = status.get("numberReady", 0)
             scheduled = status.get("desiredNumberScheduled", 0)
             seen.append(f"{name} has {ready} ready of {scheduled} scheduled, not {want}")
@@ -125,15 +120,47 @@ async def check_store_split(cp: Machine, nixos: bool) -> None:
         print(f"[test] the guest's daemon substitutes from nowhere; nixkube's serves {own}")
 
 
+def node_line(node: Node) -> str:
+    conditions = raw(node).get("status", {}).get("conditions", [])
+    ready = any(c["type"] == "Ready" and c["status"] == "True" for c in conditions)
+    return f"{node.name} {'Ready' if ready else 'NotReady'}"
+
+
+async def wait_for_pods(api: kr8s.asyncio.Api, cp: Machine, selector: dict[str, str]) -> None:
+    """Every pod the selector matches runs, and is ready."""
+
+    def up(pod: Pod) -> bool:
+        ready, total = pod_ready(raw(pod)).split("/")
+        return pod_state(raw(pod)) == "Running" and ready == total
+
+    async def ready() -> tuple[bool, str]:
+        pods = await listed(Pod, api, namespace=NAMESPACE, label_selector=selector)
+        return bool(pods) and all(up(p) for p in pods), pod_summary(pods)
+
+    await until(f"pods {selector}", ready, 300, cp)
+
+
+async def succeeded(api: kr8s.asyncio.Api) -> set[str]:
+    return {j.name for j in await listed(Job, api, namespace=NAMESPACE) if raw(j).get("status", {}).get("succeeded")}
+
+
+async def job_table(api: kr8s.asyncio.Api) -> str:
+    return "\n".join(
+        f"{j.name} succeeded={raw(j).get('status', {}).get('succeeded', 0)} failed={raw(j).get('status', {}).get('failed', 0)}"
+        for j in await listed(Job, api, namespace=NAMESPACE)
+    )
+
+
 async def test(vms: Machines) -> None:
     settings = vms.settings
     cp = await bring_up(vms, addons=(KUBE_PROXY, KUBE_DNS))
+    api = await cluster(vms)
 
     with tempfile.TemporaryDirectory(prefix="nixkube-ci-") as work:
         kubeconfig = os.path.join(work, "kubeconfig")
         write(kubeconfig, await host_kubeconfig(cp))
         print(f"[test] the host reaches the API server on {cp.reachable(6443)[0]}")
-        print(await kubectl(cp, "get nodes"))
+        print("\n".join(node_line(n) for n in await listed(Node, api)))
 
         if settings["foreignHost"]:
             await cp.succeed("rm /etc/NIXOS")
@@ -142,19 +169,18 @@ async def test(vms: Machines) -> None:
         run(settings["deploy"], kubeconfig, "--yes")
         print("[test] nixkube deployed through kubenixDeploy")
 
-        async def rolled_out() -> tuple[bool, list[str]]:
-            done = await cp.execute(
-                "kubectl rollout status daemonset"
-                " --selector app.kubernetes.io/component=node"
-                " --namespace nixkube --timeout=10s 2>&1"
+        async def node_rolled_out() -> tuple[bool, str]:
+            daemonsets = await listed(
+                DaemonSet, api, namespace=NAMESPACE, label_selector={"app.kubernetes.io/component": "node"}
             )
-            return done.returncode == 0, done.stdout.strip().splitlines()[-1:] or ["(no answer yet)"]
+            seen = "; ".join(f"{d.name} {raw(d).get('status', {})}" for d in daemonsets)
+            return bool(daemonsets) and all(rolled_out(raw(d)) for d in daemonsets), seen or "(no DaemonSet yet)"
 
-        await until("the node DaemonSet", rolled_out, 300, cp)
+        await until("the node DaemonSet", node_rolled_out, 300, cp)
         print("[test] the node DaemonSet rolled out")
 
         if settings["hostStore"]:
-            await check_store_split(cp, nixos=not settings["foreignHost"])
+            await check_store_split(api, cp, nixos=not settings["foreignHost"])
 
         if settings["pynixd"]:
             # The `Wait for nix-csi cache pod` step of `test-kind-cache`.
@@ -164,33 +190,20 @@ async def test(vms: Machines) -> None:
             # `services.vivarium-k8s.persistentVolumes` in nix/uml/ci.nix. The
             # claim is reported beside the pod because a Pending pod and an
             # unbound claim look the same from here.
-            await wait_for_pods(
-                cp,
-                "--selector app.kubernetes.io/component=pynixd",
-                namespace="nixkube",
+            await wait_for_pods(api, cp, {"app.kubernetes.io/component": "pynixd"})
+            claims = ", ".join(
+                f"{c.name} {raw(c).get('status', {}).get('phase')} {raw(c)['spec'].get('volumeName')}"
+                for c in await listed(PersistentVolumeClaim, api, namespace=NAMESPACE)
             )
-            claims = await kubectl(cp, "get pvc --namespace nixkube --no-headers")
-            print(f"[test] the pynixd cache is ready, on {claims.strip()}")
+            print(f"[test] the pynixd cache is ready, on {claims}")
 
         run(settings["deployWorkloads"], kubeconfig, "--yes")
         print("[test] the test workloads are deployed")
 
         asserted = settings["assertedJobs"]
 
-        async def succeeded() -> set[str]:
-            out = await kubectl(
-                cp,
-                "get jobs --namespace nixkube --no-headers"
-                " --output custom-columns=NAME:.metadata.name,OK:.status.succeeded",
-            )
-            return {
-                row.split()[0]
-                for row in out.splitlines()
-                if len(row.split()) > 1 and row.split()[1] not in ("<none>", "0")
-            }
-
         async def complete() -> tuple[bool, str]:
-            done = await succeeded()
+            done = await succeeded(api)
             missing = [job for job in asserted if job not in done]
             return (
                 not missing,
@@ -204,12 +217,9 @@ async def test(vms: Machines) -> None:
         # complete with its store from somewhere else, and then there is
         # no such event. `report_event` prefixes every reason with `Nix`,
         # so the code's "VolumeMount" is NixVolumeMount on the cluster.
-        mounts = await get_json(
-            cp,
-            "get events --namespace nixkube --field-selector reason=NixVolumeMount",
-        )
-        assert mounts["items"], "the jobs completed and the CSI driver reported no NixVolumeMount"
-        print(f"[test] the CSI driver reported {len(mounts['items'])} NixVolumeMount events")
+        mounts = await listed(Event, api, namespace=NAMESPACE, field_selector={"reason": "NixVolumeMount"})
+        assert mounts, "the jobs completed and the CSI driver reported no NixVolumeMount"
+        print(f"[test] the CSI driver reported {len(mounts)} NixVolumeMount events")
 
         # And the ones that must not finish -- see ci/test-jobs.nix.
         #
@@ -221,21 +231,22 @@ async def test(vms: Machines) -> None:
         # is still trying, so there is nothing to poll. It can miss a
         # success that arrives later; it cannot report one that never came.
         rejected = settings["rejectedJobs"]
-        wrong = sorted(await succeeded() & set(rejected))
+        wrong = sorted(await succeeded(api) & set(rejected))
         assert not wrong, (
             f"{', '.join(wrong)} succeeded, and each of them asks for"
-            " something that cannot be built:\n" + await kubectl(cp, "get jobs --namespace nixkube")
+            " something that cannot be built:\n" + await job_table(api)
         )
         print(f"[test] {', '.join(rejected)} were all refused")
 
-        deployed = " ".join(settings["deployedJobs"])
-        await kubectl(cp, f"delete job --namespace nixkube {deployed}", timeout=300)
-        selector = ",".join(settings["deployedJobs"])
-        await kubectl(
-            cp,
-            f'wait --for=delete pod --selector "job-name in ({selector})" --namespace nixkube --timeout=120s',
-            timeout=180,
-        )
+        for name in settings["deployedJobs"]:
+            await delete(await Job.get(name, namespace=NAMESPACE, api=api), cp)
+        selector = f"job-name in ({','.join(settings['deployedJobs'])})"
+
+        async def pods_gone() -> tuple[bool, str]:
+            pods = await listed(Pod, api, namespace=NAMESPACE, label_selector=selector)
+            return not pods, pod_summary(pods)
+
+        await until("the jobs' pods to go", pods_gone, 120, cp)
         print("[test] the jobs are gone and their pods with them")
 
         # What `vivarium.diskSize` has to cover, measured rather than
