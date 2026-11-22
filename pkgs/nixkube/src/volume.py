@@ -32,6 +32,7 @@ from .nix import (
     install_result_link,
     verify_store_paths,
 )
+from .nri.farm import FarmError, build_farm
 from .presentation import Presentation
 
 logger = structlog.get_logger("nixkube.volume")
@@ -309,6 +310,49 @@ async def mount_volume(
                 )
 
 
+FARM_STORE = Path("nix/store")
+"""A CSI farm's store, in its volume root. It is a tmpfs of its own, so one detach takes every bind in it,
+and no delete of the volume root can reach through a bind into the node's store."""
+
+
+def mount_farm(volume_root: Path, store_paths: list[Path]) -> int:
+    """The CSI farm: a tmpfs at `FARM_STORE`, then one read-only bind of each path (`build_farm`).
+
+    The binds live in this daemon's mount namespace, not in a worker's as an NRI farm does: kubelet bind-mounts
+    the published target into the pod, so the tree must be in a namespace kubelet sees. `prepare_volume`'s
+    budget check counts them. Answers how many it bound."""
+    store_dir = volume_root / FARM_STORE
+    store_dir.mkdir(parents=True, exist_ok=True)
+    if not is_mount(store_dir):
+        ret = _libc.mount(b"tmpfs", os.fsencode(store_dir), b"tmpfs", 0, b"mode=0755")
+        if ret != 0:
+            err = ctypes.get_errno()
+            raise MountError(f"Failed to mount the farm's tmpfs: {os.strerror(err)} (errno {err})", logs="")
+    try:
+        bound = build_farm(store_dir, store_paths)
+        # Read-only before the publish binds it: kubelet's namespace gets copies of these mounts at that bind, and
+        # a later mount_setattr reaches this namespace's mounts only. Measured: the pod could write the tmpfs.
+        set_readonly(store_dir, recursive=False)
+    except (FarmError, OSError) as error:
+        detach_farm(volume_root)
+        raise MountError(f"Failed to build the farm: {error}", logs="") from error
+    return bound
+
+
+def is_farm(volume_root: Path) -> bool:
+    return is_mount(volume_root / FARM_STORE)
+
+
+def detach_farm(volume_root: Path) -> None:
+    """Take a CSI farm down, every bind with its tmpfs. Nothing to do for a volume with no farm."""
+    store_dir = volume_root / FARM_STORE
+    if not is_farm(volume_root):
+        return
+    if _libc.umount2(os.fsencode(store_dir), MNT_DETACH) != 0:
+        err = ctypes.get_errno()
+        raise UnmountError(f"Failed to detach the farm at {store_dir}: {os.strerror(err)} (errno {err})", logs="")
+
+
 def is_mount_source(path: Path, mountinfo_file: Path | None = None) -> bool:
     """Is `path` the source of a mount that is live right now?
 
@@ -350,9 +394,11 @@ def cleanup_failed_volume(gc_root: Path, volume_root: Path) -> None:
     """
     failed_paths = []
     for path in [gc_root, volume_root]:
-        if path == volume_root and is_mount_source(path):
+        if path == volume_root and (is_mount_source(path) or is_mount_source(path / "nix")):
             logger.info("cleanup_skipped_live_mount", path=str(path))
             continue
+        if path == volume_root:
+            detach_farm(path)
         if path.exists():
             try:
                 shutil.rmtree(path)
@@ -396,17 +442,20 @@ def is_mount(path: Path, mounts_file: Path | None = None) -> bool:
         return False
 
 
-async def unmount(path: Path, mounts_file: Path | None = None) -> None:
+async def unmount(path: Path, mounts_file: Path | None = None, *, detach: bool = False) -> None:
     """Unmount a path using syscall. Raises UnmountError if the mount persists.
 
     Args:
         path: Path to unmount
         mounts_file: Path to mounts file for checking (default: /proc/self/mounts)
+        detach: MNT_DETACH, for a farm's target: it carries one submount per
+            store path, and a plain umount2 of it answers EBUSY. Only there:
+            elsewhere EBUSY says something still uses the volume.
     """
-    logger.debug("unmounting", path=str(path))
+    logger.debug("unmounting", path=str(path), detach=detach)
     ret = _libc.umount2(
         ctypes.c_char_p(os.fsencode(path)),
-        ctypes.c_int(0),
+        ctypes.c_int(MNT_DETACH if detach else 0),
     )
     err = ctypes.get_errno() if ret != 0 else 0
 

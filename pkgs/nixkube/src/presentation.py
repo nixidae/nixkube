@@ -31,15 +31,21 @@ class Presentation(StrEnum):
     REFUSED = "refused"
 
 
-def csi(*, enabled: bool, kernel: bool, user_namespace: bool, host_store: bool) -> Presentation:
+def csi(*, farm: bool, enabled: bool, kernel: bool, user_namespace: bool, host_store: bool) -> Presentation:
     """A CSI volume.
+
+    A farm only when the volume asks for one (`presentation: farm`): kubelet's
+    `subPath` bind does not carry submounts, so a farm volume is mounted with
+    no `subPath`, which the default volume layout needs. The farm's binds are
+    of the store's own filesystem, never of an overlay.
 
     A pod with `hostUsers: false` gets an idmapped mount of every volume,
     and the kernel refuses MOUNT_ATTR_IDMAP on an overlay: measured on 7.2,
     CRI-O's runc failed "failed to set MOUNT_ATTR_IDMAP ... invalid
     argument". A host-store node has no hardlink tree: a hardlink out of the
-    host's store fails with EXDEV. No farm: kubelet's `subPath` bind does not
-    carry submounts."""
+    host's store fails with EXDEV."""
+    if farm:
+        return Presentation.FARM
     if enabled and kernel and not user_namespace:
         return Presentation.COMPOSEFS
     if host_store:
@@ -98,6 +104,7 @@ def nri_chart(
 
 # Each input as the chart asks it, in the order the chart asks.
 QUESTIONS: Final = {
+    "farm": "presentation: farm\nasked?",
     "vm": "VM runtime\n(Kata)?",
     "host_store": "host-store\nnode?",
     "enabled": "composefs\noption on?",
@@ -180,7 +187,7 @@ def dot_lines(prefix: str, title: str, root: Question | Leaf) -> list[str]:
 
 
 def chart() -> str:
-    csi_names = ["enabled", "kernel", "user_namespace", "host_store"]
+    csi_names = ["farm", "enabled", "kernel", "user_namespace", "host_store"]
     nri_names = ["vm", "enabled", "kernel", "bind_farm", "host_store", "farm_fits"]
     lines = [
         "// Rendered by `python -m src.presentation`. Do not edit.",

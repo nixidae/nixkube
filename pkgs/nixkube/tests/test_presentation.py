@@ -30,12 +30,26 @@ def test_csi(
     shown: Presentation,
 ) -> None:
     chosen = presentation.csi(
+        farm=False,
         enabled=enabled,
         kernel=kernel,
         user_namespace=user_namespace,
         host_store=host_store,
     )
     assert chosen is shown
+
+
+@pytest.mark.parametrize("user_namespace", [False, True])
+@pytest.mark.parametrize("host_store", [False, True])
+def test_a_csi_volume_that_asks_for_a_farm_gets_one(user_namespace: bool, host_store: bool) -> None:
+    chosen = presentation.csi(
+        farm=True,
+        enabled=True,
+        kernel=True,
+        user_namespace=user_namespace,
+        host_store=host_store,
+    )
+    assert chosen is Presentation.FARM
 
 
 @pytest.mark.parametrize(

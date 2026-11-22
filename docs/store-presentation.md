@@ -61,6 +61,12 @@ Two more facts apply to the farm and the tree:
 nixkube tries composefs first, and uses a hardlink tree when composefs cannot
 work. It decides for each volume:
 
+0. The volume asks for a farm (`volumeAttributes.presentation: farm`): the
+   bind farm. Its store is on a tmpfs of its own, and the volume is its `nix`
+   directory: mount it at `/nix` with no `subPath`, and with `readOnly: true`,
+   since nothing goes over a farm. Past the mount budget it is a hardlink tree
+   in the same place. pynixd's build pods ask for it: the build's sandbox binds
+   each input read-only, as Nix does.
 1. `nixkube.csi.composefs = false`: a hardlink tree.
 2. The kernel fails the probe (no EROFS, as on Talos 1.11 to 1.13 and GKE
    COS 125 and 129): a hardlink tree.
@@ -71,7 +77,7 @@ work. It decides for each volume:
 The probe mounts a small image and accepts only an exact root. A kernel
 that silently shows the whole base directory fails it.
 
-CSI does not use the bind farm, because it breaks `subPath`.
+CSI uses the bind farm only when the volume asks, because it breaks `subPath`.
 
 ## NRI
 

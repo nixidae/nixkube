@@ -1181,6 +1181,10 @@ let
         # A mount flag can only be checked by mounting. Issue #66.
         csi-mount-rec = fromNixosTest (import ./tests/nixos/csi-mount-rec.nix { inherit pkgs lib; });
 
+        # A CSI volume that asks for a farm: published, read-only, torn down.
+        # nixidae/nixidae#1560.
+        csi-farm = fromNixosTest (import ./tests/nixos/csi-farm.nix { inherit pkgs lib; });
+
         # nixkube's own `build_farm`, as root against a real closure. Issue #65.
         farm-builder = fromNixosTest (import ./tests/nixos/farm-builder.nix { inherit pkgs lib; });
 

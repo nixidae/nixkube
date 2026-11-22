@@ -33,7 +33,7 @@ from ..constants import (
 )
 from ..errors import CSIError, MountError
 from ..events import report_event
-from ..kube_docs import pod_doc
+from ..kube_docs import Volume, pod_doc
 from ..metrics import (
     VOLUME_MOUNTS,
     VOLUME_PREPARE_DURATION,
@@ -50,7 +50,10 @@ from ..nri.annotations import parse_pod_exclude
 from ..presentation import Presentation
 from ..volume import (
     cleanup_failed_volume,
+    detach_farm,
+    is_farm,
     is_mount,
+    mount_farm,
     mount_volume,
     prepare_volume,
     unmount,
@@ -60,6 +63,13 @@ from .cleanup import TARGET_FILE, cleanup_stale_entries, collect_active_volume_h
 from .identity import IdentityServicer
 
 _NIXKUBE_DRIVERS = {"nixkube", "nix.csi.store"}
+PRESENTATION_ATTRIBUTE = "presentation"
+"""A volume attribute: `farm` asks for one read-only bind per store path, published as the volume's `nix`
+directory, to be mounted at `/nix` with no `subPath` and `readOnly: true`. Absent: nixkube chooses."""
+
+
+def asks_for_farm(volume: Volume) -> bool:
+    return volume.get("csi", {}).get("volumeAttributes", {}).get(PRESENTATION_ATTRIBUTE) == Presentation.FARM
 
 
 async def check_csi_volume_mounts(pod: Pod) -> None:
@@ -68,7 +78,9 @@ async def check_csi_volume_mounts(pod: Pod) -> None:
     Checks two conditions for each nixkube CSI volume in the pod spec:
     - MissingSubPath: a volumeMount exists without subPath='nix', which causes
       the volume root (not the nix/ subtree) to be mounted, making /nix/store
-      paths inaccessible at the expected location.
+      paths inaccessible at the expected location. A farm volume is its `nix`
+      directory already, and wants no subPath: FarmSubPath when it has one,
+      because kubelet's subPath bind drops the farm's binds.
     - MissingNixMount: no container mounts the volume at /nix, so /nix/store
       paths will never be reachable regardless of subPath.
     """
@@ -87,8 +99,20 @@ async def check_csi_volume_mounts(pod: Pod) -> None:
             if vm["name"] == vol_name
         ]
 
+        farm = asks_for_farm(volume)
         for container, vm in vol_mounts:
-            if not vm.get("subPath"):
+            if farm and vm.get("subPath"):
+                await report_event(
+                    pod,
+                    reason="FarmSubPath",
+                    note=(
+                        f"Volume '{vol_name}' in container '{container['name']}' asks for a farm and is mounted"
+                        f" with subPath '{vm['subPath']}'. A subPath bind drops the farm's mounts: mount it at"
+                        " /nix with no subPath."
+                    ),
+                    event_type="Warning",
+                )
+            elif not farm and not vm.get("subPath"):
                 await report_event(
                     pod,
                     reason="MissingSubPath",
@@ -189,6 +213,17 @@ class NodeServicer(csi_grpc.NodeBase):
                 Status.INVALID_ARGUMENT,
                 "This CSI driver only supports ephemeral volumes",
             )
+
+        asked = request.volume_context.get(PRESENTATION_ATTRIBUTE)
+        if asked not in (None, Presentation.FARM):
+            raise GRPCError(
+                Status.INVALID_ARGUMENT,
+                f"volume attribute {PRESENTATION_ATTRIBUTE}={asked!r}: the one value is {Presentation.FARM!r}",
+            )
+        farm = asked == Presentation.FARM
+        # No overlay over a farm: overlayfs does not follow a lower layer's submounts.
+        if farm and not request.readonly:
+            raise GRPCError(Status.INVALID_ARGUMENT, "a farm volume is read-only: set readOnly: true")
 
         log = logger.bind(volume_id=request.volume_id)
 
@@ -323,6 +358,7 @@ class NodeServicer(csi_grpc.NodeBase):
 
             try:
                 shown = presentation.csi(
+                    farm=farm,
                     enabled=CSI_COMPOSEFS,
                     kernel=CSI_COMPOSEFS and await composefs.available(),
                     user_namespace=pod_doc(pod).get("spec", {}).get("hostUsers") is False,
@@ -342,6 +378,20 @@ class NodeServicer(csi_grpc.NodeBase):
                     # whether this target is still mounted instead.
                     (volume_root / TARGET_FILE).write_text(request.target_path)
                     await composefs.mount(image, Path(request.target_path), request.readonly, volume_root)
+                elif shown is Presentation.FARM:
+                    prepared = await prepare_volume(
+                        volume_root,
+                        package_paths,
+                        primary_package,
+                        bind_farm=True,
+                        allow_hardlinks=not HOST_STORE,
+                    )
+                    # Past the mount budget the volume is a hardlink tree in the same place.
+                    if prepared.bind_farm:
+                        bound = await anyio.to_thread.run_sync(mount_farm, volume_root, prepared.paths)
+                        log.debug("farm_bound", paths=bound)
+                    (volume_root / TARGET_FILE).write_text(request.target_path)
+                    await mount_volume(volume_root / "nix", Path(request.target_path), readonly=True)
                 elif shown is Presentation.REFUSED:
                     raise MountError(
                         "this node shares its host's store, where a volume can only be"
@@ -420,7 +470,7 @@ class NodeServicer(csi_grpc.NodeBase):
             # kubelet-managed mount directory (that's kubelet's job).
             if is_mount(target_path):
                 try:
-                    await unmount(target_path)
+                    await unmount(target_path, detach=is_farm(CSI_VOLUMES / request.volume_id))
                 except Exception:
                     # Counted before it propagates. A node that cannot unmount
                     # leaves pods in Terminating, and this is the series that
@@ -435,6 +485,9 @@ class NodeServicer(csi_grpc.NodeBase):
                 # path already gone is a repeat of work that was done, and
                 # counting it would inflate the total over the mounts.
                 log.debug("not_mounted")
+
+            # A farm's binds stay in this namespace after the pod's copy goes.
+            detach_farm(CSI_VOLUMES / request.volume_id)
 
             # Clean up stale gcroots and volume directories based on active volumes.
             # This catches orphaned resources from volumes that failed to unpublish cleanly.

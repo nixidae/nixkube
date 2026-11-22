@@ -231,6 +231,27 @@ class TestCheckCsiVolumeMounts:
             assert reasons.count("MissingNixMount") == 1
 
     @pytest.mark.asyncio
+    async def test_a_farm_at_nix_with_no_subpath_emits_nothing(self) -> None:
+        """A farm volume is its `nix` directory: mounted at /nix as it is."""
+        farm: Volume = {"name": "nix-store", "csi": {"driver": "nixkube", "volumeAttributes": {"presentation": "farm"}}}
+        pod = make_pod({"containers": [container_with_mounts("app", mount("nix-store", "/nix"))], "volumes": [farm]})
+        with patch("src.csi.server.report_event", new_callable=AsyncMock) as mock_event:
+            await check_csi_volume_mounts(pod)
+            mock_event.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_farm_with_a_subpath_emits_farm_subpath(self) -> None:
+        """kubelet's subPath bind drops the farm's binds, so a subPath on a farm is the mistake."""
+        farm: Volume = {"name": "nix-store", "csi": {"driver": "nixkube", "volumeAttributes": {"presentation": "farm"}}}
+        pod = make_pod(
+            {"containers": [container_with_mounts("app", mount("nix-store", "/nix", "nix"))], "volumes": [farm]}
+        )
+        with patch("src.csi.server.report_event", new_callable=AsyncMock) as mock_event:
+            await check_csi_volume_mounts(pod)
+            reasons = [c.kwargs["reason"] for c in mock_event.call_args_list]
+            assert reasons == ["FarmSubPath"]
+
+    @pytest.mark.asyncio
     async def test_events_are_warnings(self) -> None:
         """All emitted events have event_type='Warning'.
 

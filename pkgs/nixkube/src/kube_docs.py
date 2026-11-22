@@ -87,6 +87,8 @@ class Container(TypedDict, total=False):
 
 class CSIVolumeSource(TypedDict, total=False):
     driver: str
+    readOnly: bool
+    volumeAttributes: dict[str, str]
 
 
 class EmptyDirVolumeSource(TypedDict, total=False):

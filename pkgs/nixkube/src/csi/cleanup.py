@@ -7,11 +7,12 @@ from pathlib import Path
 import structlog
 
 from ..constants import CSI_GCROOTS, CSI_VOLUMES, KUBELET_PODS_PATH
-from ..volume import is_mount, is_mount_source
+from ..volume import detach_farm, is_mount, is_mount_source
 
-# In a composefs volume's root: the target it is mounted at. Its mount's
-# source is the image, never the volume root, so `is_mount_source` cannot
-# see that the volume is live; whether this target is mounted can.
+# In a composefs or farm volume's root: the target it is mounted at. The
+# mount's source is the image, or the root's `nix` directory, never the volume
+# root, so `is_mount_source` cannot see that the volume is live; whether this
+# target is mounted can.
 TARGET_FILE = "target"
 
 
@@ -57,9 +58,9 @@ def cleanup_stale_entries(active_handles: set[str]) -> None:
     entries whose name (volume ID) is not in the set of active volume handles.
     """
     for gcroot in CSI_GCROOTS.iterdir():
-        # A composefs volume reads every file from the store path itself, so
-        # its root has to outlive any short list while the mount is there; a
-        # hardlink tree held its inodes and did not need this.
+        # A composefs or farm volume reads every file from the store path
+        # itself, so its root has to outlive any short list while the mount is
+        # there; a hardlink tree held its inodes and did not need this.
         if target_is_mounted(CSI_VOLUMES / gcroot.name):
             logger.info("stale_gcroot_still_mounted", path=str(gcroot))
             continue
@@ -77,10 +78,11 @@ def cleanup_stale_entries(active_handles: set[str]) -> None:
             # from reading vol_data.json files, and a kubelet that is
             # restarting can leave that answer short. The mount table cannot
             # be short: it is what the pod is actually using.
-            if is_mount_source(volume) or target_is_mounted(volume):
+            if is_mount_source(volume) or is_mount_source(volume / "nix") or target_is_mounted(volume):
                 logger.info("stale_volume_still_mounted", path=str(volume))
                 continue
             try:
+                detach_farm(volume)
                 shutil.rmtree(volume)
                 logger.debug("removed_stale_volume", path=str(volume))
             except Exception:

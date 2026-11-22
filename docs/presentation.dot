@@ -6,21 +6,25 @@ digraph presentation {
   subgraph cluster_csi {
     label="CSI volume";
     fontname=sans;
-    csi_q0 [label="composefs\noption on?", shape=diamond];
-    csi_q1 [label="kernel passes the\ncomposefs probe?", shape=diamond];
-    csi_q2 [label="hostUsers: false?", shape=diamond];
-    csi_q3 [label="host-store\nnode?", shape=diamond];
+    csi_q0 [label="presentation: farm\nasked?", shape=diamond];
+    csi_farm [label="farm", shape=box, style="rounded,filled", fillcolor=lightblue];
+    csi_q0 -> csi_farm [label="yes"];
+    csi_q2 [label="composefs\noption on?", shape=diamond];
+    csi_q3 [label="kernel passes the\ncomposefs probe?", shape=diamond];
+    csi_q4 [label="hostUsers: false?", shape=diamond];
+    csi_q5 [label="host-store\nnode?", shape=diamond];
     csi_refused [label="refused", shape=box, style="rounded,filled", fillcolor=lightpink];
-    csi_q3 -> csi_refused [label="yes"];
+    csi_q5 -> csi_refused [label="yes"];
     csi_hardlinks [label="hardlinks", shape=box, style="rounded,filled", fillcolor=khaki];
-    csi_q3 -> csi_hardlinks [label="no"];
-    csi_q2 -> csi_q3 [label="yes"];
+    csi_q5 -> csi_hardlinks [label="no"];
+    csi_q4 -> csi_q5 [label="yes"];
     csi_composefs [label="composefs", shape=box, style="rounded,filled", fillcolor=palegreen];
-    csi_q2 -> csi_composefs [label="no"];
-    csi_q1 -> csi_q2 [label="yes"];
-    csi_q1 -> csi_q3 [label="no"];
-    csi_q0 -> csi_q1 [label="yes"];
-    csi_q0 -> csi_q3 [label="no"];
+    csi_q4 -> csi_composefs [label="no"];
+    csi_q3 -> csi_q4 [label="yes"];
+    csi_q3 -> csi_q5 [label="no"];
+    csi_q2 -> csi_q3 [label="yes"];
+    csi_q2 -> csi_q5 [label="no"];
+    csi_q0 -> csi_q2 [label="no"];
   }
   subgraph cluster_nri {
     label="NRI /nix";
