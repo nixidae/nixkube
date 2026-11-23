@@ -5,7 +5,7 @@ else. `builder` also gets a createContainer hook that sets the host name to `loc
   - a new network, IPC, UTS and cgroup namespace (an empty path asks the runtime for a new one)
   - a seccomp policy that refuses a setuid or setgid chmod with EPERM, as Nix's filter does
   - no kubelet file mounts and no service account token
-  - no `KUBERNETES_*` variables
+  - no `HOSTNAME` and no `KUBERNETES_*` variables
 
 It prints, once per such container, the mounts and variables the runtime offered, as one JSON line.
 """
@@ -38,7 +38,17 @@ MOUNTS: Final = (
     "/dev/termination-log",
     "/var/run/secrets/kubernetes.io/serviceaccount",
 )
-ENV: Final = ("KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT", "KUBERNETES_PORT")
+ENV: Final = (
+    "HOSTNAME",
+    "KUBERNETES_PORT",
+    "KUBERNETES_PORT_443_TCP",
+    "KUBERNETES_PORT_443_TCP_ADDR",
+    "KUBERNETES_PORT_443_TCP_PORT",
+    "KUBERNETES_PORT_443_TCP_PROTO",
+    "KUBERNETES_SERVICE_HOST",
+    "KUBERNETES_SERVICE_PORT",
+    "KUBERNETES_SERVICE_PORT_HTTPS",
+)
 EPERM: Final = 1
 # The mode argument of each call, as Nix's `setupSeccomp` names them.
 CHMODS: Final = {"chmod": 1, "fchmod": 1, "fchmodat": 2, "fchmodat2": 2}

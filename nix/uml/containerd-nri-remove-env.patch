@@ -1,0 +1,38 @@
+containerd/nri 193a7fdfa4 (2026-11-07, after v0.12.5), in containerd 2.4.1's vendored NRI v0.12.3.
+Without it a plugin's removal of a variable no plugin set never reaches the runtime
+(measured: all eight KUBERNETES_* stayed, nixkube's nriprobe phase, nixidae/nixidae#1560).
+
+diff --git a/vendor/github.com/containerd/nri/pkg/adaptation/result.go b/vendor/github.com/containerd/nri/pkg/adaptation/result.go
+index 0bc7101..8a1be08 100644
+--- a/vendor/github.com/containerd/nri/pkg/adaptation/result.go
++++ b/vendor/github.com/containerd/nri/pkg/adaptation/result.go
+@@ -436,6 +436,13 @@ func (r *result) adjustDevices(devices []*LinuxDevice, plugin string) error {
+ 		r.reply.adjust.Linux.Devices = append(r.reply.adjust.Linux.Devices, d)
+ 	}
+ 
++	// next, apply deletions with no corresponding additions
++	for path, d := range del {
++		if _, ok := mod[path]; !ok {
++			r.reply.adjust.Linux.Devices = append(r.reply.adjust.Linux.Devices, d)
++		}
++	}
++
+ 	// finally, apply additions/modifications to plugin container creation request
+ 	create.Container.Linux.Devices = append(create.Container.Linux.Devices, add...)
+ 
+@@ -635,6 +642,15 @@ func (r *result) adjustEnv(env []*KeyValue, plugin string) error {
+ 		r.reply.adjust.Env = append(r.reply.adjust.Env, e)
+ 	}
+ 
++	// next, apply deletions with no corresponding additions
++	for key := range del {
++		if _, ok := mod[key]; !ok {
++			r.reply.adjust.Env = append(r.reply.adjust.Env, &KeyValue{
++				Key: MarkForRemoval(key),
++			})
++		}
++	}
++
+ 	// finally, apply additions/modifications to plugin container creation request
+ 	for _, e := range add {
+ 		create.Container.Env = append(create.Container.Env, e.ToOCI())

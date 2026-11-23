@@ -78,6 +78,15 @@ let
   # What both nodes share. kubeadm hands the worker the control plane's
   # KubeletConfiguration, so `kubeletSettings` reaches both from here.
   nodeBase = index: role: {
+    # NRI's fix for removing a variable, which a build pod's builder needs (phases/nriprobe.py).
+    nixpkgs.overlays = [
+      (_: prev: {
+        containerd = prev.containerd.overrideAttrs (old: {
+          patches = (old.patches or [ ]) ++ [ ./containerd-nri-remove-env.patch ];
+        });
+      })
+    ];
+
     services.vivarium-k8s = {
       enable = true;
       inherit role;

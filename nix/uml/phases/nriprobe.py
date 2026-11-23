@@ -13,8 +13,8 @@ image as a build uid. The phase asserts that the builder starts after the contro
 that uid, gets the same namespaces and filter, and that the plugin's hook sets its host name to `localhost`.
 
 It reports, and does not assert, what NRI has no field for: the hostname, and whether loopback is up in
-the new network namespace. It also reports the `KUBERNETES_*` variables, which the plugin asks to remove
-and this NRI keeps (see `_check`).
+the new network namespace. The node's containerd carries NRI's fix for removing a variable
+(`../containerd-nri-remove-env.patch`), so the phase asserts that `HOSTNAME` and the `KUBERNETES_*` are gone.
 """
 
 import json
@@ -62,7 +62,7 @@ if {b}/kill -0 $! 2>/dev/null; then echo bind=ok; {b}/kill $!; else echo bind=fa
 {b}/chmod 4755 /work/{name} 2>/dev/null; echo "setuid_chmod=$?"
 {b}/chmod 0755 /work/{name} 2>/dev/null; echo "plain_chmod=$?"
 echo "mounts=$({b}/awk '{{print $5}}' /proc/self/mountinfo | {b}/tr '\\n' ' ')"
-echo "env=$({b}/env | {b}/grep ^KUBERNETES_ | {b}/cut -d= -f1 | {b}/sort | {b}/tr '\\n' ' ')"
+echo "env=$({b}/env | {b}/grep -E '^(KUBERNETES_|HOSTNAME=)' | {b}/cut -d= -f1 | {b}/sort | {b}/tr '\\n' ' ')"
 echo {DONE}
 exec {b}/sleep 600
 """
@@ -319,8 +319,11 @@ def _check(found: dict[str, dict[str, str]]) -> list[str]:
             wrong.append(f"{path} is still mounted")
         if path not in control["mounts"].split():
             wrong.append(f"the control has no {path}: the check proves nothing")
-    # Not the variables: NRI v0.12.3's `result.adjustEnv` drops a removal of a variable no plugin set, and the
-    # runtime sees none (measured: all eight stayed). containerd/nri 193a7fdfa4 fixes it, after v0.12.5.
+    # Without the patch NRI v0.12.3 drops each removal, and all nine stay (measured, run nrip5).
+    if rewritten["env"].strip():
+        wrong.append(f"variables the plugin removes are still set: {rewritten['env']}")
+    if "KUBERNETES_SERVICE_HOST" not in control["env"].split():
+        wrong.append("the control has no KUBERNETES_SERVICE_HOST: the check proves nothing")
     return wrong
 
 
