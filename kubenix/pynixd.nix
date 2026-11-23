@@ -552,6 +552,10 @@ in
                     PYNIXD_SSH_HOST_KEY.value = "/etc/ssh-key/id_ed25519";
                     HOME.value = "/data/var/nix-csi/root";
                     PYNIXD_KUBE_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                    # Each build pod names this pod as its owner, so the build pods go when it does.
+                    PYNIXD_POD_NAME.valueFrom.fieldRef.fieldPath = "metadata.name";
+                    PYNIXD_POD_UID.valueFrom.fieldRef.fieldPath = "metadata.uid";
+                    PYNIXD_POD_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
                     # From the settings, not literals.
                     #
                     # NixkubeCentralSettings reads these three from the
