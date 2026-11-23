@@ -1,6 +1,7 @@
 """An NRI plugin that makes one container into a sandbox like Nix's, for phases/nriprobe.py (nixidae/nixidae#1560).
 
-It changes the container `rewritten` of a pod labelled `nixkube.test/nri-probe`, and nothing else:
+It changes the containers `rewritten` and `builder` of a pod labelled `nixkube.test/nri-probe`, and nothing
+else. `builder` also gets a createContainer hook that sets the host name to `localhost`. Both get:
   - a new network, IPC, UTS and cgroup namespace (an empty path asks the runtime for a new one)
   - a seccomp policy that refuses a setuid or setgid chmod with EPERM, as Nix's filter does
   - no kubelet file mounts and no service account token
@@ -27,7 +28,8 @@ if TYPE_CHECKING:
 
 LABEL: Final = "nixkube.test/nri-probe"
 READY: Final = "/run/nri-probe.ready"
-CONTAINER: Final = "rewritten"
+BUILDER: Final = "builder"
+CONTAINERS: Final = frozenset({"rewritten", BUILDER})
 NAMESPACES: Final = ("network", "ipc", "uts", "cgroup")
 MOUNTS: Final = (
     "/etc/hosts",
@@ -60,8 +62,13 @@ def _seccomp() -> nri_pb2.LinuxSeccomp:
     )
 
 
-def adjustment() -> nri_pb2.ContainerAdjustment:
+def adjustment(*, hostname: str | None) -> nri_pb2.ContainerAdjustment:
+    # A createContainer hook runs in the container's namespaces, before the runtime drops capabilities.
+    hooks = nri_pb2.Hooks()
+    if hostname is not None:
+        hooks.create_container.append(nri_pb2.Hook(path=hostname, args=["hostname", "localhost"]))
     return nri_pb2.ContainerAdjustment(
+        hooks=hooks,
         mounts=[nri_pb2.Mount(destination=f"-{path}") for path in MOUNTS],
         env=[nri_pb2.KeyValue(key=f"-{key}") for key in ENV],
         linux=nri_pb2.LinuxContainerAdjustment(
@@ -72,8 +79,9 @@ def adjustment() -> nri_pb2.ContainerAdjustment:
 
 
 class Probe(NriPlugin):
-    def __init__(self) -> None:
+    def __init__(self, hostname: str) -> None:
         super().__init__([nri_pb2.Event.CREATE_CONTAINER])
+        self.hostname = hostname
 
     async def CreateContainer(
         self, stream: Stream[nri_pb2.CreateContainerRequest, nri_pb2.CreateContainerResponse]
@@ -81,7 +89,7 @@ class Probe(NriPlugin):
         req = await stream.recv_message()
         if req is None:
             raise RuntimeError("CreateContainer received no request")
-        if LABEL not in req.pod.labels or req.container.name != CONTAINER:
+        if LABEL not in req.pod.labels or req.container.name not in CONTAINERS:
             await stream.send_message(nri_pb2.CreateContainerResponse())
             return
         offered = {
@@ -92,7 +100,8 @@ class Probe(NriPlugin):
         }
         sys.stdout.write(json.dumps(offered) + "\n")
         sys.stdout.flush()
-        await stream.send_message(nri_pb2.CreateContainerResponse(adjust=adjustment()))
+        hostname = self.hostname if req.container.name == BUILDER else None
+        await stream.send_message(nri_pb2.CreateContainerResponse(adjust=adjustment(hostname=hostname)))
 
     async def Synchronize(self, stream: Stream[nri_pb2.SynchronizeRequest, nri_pb2.SynchronizeResponse]) -> None:
         # The runtime synchronizes a plugin once it registers, and sends it no container before that.
@@ -105,7 +114,11 @@ class Probe(NriPlugin):
 
 
 async def main() -> None:
-    server = NriServer(Probe(), socket_path=Path("/var/run/nri/nri.sock"), plugin_name="nri-probe", plugin_idx="90")
+    # The node's busybox: a hook's path resolves in the runtime's mount namespace.
+    hostname = f"{sys.argv[1]}/bin/hostname"
+    server = NriServer(
+        Probe(hostname), socket_path=Path("/var/run/nri/nri.sock"), plugin_name="nri-probe", plugin_idx="90"
+    )
     try:
         await server.start()
     finally:
