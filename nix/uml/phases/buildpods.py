@@ -254,10 +254,11 @@ async def test(vms: Machines) -> None:
     nodes = [vms.cp, vms.worker]
     api = await cluster(vms)
 
-    priority = raw(await PriorityClass.get("pynixd-build", api=api))
-    if priority.get("value") != -1 or priority.get("preemptionPolicy") != "Never":
-        raise MachineError(f"[cp] the build pods' PriorityClass is not -1 and Never: {priority}")
-    print("[nixkube] the PriorityClass pynixd-build is -1, Never", flush=True)
+    for name, value, policy in (("pynixd-build", -2, "Never"), ("pynixd-build-nested", -1, "PreemptLowerPriority")):
+        priority = raw(await PriorityClass.get(name, api=api))
+        if priority.get("value") != value or priority.get("preemptionPolicy") != policy:
+            raise MachineError(f"[cp] the PriorityClass {name} is not {value} and {policy}: {priority}")
+        print(f"[nixkube] the PriorityClass {name} is {value}, {policy}", flush=True)
 
     for node in nodes:
         await _holds(node, settings)
