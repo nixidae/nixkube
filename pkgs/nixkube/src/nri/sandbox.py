@@ -12,7 +12,8 @@ builder, so the runtime makes what Nix's sandbox makes, on a node where an unpri
   - the host name `localhost`, which a createContainer hook sets: NRI has no field for it.
 
 A fixed-output build reaches the network (`NETWORK_ANNOTATION`): it keeps the pod's network namespace,
-`/etc/hosts` and `/etc/resolv.conf`, as Nix binds the host's.
+`/etc/hosts` and `/etc/resolv.conf`, as Nix binds the host's. A container's own `/etc/hosts` mount, not the
+kubelet's, stays in either case: pynixd's controller writes the sandbox's.
 
 Measured on containerd 2.4.1 with NRI v0.12.3 (nixkube's `nriprobe` phase): each part applies. The variables
 go only with NRI's fix for removing one (containerd/nri 193a7fdfa4, after v0.12.5).
@@ -40,6 +41,9 @@ STORE: Final = "/nix/store"
 FARM: Final = "/nix"
 KUBELET_FILES: Final = ("/etc/hostname", "/dev/termination-log", "/var/run/secrets/kubernetes.io/serviceaccount")
 NETWORK_FILES: Final = ("/etc/hosts", "/etc/resolv.conf")
+KUBELET_HOSTS: Final = "/etc-hosts"
+"""The end of the kubelet's `/etc/hosts` source, `pods/<uid>/etc-hosts`. The kubelet writes none for a container
+that mounts its own, as pynixd's runner does with the sandbox's."""
 ADDED_VARIABLES: Final = ("HOSTNAME",)
 """What the runtime adds besides the kubelet's `KUBERNETES_*`."""
 ADDED_PREFIX: Final = "KUBERNETES_"
@@ -111,6 +115,12 @@ def _store_mount(mounts: Sequence[nri_pb2.Mount]) -> nri_pb2.Mount:
     return nri_pb2.Mount(destination=STORE, type="bind", source=f"{farm.source}/store", options=["rbind", *options])
 
 
+def network_files(mounts: Sequence[nri_pb2.Mount]) -> list[str]:
+    """What a build without the network loses: the runtime's and the kubelet's files, not the container's own."""
+    own = {m.destination for m in mounts if m.destination == "/etc/hosts" and not m.source.endswith(KUBELET_HOSTS)}
+    return [path for path in NETWORK_FILES if path not in own]
+
+
 def added_variables(env: Iterable[str]) -> list[str]:
     """The names of *env* that the kubelet or the runtime added: central writes every other one."""
     names = (entry.partition("=")[0] for entry in env)
@@ -125,7 +135,7 @@ def sandbox_adjustment(
     A createContainer hook runs in the container's namespaces before the runtime drops its capabilities
     (measured), and its path resolves in the runtime's mount namespace.
     """
-    removed = [*KUBELET_FILES, FARM, *(() if request.network else NETWORK_FILES)]
+    removed = [*KUBELET_FILES, FARM, *(() if request.network else network_files(container.mounts))]
     namespaces = [*OWN_NAMESPACES, *(() if request.network else ("network",))]
     hooks = nri_pb2.Hooks(create_container=[nri_pb2.Hook(path=str(busybox), args=["hostname", "localhost"])])
     return nri_pb2.ContainerAdjustment(

@@ -14,6 +14,7 @@ from src.nri.sandbox import (
     SANDBOX_ANNOTATION,
     SandboxRequest,
     added_variables,
+    network_files,
     sandbox_adjustment,
     sandbox_request,
     seccomp_policy,
@@ -66,6 +67,14 @@ def test_network_build_keeps_the_pods_network() -> None:
     removed = {m.destination for m in adjust.mounts}
     assert "-/etc/resolv.conf" not in removed
     assert "-/etc/hosts" not in removed
+
+
+def test_a_sandboxed_build_keeps_its_own_hosts_and_loses_the_kubelets() -> None:
+    kubelet = nri_pb2.Mount(destination="/etc/hosts", source="/var/lib/kubelet/pods/u/etc-hosts")
+    own = nri_pb2.Mount(destination="/etc/hosts", source="/var/lib/kubelet/pods/u/volume-subpaths/build/runner/2")
+
+    assert network_files([kubelet]) == ["/etc/hosts", "/etc/resolv.conf"]
+    assert network_files([own]) == ["/etc/resolv.conf"]
 
 
 def test_store_replaces_the_farm() -> None:
