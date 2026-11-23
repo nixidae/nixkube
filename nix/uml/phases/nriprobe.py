@@ -116,6 +116,151 @@ async def _builder_pod(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) -
     return await _reports(api, cp, spec, ("builder", "controller"))
 
 
+def _ending_scripts(b: str) -> tuple[str, str]:
+    """The controller and the builder of the pod whose builder exits: what the controller sees after that."""
+    controller = f"""
+echo filled > /work/ready
+{b}/mkdir /work/db; echo v > /work/db/f; {b}/chmod 755 /work/db; {b}/chmod 644 /work/db/f
+term() {{
+  echo "term_at=$({b}/date +%s)"
+  {b}/ls /work/out >/dev/null 2>&1; echo "read_dir=$?"
+  {b}/cat /work/out/f >/dev/null 2>&1; echo "read_file=$?"
+  {b}/chmod 755 /work/out 2>/dev/null; echo "chmod_out=$?"
+  {b}/sleep 10
+  echo "late_at=$({b}/date +%s)"
+  echo "the controller's message" > /dev/termination-log
+  exit 3
+}}
+trap term TERM
+echo "started_at=$({b}/date +%s)"
+while true; do {b}/sleep 1 & wait $!; done
+"""
+    builder = f"""
+echo "argv=$*"
+{b}/env | {b}/sort | {b}/sed 's/^/env:/'
+{b}/mkdir /work/out; echo x > /work/out/f; {b}/chmod 600 /work/out/f; {b}/chmod 700 /work/out
+(echo y >> /work/db/f) 2>/dev/null; echo "db_write=$?"
+echo "ended_at=$({b}/date +%s)"
+exit 7
+"""
+    return controller, builder
+
+
+async def _ending_pod(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) -> dict[str, object]:
+    """The chosen shape, with a builder that exits: how the sidecar ends, and what reaches the builder's argv and env."""
+    b = f"{settings['busybox']}/bin"
+    controller_script, builder_script = _ending_scripts(b)
+    work = [{"name": "work", "mountPath": "/work"}]
+    controller: dict[str, object] = {
+        "name": "controller",
+        "image": settings["workloadImage"],
+        "restartPolicy": "Always",
+        "command": [f"{b}/sh", "-c", controller_script],
+        "startupProbe": {"exec": {"command": [f"{b}/test", "-e", "/work/ready"]}, "periodSeconds": 1},
+        "securityContext": {"runAsUser": 1000, "runAsGroup": 1000},
+        "volumeMounts": work,
+    }
+    builder: dict[str, object] = {
+        "name": "builder",
+        "image": SCRATCH,
+        "command": [f"{b}/sh", "-c", builder_script, "argv0"],
+        "args": ["$(out)", "$$(out)", "$(NOPE)", "a$$b"],
+        "env": [
+            {"name": "out", "value": "/nix/store/abc-x"},
+            {"name": "DOLLARS", "value": "a$$b$(out)c"},
+            {"name": "FLAGS", "value": "PREFIX=$(out)"},
+            {"name": "PATH", "value": "/path-not-set"},
+        ],
+        "securityContext": {"runAsUser": BUILD_UID, "runAsGroup": BUILD_UID},
+        "volumeMounts": work,
+    }
+    pod = Pod(
+        {
+            "metadata": {"generateName": "nri-probe-end-", "namespace": "default", "labels": {LABEL: "1"}},
+            "spec": {
+                "nodeSelector": {"kubernetes.io/hostname": cp.name},
+                "restartPolicy": "Never",
+                "terminationGracePeriodSeconds": 30,
+                "volumes": [{"name": "work", "emptyDir": {}}],
+                "initContainers": [controller],
+                "containers": [builder],
+            },
+        },
+        api=api,
+    )
+    await pod.create()
+
+    async def ended() -> tuple[bool, str]:
+        await pod.refresh()
+        status = raw(pod).get("status", {})
+        return status.get("phase") in {"Succeeded", "Failed"}, json.dumps(status)
+
+    status = json.loads(await until(f"pod {pod.name} ends", ended, POD_TIMEOUT, cp))
+    said = {name: await pod_logs(pod, name) for name in ("controller", "builder")}
+    await pod.delete()
+    return {
+        "phase": status.get("phase"),
+        "controller": status.get("initContainerStatuses", []),
+        "builder": status.get("containerStatuses", []),
+        "said": said,
+    }
+
+
+async def _env_name(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) -> str:
+    """Whether the API takes a variable whose name holds `-` and `.`, as a derivation's may."""
+    b = f"{settings['busybox']}/bin"
+    pod = Pod(
+        {
+            "metadata": {"generateName": "nri-probe-envname-", "namespace": "default"},
+            "spec": {
+                "nodeSelector": {"kubernetes.io/hostname": cp.name},
+                "restartPolicy": "Never",
+                "terminationGracePeriodSeconds": 0,
+                "containers": [
+                    {
+                        "name": "c",
+                        "image": settings["workloadImage"],
+                        "command": [f"{b}/true"],
+                        "env": [{"name": "a-b.c", "value": "1"}],
+                    }
+                ],
+            },
+        },
+        api=api,
+    )
+    try:
+        await pod.create()
+    except kr8s.ServerError as error:
+        return f"refused: {error}"
+    await pod.delete()
+    return "accepted"
+
+
+async def _post_start_pod(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) -> dict[str, dict[str, str]]:
+    """The other order: a plain controller container whose postStart hook waits, then the builder."""
+    busybox = settings["busybox"]
+    b = f"{busybox}/bin"
+    controller: dict[str, object] = {
+        "name": "controller",
+        "image": settings["workloadImage"],
+        "command": [f"{b}/sh", "-c", _report(busybox, "c", before=f"{b}/sleep 3; echo filled > /work/ready")],
+        "lifecycle": {
+            "postStart": {
+                "exec": {"command": [f"{b}/sh", "-c", f"until {b}/test -e /work/ready; do {b}/sleep 0.2; done"]}
+            }
+        },
+        "volumeMounts": [{"name": "work", "mountPath": "/work"}],
+    }
+    builder: dict[str, object] = {
+        "name": "builder",
+        "image": SCRATCH,
+        "command": [f"{b}/sh", "-c", _report(busybox, "b")],
+        "securityContext": {"runAsUser": BUILD_UID, "runAsGroup": BUILD_UID},
+        "volumeMounts": [{"name": "work", "mountPath": "/work"}],
+    }
+    return await _reports(api, cp, {"containers": [controller, builder]}, ("builder", "controller"))
+
+
 async def _reports(
     api: kr8s.asyncio.Api, cp: Machine, containers: dict[str, list[dict[str, object]]], names: tuple[str, ...]
 ) -> dict[str, dict[str, str]]:
@@ -186,6 +331,9 @@ async def test(vms: Machines) -> None:
     try:
         found = await _probe_pod(api, cp, settings["workloadImage"], settings["busybox"])
         built = await _builder_pod(api, cp, settings)
+        ending = await _ending_pod(api, cp, settings)
+        env_name = await _env_name(api, cp, settings)
+        post_start = await _post_start_pod(api, cp, settings)
     finally:
         offered = (await cp.execute("journalctl -u nri-probe -o cat --no-pager")).stdout
         await cp.execute("systemctl stop nri-probe")
@@ -203,6 +351,13 @@ async def test(vms: Machines) -> None:
     for name, report in built.items():
         print(f"[nixkube] {name}: {json.dumps(report)}", flush=True)
     print(f"[nixkube] not asserted: the builder's root on an empty image: {built['builder']['root']!r}", flush=True)
-    if wrong := _check(found) + _check_builder(built):
+    print(f"[nixkube] not asserted: the ending pod: {json.dumps(ending)}", flush=True)
+    print(f"[nixkube] not asserted: a variable named a-b.c: {env_name}", flush=True)
+    for name, report in post_start.items():
+        print(f"[nixkube] postStart {name}: {json.dumps(report)}", flush=True)
+    wrong = _check(found) + _check_builder(built)
+    if post_start["builder"]["ready"] != "filled":
+        wrong.append(f"the postStart hook did not hold the builder: {post_start['builder']['ready']!r}")
+    if wrong:
         raise MachineError("[cp] the NRI rewrite did not hold:\n  " + "\n  ".join(wrong))
     print("[nixkube] NRI made the container's namespaces, seccomp filter and mounts", flush=True)
