@@ -20,7 +20,10 @@ def spec(**changes: object) -> PodSpec:
     doc: PodSpec = {
         "securityContext": {"runAsUser": 1000},
         "containers": [
-            {"name": "sandbox", "volumeMounts": [{"name": "nix", "mountPath": "/nix"}]},
+            {
+                "name": "sandbox",
+                "volumeMounts": [{"name": "nix", "mountPath": "/nix"}, {"name": "store", "mountPath": "/disk"}],
+            },
             {"name": "other", "securityContext": {"runAsUser": 5}, "volumeMounts": []},
         ],
         "volumes": [{"name": "nix", "csi": {"driver": "nixkube"}}, {"name": "store", "emptyDir": {}}],
@@ -55,6 +58,12 @@ def test_only_an_emptydir_on_disk_of_this_pod_is_a_store(name: str, volumes: obj
         store_disk(doc, name, TARGET, UID)
 
 
+def test_an_emptydir_no_container_mounts_is_refused() -> None:
+    doc = spec(containers=[{"name": "sandbox", "volumeMounts": [{"name": "nix", "mountPath": "/nix"}]}])
+    with pytest.raises(StoreDiskError, match="kubelet counts only a mounted volume"):
+        store_disk(doc, "store", TARGET, UID)
+
+
 def test_a_target_of_another_pod_is_refused() -> None:
     with pytest.raises(StoreDiskError, match="not kubelet's layout"):
         store_disk(spec(), "store", TARGET, "another-uid")
@@ -71,7 +80,7 @@ def test_the_owner_is_the_container_s_own_user_over_the_pod_s() -> None:
             {
                 "name": "sandbox",
                 "securityContext": {"runAsUser": 30000, "runAsGroup": 30000},
-                "volumeMounts": [{"name": "nix", "mountPath": "/nix"}],
+                "volumeMounts": [{"name": "nix", "mountPath": "/nix"}, {"name": "store", "mountPath": "/disk"}],
             }
         ]
     )

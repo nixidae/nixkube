@@ -51,6 +51,11 @@ def store_disk(spec: PodSpec, name: str, target_path: Path, pod_uid: str) -> Sto
         raise StoreDiskError(f"storeVolume {name!r} is not an emptyDir of this pod")
     if volume["emptyDir"].get("medium", "") != "":
         raise StoreDiskError(f"storeVolume {name!r} is an emptyDir in memory: a store wants the node's disk")
+    # Measured: kubelet sets up, counts and tears down only a volume that some container mounts. Unmounted,
+    # the emptyDir counted 0 bytes for a 4 MiB output, and its directory outlives the pod.
+    containers = spec.get("containers", []) + spec.get("initContainers", [])
+    if not any(m.get("name") == name for c in containers for m in c.get("volumeMounts", [])):
+        raise StoreDiskError(f"mount storeVolume {name!r} in a container: kubelet counts only a mounted volume")
 
     volume_dir = target_path.parent
     volumes_dir = volume_dir.parent.parent
