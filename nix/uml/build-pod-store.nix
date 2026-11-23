@@ -13,6 +13,7 @@
     systemFeatures = [ "nixkube-podfarm" ];
     mandatoryFeatures = [ "nixkube-podfarm" ];
     deadlineSeconds = 600;
+    unsandboxed = true;
     podSettings.log_level = "INFO";
   };
 }

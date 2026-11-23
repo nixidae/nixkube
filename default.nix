@@ -463,6 +463,32 @@ let
           "pynixd.nixidae.org/build" = "true";
         };
       assert podStores storesNoBuilds == { };
+      # Off by default. On, a second template per system, second in the store's list, for the nodes that cannot sandbox.
+      assert !(templatesOn ? buildpods-x86_64-linux-unsandboxed);
+      assert
+        let
+          on' =
+            module:
+            settings {
+              nixkube.buildPods = {
+                enable = true;
+              }
+              // module;
+            };
+          unsandboxed = on' { unsandboxed = true; };
+          pod = unsandboxed.provisioning.kubernetes.templates.buildpods-x86_64-linux-unsandboxed.pod.spec;
+          inherit (unsandboxed.provisioning.kubernetes.templates.buildpods-x86_64-linux.pod.spec) containers;
+          envOf = c: lib.listToAttrs (map (e: lib.nameValuePair e.name e.value) c.env);
+          nixConfig = cs: (envOf (containerNamed "pynixd" cs)).NIX_CONFIG;
+        in
+        unsandboxed.stores.buildpods-x86_64-linux.templates == [
+          "buildpods-x86_64-linux"
+          "buildpods-x86_64-linux-unsandboxed"
+        ]
+        && pod.nodeSelector."nixkube/userns" == "false"
+        && !((containerNamed "sandbox" pod.containers).securityContext ? seccompProfile)
+        && lib.hasInfix "sandbox = false" (nixConfig pod.containers)
+        && !(lib.hasInfix "sandbox = false" (nixConfig containers));
       pkgs.runCommand "build-pods-toggle" { } "echo ok > $out";
 
     pynixdBindsEveryInterface =

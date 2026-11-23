@@ -20,6 +20,9 @@
   The farm's store is writable, on the pod's own emptyDir `store`
   (`storeVolume`): the outputs count against the pod's ephemeral storage, and
   the pod's pynixd uses `/nix` as its store, with every input already valid.
+
+  With `buildPods.unsandboxed`, each system gets a second template, for the
+  nodes that cannot run the sandbox.
 */
 {
   config,
@@ -83,7 +86,9 @@ let
     volumeMounts = mounts;
   };
 
-  template = pkgs: {
+  # Unsandboxed: for a node whose probe says `false`. The build runs without Nix's sandbox, in the sandbox
+  # container still, which holds no job key and no pynixd.
+  template = pkgs: sandboxed: {
     pod.spec = {
       terminationGracePeriodSeconds = 5;
       # Central's pod owns each build pod, and central deletes the pods an earlier run left: this bounds the rest.
@@ -92,7 +97,7 @@ let
       nodeSelector = {
         "kubernetes.io/arch" = pkgs.stdenv.hostPlatform.go.GOARCH;
         # `nixkube-userns-probe` sets it, in the sandbox container's security context.
-        "nixkube/userns" = "true";
+        "nixkube/userns" = lib.boolToString sandboxed;
       };
       securityContext = {
         runAsUser = uid;
@@ -126,6 +131,9 @@ let
                   substituters =
                   require-drop-supplementary-groups = false
                   system-features = ${lib.concatStringsSep " " pods.systemFeatures}
+                ''
+                + lib.optionalString (!sandboxed) ''
+                  sandbox = false
                 '';
               }
               {
@@ -153,7 +161,8 @@ let
               "run"
               "/build/sibling"
             ];
-            securityContext = pods.sandboxSecurityContext;
+            # Unsandboxed, the pod's RuntimeDefault seccomp profile: the build makes no namespace.
+            securityContext = if sandboxed then pods.sandboxSecurityContext else unprivileged;
           }
         )
       ];
@@ -180,7 +189,11 @@ let
 
   store = system: {
     type = "kubernetes-build-pods";
-    templates = [ "buildpods-${system}" ];
+    # Central takes the first template a Ready node matches: the unsandboxed one only when no node can sandbox.
+    templates = [
+      "buildpods-${system}"
+    ]
+    ++ lib.optional pods.unsandboxed "buildpods-${system}-unsandboxed";
     central_host = "pynixd.${cfg.namespace}.svc.cluster.local";
     central_port =
       (lib.findFirst (port: port.name == "ssh") (throw "Service pynixd has no ssh port")
@@ -254,6 +267,11 @@ in
       // {
         default = true;
       };
+    unsandboxed = lib.mkEnableOption ''
+      a second build pod template per system, for the nodes whose `userns-probe` labels `nixkube/userns` `false`.
+      Its builds run without Nix's sandbox, in the sandbox container: they share the pod's network and hostname,
+      and only the farm keeps a build to its declared inputs. Central takes it only when no Ready node can sandbox
+    '';
     systemFeatures = lib.mkOption {
       description = "The features a build pod offers: its store's `system_features`, and the pod's Nix `system-features`.";
       type = lib.types.listOf lib.types.str;
@@ -295,8 +313,14 @@ in
         # The pod's service account: no kubeconfig.
         provisioning.kubernetes = {
           inherit (cfg) namespace;
-          templates = lib.mapAttrs' (
-            system: pkgs: lib.nameValuePair "buildpods-${system}" (template pkgs)
+          templates = lib.concatMapAttrs (
+            system: pkgs:
+            {
+              "buildpods-${system}" = template pkgs true;
+            }
+            // lib.optionalAttrs pods.unsandboxed {
+              "buildpods-${system}-unsandboxed" = template pkgs false;
+            }
           ) csiPkgs;
         };
       }
