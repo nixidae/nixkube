@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
+import platform
 import shutil
 import time
 from collections.abc import Awaitable, Callable, Coroutine
@@ -56,6 +57,7 @@ from .annotations import (
 from .builds import BuildRegistry
 from .cleanup import garbage_collect_stale_volumes, schedule_garbage_collection
 from .mount import OciConfig, kernel_supports_ro, kernel_supports_rw, mount_in_container, rootfs_of
+from .sandbox import sandbox_adjustment, sandbox_request
 from .vm import (
     ALIVE,
     FAILED,
@@ -284,6 +286,22 @@ class NriPlugin(NriPluginBase):
             container={"name": req.container.name, "id": req.container.id},
         )
         logger.debug("create_container", runtime_handler=req.pod.runtime_handler)
+
+        # Before the store injection: the builder has a farm at /nix, which the sandbox narrows to its store.
+        sandbox = sandbox_request(req.pod.annotations)
+        if sandbox is not None and sandbox.container == req.container.name:
+            if not NRI_VM_BUSYBOX:
+                raise RuntimeError("NRI_VM_BUSYBOX is not set, so the build sandbox cannot set its host name")
+            adjust = sandbox_adjustment(
+                sandbox,
+                req.container,
+                machine=platform.machine(),
+                busybox=host_source(Path(NRI_VM_BUSYBOX), NODE_ROOT),
+            )
+            logger.info("build_sandbox", network=sandbox.network)
+            NRI_CONTAINERS_SEEN.labels(result="build_sandbox").inc()
+            await stream.send_message(nri_pb2.CreateContainerResponse(adjust=adjust))
+            return
 
         # Check if /nix is already mounted (e.g., by nix-csi) to avoid collision
         if any(m.destination == "/nix" for m in req.container.mounts):
