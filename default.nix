@@ -405,10 +405,14 @@ let
           in
           lib.listToAttrs (map (e: lib.nameValuePair e.name (e.value or null)) node.env);
         priority = on.none.PriorityClass.pynixd-build;
+        nested = on.none.PriorityClass.pynixd-build-nested;
       in
       assert !(off.none ? PriorityClass);
-      assert priority.value == -1;
+      assert priority.value == -2;
       assert priority.preemptionPolicy == "Never";
+      # Above the build pods it may wait on, below every ordinary pod.
+      assert priority.value < nested.value && nested.value < 0;
+      assert nested.preemptionPolicy == "PreemptLowerPriority";
       assert (nodeEnv off).BUILD_PODS_ENABLED == "false";
       assert (nodeEnv on).BUILD_PODS_ENABLED == "true";
       pkgs.runCommand "build-pods-toggle" { } "echo ok > $out";

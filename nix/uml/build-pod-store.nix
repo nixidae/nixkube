@@ -159,6 +159,10 @@ in
       system_features = [ feature ];
       mandatory_features = [ feature ];
       farm.volume = "nix";
+      priority_classes = [
+        cfg.buildPods.priorityClassName
+        cfg.buildPods.nestedPriorityClassName
+      ];
     };
     # The pod's service account: no kubeconfig.
     provisioning.kubernetes = {

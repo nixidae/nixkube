@@ -5,7 +5,8 @@
   any ordinary pod. nixidae/nixidae#1560, spike.
 
   On, it puts two things on the cluster that a build pod's template names: the
-  PriorityClass `buildPods.priorityClassName`, and on every node the seccomp
+  PriorityClasses `buildPods.priorityClassName` and
+  `buildPods.nestedPriorityClassName`, and on every node the seccomp
   profile `buildPods.seccompProfile`, which the node DaemonSet writes under
   the kubelet's `seccomp` directory. It also lets pynixd create the pods and
   read their logs. Off, the apply prunes the PriorityClass and the Role, and
@@ -27,6 +28,15 @@ in
       type = lib.types.str;
       readOnly = true;
       default = "pynixd-build";
+    };
+    nestedPriorityClassName = lib.mkOption {
+      description = ''
+        The PriorityClass of a build pod for a build that recursive Nix in another build pod asked for.
+        Central's store names it second in `priority_classes`.
+      '';
+      type = lib.types.str;
+      readOnly = true;
+      default = "pynixd-build-nested";
     };
     seccompProfile = lib.mkOption {
       description = ''
@@ -52,10 +62,20 @@ in
     # a build pod takes no other pod's place.
     kubernetes.resources.none.PriorityClass.${cfg.buildPods.priorityClassName} = {
       metadata.labels = cfg.labels;
-      value = -1;
+      value = -2;
       preemptionPolicy = "Never";
       globalDefault = false;
       description = "pynixd's build pods: the first to go when another pod needs the room.";
+    };
+    # A nested build's pod, one above: on a full node it evicts a build pod it
+    # may wait on, so the outer build can finish. Every ordinary pod is above
+    # it, so it preempts none of them. nixidae/nixidae#1576.
+    kubernetes.resources.none.PriorityClass.${cfg.buildPods.nestedPriorityClassName} = {
+      metadata.labels = cfg.labels;
+      value = -1;
+      preemptionPolicy = "PreemptLowerPriority";
+      globalDefault = false;
+      description = "pynixd's nested build pods: ahead of the build pods they are nested in.";
     };
     # pynixd creates each build pod and follows its log (`store/build_pods.py`). The Role in ./rbac.nix
     # already lets it watch and delete pods, and create the pod's job Secret.
