@@ -7,8 +7,9 @@
   On, it puts two things on the cluster that a build pod's template names: the
   PriorityClass `buildPods.priorityClassName`, and on every node the seccomp
   profile `buildPods.seccompProfile`, which the node DaemonSet writes under
-  the kubelet's `seccomp` directory. Off, the apply prunes the PriorityClass
-  and each node removes the profile when its DaemonSet pod restarts.
+  the kubelet's `seccomp` directory. It also lets pynixd create the pods and
+  read their logs. Off, the apply prunes the PriorityClass and the Role, and
+  each node removes the profile when its DaemonSet pod restarts.
 */
 {
   config,
@@ -55,6 +56,36 @@ in
       preemptionPolicy = "Never";
       globalDefault = false;
       description = "pynixd's build pods: the first to go when another pod needs the room.";
+    };
+    # pynixd creates each build pod and follows its log (`store/build_pods.py`). The Role in ./rbac.nix
+    # already lets it watch and delete pods, and create the pod's job Secret.
+    kubernetes.resources.${cfg.namespace} = {
+      Role.nixkube-build-pods = {
+        metadata.labels = cfg.labels;
+        rules = [
+          {
+            apiGroups = [ "" ];
+            resources = [ "pods" ];
+            verbs = [ "create" ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "pods/log" ];
+            verbs = [ "get" ];
+          }
+        ];
+      };
+      RoleBinding.nixkube-build-pods = {
+        metadata.labels = cfg.labels;
+        subjects = lib.mkNamedList {
+          nixkube.kind = "ServiceAccount";
+        };
+        roleRef = {
+          kind = "Role";
+          name = "nixkube-build-pods";
+          apiGroup = "rbac.authorization.k8s.io";
+        };
+      };
     };
   };
 }
