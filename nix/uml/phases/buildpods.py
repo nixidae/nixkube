@@ -20,7 +20,8 @@ turning it off means:
   - central builds a derivation that asks for it in a pynixd build pod, as
     uid 1000: the pod's `/nix` is a farm of one path central made for the
     build, its pynixd reads the farm as its lower store, and it copies none
-    of its input in (`../build-pod-store.nix`)
+    of its input in (`../build-pod-store.nix`); the build pod names central's
+    pod as its owner, from the downward API
 
 Through kr8s, from the host, at `<out>/access/kubeconfig`, which the cluster
 phase's `bring_up` writes.
@@ -151,6 +152,7 @@ async def _check_farm(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) ->
 BUILT = "output says: built-from-the-farm"
 CENTRAL_NIX = ["env", "NIX_REMOTE=unix:///run/pynixd/pynixd.sock"]
 FARM_FEATURE = "nixkube-podfarm"
+BUILD_PODS = "pynixd.nixidae.org/build=true"
 FARM_ROOT = re.compile(r"/nix/store/[0-9a-z]{32}-pynixd-build-inputs")
 
 
@@ -171,6 +173,12 @@ async def _central(central: Pod, *command: str) -> str:
     return out + err
 
 
+async def _owners(api: kr8s.asyncio.Api, owners: dict[str, list[str]]) -> None:
+    """The UIDs each build pod names as its owners: the downward API gives central its own."""
+    async for _event, pod in api.watch("pods", namespace=NAMESPACE, label_selector=BUILD_PODS):
+        owners[pod.name] = [ref["uid"] for ref in raw(pod)["metadata"].get("ownerReferences", [])]
+
+
 async def _check_central_farm_build(api: kr8s.asyncio.Api, settings: Settings) -> None:
     """Central builds in a pod whose `/nix` is a farm of one path central made for the build (`../build-pod-store.nix`).
 
@@ -186,8 +194,16 @@ async def _check_central_farm_build(api: kr8s.asyncio.Api, settings: Settings) -
         f' args = [ "-c" "{busybox}/bin/echo {BUILT} > $out" ];'
         f' requiredSystemFeatures = [ "{FARM_FEATURE}" ]; }}'
     )
-    said = await _central(central, "nix-build", "--no-out-link", "--expr", expr)
+    owners: dict[str, list[str]] = {}
+    async with anyio.create_task_group() as watching:
+        watching.start_soon(_owners, api, owners)
+        said = await _central(central, "nix-build", "--no-out-link", "--expr", expr)
+        watching.cancel_scope.cancel()
     print(f"[nixkube] central's farm build pod said:\n{said}", flush=True)
+    uid = str(raw(central)["metadata"]["uid"])
+    if not owners or any(found != [uid] for found in owners.values()):
+        raise MachineError(f"[cp] the build pods name the owners {owners}, not pynixd-0's UID {uid}")
+    print(f"[nixkube] pynixd-0 owns each build pod: {sorted(owners)}", flush=True)
     paths, moved = _field(said, "build_one_inputs", "paths"), _field(said, "build_one_inputs", "bytes")
     if paths < 1 or moved != 0:
         raise MachineError(f"[cp] the farm build pod copied {moved} bytes of {paths} inputs from central:\n{said}")

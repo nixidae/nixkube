@@ -390,13 +390,27 @@ let
     */
     buildPodsToggle =
       let
-        render =
-          enable:
+        instance =
+          module:
           (kubenixInstance {
-            module.nixkube.buildPods.enable = enable;
-          }).config.kubernetes.resources;
+            inherit module;
+          }).config;
+        render = enable: (instance { nixkube.buildPods.enable = enable; }).kubernetes.resources;
+        settings = module: (instance module).nixkube.pynixd.controller.settings;
         off = render false;
         on = render true;
+        storesOn = (settings { nixkube.buildPods.enable = true; }).stores;
+        templatesOn = (settings { nixkube.buildPods.enable = true; }).provisioning.kubernetes.templates;
+        storesOff = (settings { nixkube.buildPods.enable = false; }).stores or { };
+        storesNoBuilds =
+          (settings {
+            nixkube.buildPods = {
+              enable = true;
+              builds = false;
+            };
+          }).stores or { };
+        podStores =
+          stores: lib.filterAttrs (_: store: (store.type or "") == "kubernetes-build-pods") stores;
         nodeEnv =
           resources:
           let
@@ -415,6 +429,17 @@ let
       assert nested.preemptionPolicy == "PreemptLowerPriority";
       assert (nodeEnv off).BUILD_PODS_ENABLED == "false";
       assert (nodeEnv on).BUILD_PODS_ENABLED == "true";
+      # One store and one template per system, and none while off or with builds off.
+      assert
+        lib.attrNames (podStores storesOn) == [
+          "buildpods-aarch64-linux"
+          "buildpods-x86_64-linux"
+        ];
+      assert storesOn.buildpods-aarch64-linux.template == "buildpods-aarch64-linux";
+      assert templatesOn.buildpods-aarch64-linux.pod.spec.nodeSelector."kubernetes.io/arch" == "arm64";
+      assert templatesOn.buildpods-x86_64-linux.pod.spec.nodeSelector."kubernetes.io/arch" == "amd64";
+      assert podStores storesOff == { };
+      assert podStores storesNoBuilds == { };
       pkgs.runCommand "build-pods-toggle" { } "echo ok > $out";
 
     pynixdBindsEveryInterface =

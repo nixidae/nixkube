@@ -221,6 +221,8 @@ in
   # asks its substituters for a path nobody built.
   pynixd = (import sources.pynixd { inherit pkgs sources; }).packages.pynixd-lib;
   pynixd-builder-seccomp = (import sources.pynixd { inherit pkgs sources; }).packages.builder-seccomp;
+  # What a build pod runs: `pynixd build-one`, and the sandbox runner on its venv's Python.
+  pynixd-build-pod = (import sources.pynixd { inherit pkgs sources; }).packages.pynixd;
   pynixd-nixkube-fake-nss = pkgs.callPackage ./pynixd-nixkube/fake-nss.nix { };
 
   pynixd-nixkube = self.mkApp {
