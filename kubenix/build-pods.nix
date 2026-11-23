@@ -162,7 +162,7 @@ let
 
   store = system: {
     type = "kubernetes-build-pods";
-    template = "buildpods-${system}";
+    templates = [ "buildpods-${system}" ];
     central_host = "pynixd.${cfg.namespace}.svc.cluster.local";
     central_port =
       (lib.findFirst (port: port.name == "ssh") (throw "Service pynixd has no ssh port")

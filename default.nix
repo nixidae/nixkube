@@ -440,7 +440,7 @@ let
           "buildpods-aarch64-linux"
           "buildpods-x86_64-linux"
         ];
-      assert storesOn.buildpods-aarch64-linux.template == "buildpods-aarch64-linux";
+      assert storesOn.buildpods-aarch64-linux.templates == [ "buildpods-aarch64-linux" ];
       assert templatesOn.buildpods-aarch64-linux.pod.spec.nodeSelector."kubernetes.io/arch" == "arm64";
       assert templatesOn.buildpods-x86_64-linux.pod.spec.nodeSelector."kubernetes.io/arch" == "amd64";
       # The probe labels a node as a build pod's sandbox container would meet it, and the pods select on it.
