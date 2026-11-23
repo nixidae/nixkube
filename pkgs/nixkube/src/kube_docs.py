@@ -80,9 +80,15 @@ class VolumeMount(TypedDict, total=False):
     subPath: str
 
 
+class SecurityContext(TypedDict, total=False):
+    runAsUser: int
+    runAsGroup: int
+
+
 class Container(TypedDict, total=False):
     name: str
     volumeMounts: list[VolumeMount]
+    securityContext: SecurityContext
 
 
 class CSIVolumeSource(TypedDict, total=False):
@@ -105,6 +111,7 @@ class Volume(TypedDict, total=False):
 class PodSpec(TypedDict, total=False):
     nodeName: str
     hostUsers: bool
+    securityContext: SecurityContext
     containers: list[Container]
     initContainers: list[Container]
     volumes: list[Volume]

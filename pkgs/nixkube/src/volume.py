@@ -15,6 +15,7 @@ from . import presentation
 from .constants import (
     MNT_DETACH,
     MS_BIND,
+    MS_PRIVATE,
     MS_RDONLY,
     MS_REC,
     MS_REMOUNT,
@@ -139,11 +140,13 @@ async def prepare_volume(
     if bind_farm and fallback is not Presentation.FARM:
         if fallback is Presentation.REFUSED:
             # A host-store node: a hardlink out of the host's store fails
-            # with EXDEV, so there is no tree to fall back to. Issue #25.
+            # with EXDEV, so there is no tree to fall back to. Issue #25. A
+            # store on the pod's disk has none either: a hardlink there shares
+            # its inode with the node's store, and the pod can write it.
             raise MountError(
                 f"{len(store_paths)} bind mounts would not leave headroom under"
-                " fs.mount-max, and this node shares its host's store, so it has"
-                " no hardlink tree to fall back to",
+                " fs.mount-max, and this volume has no hardlink tree to fall back"
+                " to: the node shares its host's store, or the store is on the pod's disk",
                 logs="",
             )
         logger.error(
@@ -314,25 +317,68 @@ FARM_STORE = Path("nix/store")
 """A CSI farm's store, in its volume root. It is a tmpfs of its own, so one detach takes every bind in it,
 and no delete of the volume root can reach through a bind into the node's store."""
 
+FARM_DISK = Path("nix")
+"""A writable CSI farm's mount in its volume root: a bind of the pod's emptyDir (`csi/storedisk.py`). One
+detach takes it with every bind under it, and no delete of the volume root reaches the pod's outputs."""
 
-def mount_farm(volume_root: Path, store_paths: list[Path]) -> int:
-    """The CSI farm: a tmpfs at `FARM_STORE`, then one read-only bind of each path (`build_farm`).
 
-    The binds live in this daemon's mount namespace, not in a worker's as an NRI farm does: kubelet bind-mounts
-    the published target into the pod, so the tree must be in a namespace kubelet sees. `prepare_volume`'s
-    budget check counts them. Answers how many it bound."""
+def bind_store_disk(volume_root: Path, disk: Path) -> None:
+    """Bind the pod's emptyDir at `FARM_DISK`, private.
+
+    Private before anything mounts under it. The emptyDir is in kubelet's directory, a shared mount, and a
+    bind of it joins that peer group: each input bind would propagate to the emptyDir's own path, where
+    kubelet's disk walk counts it and its teardown deletes through it. nixkube makes the directory itself
+    because kubelet sets up a pod's volumes in no fixed order, and its setup takes a directory already there."""
+    mount_point = volume_root / FARM_DISK
+    mount_point.mkdir(parents=True, exist_ok=True)
+    disk.mkdir(parents=True, exist_ok=True)
+    if is_mount(mount_point):
+        return
+    if _libc.mount(os.fsencode(disk), os.fsencode(mount_point), None, MS_BIND, None) != 0:
+        err = ctypes.get_errno()
+        raise MountError(f"Failed to bind the store disk {disk}: {os.strerror(err)} (errno {err})", logs="")
+    if _libc.mount(None, os.fsencode(mount_point), None, MS_PRIVATE, None) != 0:
+        err = ctypes.get_errno()
+        _libc.umount2(os.fsencode(mount_point), MNT_DETACH)
+        raise MountError(f"Failed to make the store disk private: {os.strerror(err)} (errno {err})", logs="")
+
+
+def own_store(volume_root: Path, uid: int, gid: int) -> None:
+    """Give the pod's user the store directory and the state under `nix/var`, which `prepare_volume` made.
+
+    Before `mount_farm`: the store's entries become read-only binds, and those stay the node's."""
+    nix = volume_root / FARM_DISK
+    (nix / "store").mkdir(exist_ok=True)
+    os.chown(nix / "store", uid, gid)
+    os.chown(nix / "var", uid, gid)
+    for directory, subdirs, files in os.walk(nix / "var"):
+        for name in subdirs + files:
+            os.lchown(Path(directory) / name, uid, gid)
+
+
+def mount_farm(volume_root: Path, store_paths: list[Path], *, writable: bool = False) -> int:
+    """The CSI farm: one read-only bind of each path (`build_farm`) in a store of its own.
+
+    The store is a tmpfs at `FARM_STORE`, read-only, or with `writable` the store directory on the pod's disk
+    that `bind_store_disk` mounted. The binds live in this daemon's mount namespace, not in a worker's as an
+    NRI farm does: kubelet bind-mounts the published target into the pod, so the tree must be in a namespace
+    kubelet sees. `prepare_volume`'s budget check counts them. Answers how many it bound."""
     store_dir = volume_root / FARM_STORE
     store_dir.mkdir(parents=True, exist_ok=True)
-    if not is_mount(store_dir):
+    if writable and not is_mount(volume_root / FARM_DISK):
+        raise MountError(f"a writable farm needs the store disk at {volume_root / FARM_DISK}", logs="")
+    if not writable and not is_mount(store_dir):
         ret = _libc.mount(b"tmpfs", os.fsencode(store_dir), b"tmpfs", 0, b"mode=0755")
         if ret != 0:
             err = ctypes.get_errno()
             raise MountError(f"Failed to mount the farm's tmpfs: {os.strerror(err)} (errno {err})", logs="")
     try:
         bound = build_farm(store_dir, store_paths)
-        # Read-only before the publish binds it: kubelet's namespace gets copies of these mounts at that bind, and
-        # a later mount_setattr reaches this namespace's mounts only. Measured: the pod could write the tmpfs.
-        set_readonly(store_dir, recursive=False)
+        if not writable:
+            # Read-only before the publish binds it: kubelet's namespace gets copies of these mounts at that
+            # bind, and a later mount_setattr reaches this namespace's mounts only. Measured: the pod could
+            # write the tmpfs.
+            set_readonly(store_dir, recursive=False)
     except (FarmError, OSError) as error:
         detach_farm(volume_root)
         raise MountError(f"Failed to build the farm: {error}", logs="") from error
@@ -340,17 +386,28 @@ def mount_farm(volume_root: Path, store_paths: list[Path]) -> int:
 
 
 def is_farm(volume_root: Path) -> bool:
-    return is_mount(volume_root / FARM_STORE)
+    return is_mount(volume_root / FARM_STORE) or is_mount(volume_root / FARM_DISK)
 
 
 def detach_farm(volume_root: Path) -> None:
-    """Take a CSI farm down, every bind with its tmpfs. Nothing to do for a volume with no farm."""
-    store_dir = volume_root / FARM_STORE
-    if not is_farm(volume_root):
-        return
-    if _libc.umount2(os.fsencode(store_dir), MNT_DETACH) != 0:
+    """Take a CSI farm down, every bind with its tmpfs or its store disk. Nothing to do for a volume with no
+    farm. Raises if a mount stays, so no caller deletes the volume root through it."""
+    for mount_point in (volume_root / FARM_STORE, volume_root / FARM_DISK):
+        if not is_mount(mount_point):
+            continue
+        if _libc.umount2(os.fsencode(mount_point), MNT_DETACH) != 0:
+            err = ctypes.get_errno()
+            raise UnmountError(f"Failed to detach the farm at {mount_point}: {os.strerror(err)} (errno {err})", logs="")
+
+
+def bind_writable(source: Path, target_path: Path) -> None:
+    """Publish a writable farm: a recursive read-write bind. Each input bind under it keeps its own
+    read-only flag in the copy. Not `mount_volume`: its read-write path is an overlay, and overlayfs does
+    not follow a lower layer's submounts."""
+    target_path.mkdir(parents=True, exist_ok=True)
+    if _libc.mount(os.fsencode(source), os.fsencode(target_path), None, MS_BIND | MS_REC, None) != 0:
         err = ctypes.get_errno()
-        raise UnmountError(f"Failed to detach the farm at {store_dir}: {os.strerror(err)} (errno {err})", logs="")
+        raise MountError(f"Failed to publish the writable farm: {os.strerror(err)} (errno {err})", logs="")
 
 
 def is_mount_source(path: Path, mountinfo_file: Path | None = None) -> bool:

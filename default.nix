@@ -1229,6 +1229,10 @@ let
         # nixidae/nixidae#1560.
         csi-farm = fromNixosTest (import ./tests/nixos/csi-farm.nix { inherit pkgs lib; });
 
+        # A writable farm on the pod's emptyDir: no bind at the emptyDir's own
+        # path, outputs on the pod's disk. nixidae/nixidae#1560.
+        csi-farm-disk = fromNixosTest (import ./tests/nixos/csi-farm-disk.nix { inherit pkgs lib; });
+
         # nixkube's own `build_farm`, as root against a real closure. Issue #65.
         farm-builder = fromNixosTest (import ./tests/nixos/farm-builder.nix { inherit pkgs lib; });
 

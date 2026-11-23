@@ -213,6 +213,7 @@ MS_RDONLY = 1
 MS_REMOUNT = 32
 MS_BIND = 4096
 MS_REC = 16384
+MS_PRIVATE = 1 << 18
 
 # umount2(2) flag: detach the subtree now and release it when nobody uses it.
 # A plain umount2 of a mount that carries submounts fails with EBUSY.

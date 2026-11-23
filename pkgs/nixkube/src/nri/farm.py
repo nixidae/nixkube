@@ -43,7 +43,7 @@ import os
 from collections.abc import Iterable
 from pathlib import Path
 
-from ..constants import MS_BIND, MS_REC
+from ..constants import MS_BIND, MS_PRIVATE, MS_REC
 from ..mountattr import MountSetattrUnsupported, set_readonly
 from ..mountbudget import measure
 
@@ -56,8 +56,6 @@ _libc.mount.argtypes = [
     ctypes.c_char_p,
 ]
 _libc.mount.restype = ctypes.c_int
-
-MS_PRIVATE = 1 << 18
 
 
 class FarmError(OSError):

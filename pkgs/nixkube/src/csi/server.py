@@ -4,7 +4,7 @@ import socket
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Coroutine
-from functools import wraps
+from functools import partial, wraps
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -49,18 +49,22 @@ from ..nix import (
 from ..nri.annotations import parse_pod_exclude
 from ..presentation import Presentation
 from ..volume import (
+    bind_store_disk,
+    bind_writable,
     cleanup_failed_volume,
     detach_farm,
     is_farm,
     is_mount,
     mount_farm,
     mount_volume,
+    own_store,
     prepare_volume,
     unmount,
 )
 from . import composefs
 from .cleanup import TARGET_FILE, cleanup_stale_entries, collect_active_volume_handles
 from .identity import IdentityServicer
+from .storedisk import STORE_VOLUME_ATTRIBUTE, StoreDisk, StoreDiskError, store_disk
 
 _NIXKUBE_DRIVERS = {"nixkube", "nix.csi.store"}
 PRESENTATION_ATTRIBUTE = "presentation"
@@ -221,9 +225,21 @@ class NodeServicer(csi_grpc.NodeBase):
                 f"volume attribute {PRESENTATION_ATTRIBUTE}={asked!r}: the one value is {Presentation.FARM!r}",
             )
         farm = asked == Presentation.FARM
-        # No overlay over a farm: overlayfs does not follow a lower layer's submounts.
-        if farm and not request.readonly:
-            raise GRPCError(Status.INVALID_ARGUMENT, "a farm volume is read-only: set readOnly: true")
+        store_volume = request.volume_context.get(STORE_VOLUME_ATTRIBUTE)
+        if store_volume is not None and not farm:
+            raise GRPCError(
+                Status.INVALID_ARGUMENT,
+                f"volume attribute {STORE_VOLUME_ATTRIBUTE} needs {PRESENTATION_ATTRIBUTE}: {Presentation.FARM}",
+            )
+        # No overlay over a farm: overlayfs does not follow a lower layer's submounts. A writable farm has its
+        # store on the pod's disk instead.
+        if farm and store_volume is None and not request.readonly:
+            raise GRPCError(
+                Status.INVALID_ARGUMENT,
+                f"a farm volume is read-only: set readOnly: true, or {STORE_VOLUME_ATTRIBUTE} for a writable store",
+            )
+        if store_volume is not None and request.readonly:
+            raise GRPCError(Status.INVALID_ARGUMENT, f"a volume with {STORE_VOLUME_ATTRIBUTE} is writable")
 
         log = logger.bind(volume_id=request.volume_id)
 
@@ -289,6 +305,16 @@ class NodeServicer(csi_grpc.NodeBase):
                 log.info("pod_terminating_skip_mount")
                 await stream.send_message(csi_pb2.NodePublishVolumeResponse())
                 return
+
+            disk: StoreDisk | None = None
+            if store_volume is not None:
+                try:
+                    disk = store_disk(pod_doc(pod).get("spec", {}), store_volume, Path(request.target_path), pod_uid)
+                except StoreDiskError as error:
+                    refused = MountError(str(error), logs="", status=Status.INVALID_ARGUMENT)
+                    refused.pod = pod
+                    raise refused from error
+                log = log.bind(store_disk=str(disk.path))
 
             try:
                 await check_csi_volume_mounts(pod)
@@ -379,19 +405,29 @@ class NodeServicer(csi_grpc.NodeBase):
                     (volume_root / TARGET_FILE).write_text(request.target_path)
                     await composefs.mount(image, Path(request.target_path), request.readonly, volume_root)
                 elif shown is Presentation.FARM:
+                    # Before `prepare_volume`, which writes the database under the volume's `nix`.
+                    if disk is not None:
+                        await anyio.to_thread.run_sync(bind_store_disk, volume_root, disk.path)
                     prepared = await prepare_volume(
                         volume_root,
                         package_paths,
                         primary_package,
                         bind_farm=True,
-                        allow_hardlinks=not HOST_STORE,
+                        allow_hardlinks=not HOST_STORE and disk is None,
                     )
+                    if disk is not None:
+                        await anyio.to_thread.run_sync(own_store, volume_root, disk.uid, disk.gid)
                     # Past the mount budget the volume is a hardlink tree in the same place.
                     if prepared.bind_farm:
-                        bound = await anyio.to_thread.run_sync(mount_farm, volume_root, prepared.paths)
+                        bound = await anyio.to_thread.run_sync(
+                            partial(mount_farm, volume_root, prepared.paths, writable=disk is not None)
+                        )
                         log.debug("farm_bound", paths=bound)
                     (volume_root / TARGET_FILE).write_text(request.target_path)
-                    await mount_volume(volume_root / "nix", Path(request.target_path), readonly=True)
+                    if disk is not None:
+                        await anyio.to_thread.run_sync(bind_writable, volume_root / "nix", Path(request.target_path))
+                    else:
+                        await mount_volume(volume_root / "nix", Path(request.target_path), readonly=True)
                 elif shown is Presentation.REFUSED:
                     raise MountError(
                         "this node shares its host's store, where a volume can only be"
