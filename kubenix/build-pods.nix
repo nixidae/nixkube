@@ -292,6 +292,54 @@ in
     # pynixd creates each build pod and follows its log (`store/build_pods.py`). The Role in ./rbac.nix
     # already lets it watch and delete pods, and create the pod's job Secret.
     kubernetes.resources.${cfg.namespace} = {
+      # A build pod dials central's SSH port, and after its name, the cluster DNS. Nothing dials a build pod:
+      # central reads its log and its end through the API server. Only a CNI that enforces policies holds it.
+      NetworkPolicy.nixkube-build-pods = {
+        metadata.labels = cfg.labels;
+        spec = {
+          podSelector.matchLabels."pynixd.nixidae.org/build" = "true";
+          policyTypes = [
+            "Ingress"
+            "Egress"
+          ];
+          ingress = [ ];
+          egress = [
+            {
+              to = [
+                {
+                  podSelector.matchLabels = cfg.matchLabels // {
+                    "app.kubernetes.io/component" = "pynixd";
+                  };
+                }
+              ];
+              ports = [
+                {
+                  protocol = "TCP";
+                  port = "ssh";
+                }
+              ];
+            }
+            {
+              to = [
+                {
+                  namespaceSelector.matchLabels."kubernetes.io/metadata.name" = "kube-system";
+                  podSelector.matchLabels.k8s-app = "kube-dns";
+                }
+              ];
+              ports = [
+                {
+                  protocol = "UDP";
+                  port = 53;
+                }
+                {
+                  protocol = "TCP";
+                  port = 53;
+                }
+              ];
+            }
+          ];
+        };
+      };
       Role.nixkube-build-pods = {
         metadata.labels = cfg.labels;
         rules = [

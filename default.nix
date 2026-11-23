@@ -439,6 +439,11 @@ let
       assert templatesOn.buildpods-aarch64-linux.pod.spec.nodeSelector."kubernetes.io/arch" == "arm64";
       assert templatesOn.buildpods-x86_64-linux.pod.spec.nodeSelector."kubernetes.io/arch" == "amd64";
       assert podStores storesOff == { };
+      assert !(off.nixkube ? NetworkPolicy);
+      assert
+        on.nixkube.NetworkPolicy.nixkube-build-pods.spec.podSelector.matchLabels == {
+          "pynixd.nixidae.org/build" = "true";
+        };
       assert podStores storesNoBuilds == { };
       pkgs.runCommand "build-pods-toggle" { } "echo ok > $out";
 
