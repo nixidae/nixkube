@@ -20,6 +20,9 @@ turning it off means:
   - a pynixd build pod with a farm as its `/nix` builds from it, as uid
     1000: its pynixd reads the farm as its lower store
     (`../farm_build_pod.py`)
+  - central builds in such a pod a derivation that asks for it: the pod's
+    `/nix` is a farm of one path central made for the build, and the pod
+    copies none of its input in (`../build-pod-store.nix`)
 
 Through kr8s, from the host, at `<out>/access/kubeconfig`, which the cluster
 phase's `bring_up` writes.
@@ -223,6 +226,59 @@ async def _check_farm_build_pod(api: kr8s.asyncio.Api, cp: Machine, settings: Se
     print("[nixkube] a pynixd build pod builds from its farm volume, as uid 1000", flush=True)
 
 
+CENTRAL_NIX = ["env", "NIX_REMOTE=unix:///run/pynixd/pynixd.sock"]
+FARM_FEATURE = "nixkube-podfarm"
+FARM_ROOT = re.compile(r"/nix/store/[0-9a-z]{32}-pynixd-build-inputs")
+
+
+def _field(log: str, event: str, name: str) -> int:
+    """The integer *name* on the line of *event*, in either of structlog's renderings."""
+    line = next((line for line in log.splitlines() if event in line), None)
+    found = re.search(rf"\b{name}\W+(\d+)", line or "")
+    if found is None:
+        raise MachineError(f"[cp] no {event} line with {name} in:\n{log}")
+    return int(found.group(1))
+
+
+async def _central(central: Pod, *command: str) -> str:
+    done = await central.exec([*CENTRAL_NIX, *command], container="pynixd", check=False)
+    out, err = done.stdout.decode(), done.stderr.decode()
+    if done.returncode != 0:
+        raise MachineError(f"[cp] {' '.join(command)} in pynixd-0 exited {done.returncode}:\n{out}\n{err}")
+    return out + err
+
+
+async def _check_central_farm_build(api: kr8s.asyncio.Api, settings: Settings) -> None:
+    """Central builds in a pod whose `/nix` is a farm of one path central made for the build (`../build-pod-store.nix`).
+
+    The build's input is busybox. The pod copies no byte of it from central, and its lower store holds exactly
+    the closure of the path central made.
+    """
+    central = await Pod.get("pynixd-0", namespace=NAMESPACE, api=api)
+    busybox = settings["busybox"]
+    await _central(central, "nix-store", "--realise", busybox)
+    expr = (
+        f'derivation {{ name = "nixkube-central-farm"; system = builtins.currentSystem;'
+        f' builder = "${{builtins.storePath "{busybox}"}}/bin/sh";'
+        f' args = [ "-c" "{busybox}/bin/echo {BUILT} > $out" ];'
+        f' requiredSystemFeatures = [ "{FARM_FEATURE}" ]; }}'
+    )
+    said = await _central(central, "nix-build", "--no-out-link", "--expr", expr)
+    print(f"[nixkube] central's farm build pod said:\n{said}", flush=True)
+    paths, moved = _field(said, "build_one_inputs", "paths"), _field(said, "build_one_inputs", "bytes")
+    if paths < 1 or moved != 0:
+        raise MachineError(f"[cp] the farm build pod copied {moved} bytes of {paths} inputs from central:\n{said}")
+    roots = set(FARM_ROOT.findall(await pod_logs(central, "pynixd")))
+    if len(roots) != 1:
+        raise MachineError(f"[cp] central's log names {len(roots)} farm roots, not one: {sorted(roots)}")
+    (root,) = roots
+    closure = len((await _central(central, "nix-store", "--query", "--requisites", root)).split())
+    loaded = _field(said, "lower_store_loaded", "paths")
+    if loaded != closure:
+        raise MachineError(f"[cp] the pod's lower store holds {loaded} paths, the closure of {root} {closure}")
+    print(f"[nixkube] central's build pod built from a farm of {root}: {closure} paths, 0 bytes copied", flush=True)
+
+
 def _ran(pod: Pod) -> bool:
     return any("terminated" in s.get("state", {}) for s in raw(pod)["status"].get("containerStatuses", []))
 
@@ -310,3 +366,4 @@ async def test(vms: Machines) -> None:
 
     await _check_farm(api, cp, settings)
     await _check_farm_build_pod(api, cp, settings)
+    await _check_central_farm_build(api, settings)

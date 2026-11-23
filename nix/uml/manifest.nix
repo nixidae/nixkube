@@ -81,6 +81,8 @@ let
       object;
 in
 {
+  imports = [ ./build-pod-store.nix ];
+
   kubernetes.transformers = [
     pullNever
     fastProbes
