@@ -8,7 +8,8 @@
   PriorityClasses `buildPods.priorityClassName` and
   `buildPods.nestedPriorityClassName`, and on every node the seccomp
   profile `buildPods.seccompProfile`, which the node DaemonSet writes under
-  the kubelet's `seccomp` directory. It also lets pynixd create the pods and
+  the kubelet's `seccomp` directory. The DaemonSet's `userns-probe` labels each
+  node `nixkube/userns`, and a template selects `true`. It also lets pynixd create the pods and
   read their logs. Off, the apply prunes the PriorityClass and the Role, and
   each node removes the profile when its DaemonSet pod restarts.
 
@@ -80,7 +81,11 @@ let
       # Central's pod owns each build pod, and central deletes the pods an earlier run left: this bounds the rest.
       activeDeadlineSeconds = pods.deadlineSeconds;
       inherit (pods) priorityClassName;
-      nodeSelector."kubernetes.io/arch" = pkgs.stdenv.hostPlatform.go.GOARCH;
+      nodeSelector = {
+        "kubernetes.io/arch" = pkgs.stdenv.hostPlatform.go.GOARCH;
+        # `nixkube-userns-probe` sets it, in the sandbox container's security context.
+        "nixkube/userns" = "true";
+      };
       securityContext = {
         runAsUser = uid;
         runAsGroup = uid;
@@ -134,13 +139,7 @@ let
               "run"
               "/build/sibling"
             ];
-            # The build pods' profile allows the namespaces the sandbox makes; RuntimeDefault refuses them.
-            securityContext = unprivileged // {
-              seccompProfile = {
-                type = "Localhost";
-                localhostProfile = pods.seccompProfile;
-              };
-            };
+            securityContext = pods.sandboxSecurityContext;
           }
         )
       ];
@@ -207,6 +206,27 @@ in
       type = lib.types.str;
       readOnly = true;
       default = "nixkube/pynixd-builder.json";
+    };
+    sandboxSecurityContext = lib.mkOption {
+      description = ''
+        The `securityContext` of a build pod's sandbox container. The node DaemonSet's `userns-probe`
+        container runs with the same, so the node label it sets says what a build pod meets.
+        The build pods' seccomp profile allows the namespaces the sandbox makes; RuntimeDefault refuses them.
+        No AppArmor field: the kubelet rejects one on a node without AppArmor, and containerd's default
+        profile does not mediate user namespaces.
+      '';
+      type = lib.types.attrsOf lib.types.anything;
+      readOnly = true;
+      internal = true;
+      default = unprivileged // {
+        runAsUser = uid;
+        runAsGroup = uid;
+        runAsNonRoot = true;
+        seccompProfile = {
+          type = "Localhost";
+          localhostProfile = pods.seccompProfile;
+        };
+      };
     };
     builds =
       lib.mkEnableOption ''

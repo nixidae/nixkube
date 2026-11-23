@@ -147,6 +147,11 @@ in
                 # that rescues a node whose pynixd is down. Issues #27, #55.
                 "nixkube/appstarter-init-exclude" = "true";
               }
+              # The image holds the probe. Injection waits for the cache instead, which a new node may not
+              # reach yet: 121 paths, and the container failed while pynixd was down (measured).
+              // lib.optionalAttrs cfg.buildPods.enable {
+                "nixkube/userns-probe-exclude" = "true";
+              }
               // lib.optionalAttrs (cfg.metrics.enable && cfg.metrics.annotations) {
                 "prometheus.io/scrape" = "true";
                 "prometheus.io/port" = toString cfg.metrics.port;
@@ -515,6 +520,21 @@ in
                           memory = "10Mi";
                           cpu = "10m";
                         };
+                      };
+                    };
+                    # Labels the node by whether a build pod's sandbox works here. It starts once
+                    # nix-node has installed the seccomp profile it names; the kubelet retries until then.
+                    userns-probe = lib.mkIf cfg.buildPods.enable {
+                      image = cfg.images.nix;
+                      inherit (cfg) imagePullPolicy;
+                      command = [ "nixkube-userns-probe" ];
+                      securityContext = cfg.buildPods.sandboxSecurityContext;
+                      env = lib.mkNamedList {
+                        KUBE_NODE_NAME.valueFrom.fieldRef.fieldPath = "spec.nodeName";
+                      };
+                      resources.requests = {
+                        memory = "32Mi";
+                        cpu = "10m";
                       };
                     };
                   };

@@ -418,6 +418,11 @@ let
             node = lib.head (lib.filter (c: c.name == "nix-node") pod.spec.containers);
           in
           lib.listToAttrs (map (e: lib.nameValuePair e.name (e.value or null)) node.env);
+        containerNamed = name: containers: lib.findFirst (c: c.name == name) null containers;
+        probeOf =
+          resources:
+          containerNamed "userns-probe" resources.nixkube.DaemonSet.nix-node.spec.template.spec.containers;
+        sandboxOf = system: containerNamed "sandbox" templatesOn."buildpods-${system}".pod.spec.containers;
         priority = on.none.PriorityClass.pynixd-build;
         nested = on.none.PriorityClass.pynixd-build-nested;
       in
@@ -438,6 +443,11 @@ let
       assert storesOn.buildpods-aarch64-linux.template == "buildpods-aarch64-linux";
       assert templatesOn.buildpods-aarch64-linux.pod.spec.nodeSelector."kubernetes.io/arch" == "arm64";
       assert templatesOn.buildpods-x86_64-linux.pod.spec.nodeSelector."kubernetes.io/arch" == "amd64";
+      # The probe labels a node as a build pod's sandbox container would meet it, and the pods select on it.
+      assert probeOf off == null;
+      assert (probeOf on).securityContext == (sandboxOf "x86_64-linux").securityContext;
+      assert (probeOf on).securityContext.seccompProfile.type == "Localhost";
+      assert templatesOn.buildpods-x86_64-linux.pod.spec.nodeSelector."nixkube/userns" == "true";
       assert podStores storesOff == { };
       assert !(off.nixkube ? NetworkPolicy);
       assert
