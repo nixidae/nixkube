@@ -17,11 +17,14 @@ turning it off means:
     control); a `hostUsers: false` pod's farm is reported, not asserted, as
     the runtime's idmap of each bind is unmeasured; the node keeps no farm
     mount after the pods go
+  - a writable farm (`storeVolume`) puts the pod's output on its emptyDir:
+    kubelet counts the output there and no input, and the emptyDir's path
+    holds no mount
   - central builds a derivation that asks for it in a pynixd build pod, as
-    uid 1000: the pod's `/nix` is a farm of one path central made for the
-    build, its pynixd reads the farm as its lower store, and it copies none
-    of its input in (`../build-pod-store.nix`); the build pod names central's
-    pod as its owner, from the downward API
+    uid 1000: the pod's `/nix` is a writable farm of one path central made for
+    the build, its pynixd uses it as its own store, and it copies none of its
+    input in (`../build-pod-store.nix`); the build pod names central's pod as
+    its owner, from the downward API
 
 Through kr8s, from the host, at `<out>/access/kubeconfig`, which the cluster
 phase's `bring_up` writes.
@@ -29,6 +32,7 @@ phase's `bring_up` writes.
 
 import json
 import re
+from typing import Any
 
 import anyio
 import kr8s.asyncio
@@ -75,8 +79,74 @@ async def _profile_pod(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) -
 
 
 FARM_MOUNT = "/mnt/csi"
-FARM_POINT = re.compile(r"/volumes/[^/]+/nix/store(/|$)")
+# The tmpfs farm's store, `<volume>/nix/store`, and the writable farm's store disk, `<volume>/nix`.
+FARM_POINT = re.compile(r"/nix-csi/volumes/[^/]+/nix(/store)?$")
 WROTE = "nixkube-farm-wrote"
+OUTPUT_BYTES = 4 << 20
+STATS_TIMEOUT = 3 * 60
+
+
+async def _check_store_disk(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) -> None:
+    """A writable farm (`storeVolume`): kubelet counts the pod's output on its emptyDir, and no input.
+
+    kubelet's walk crosses no other st_dev, and an input bind keeps the node store's, so an input bind at the
+    emptyDir's own path would count. Its volume stats refresh once a minute (`--volume-stats-agg-period`)."""
+    job = json.loads(await anyio.Path(settings["probeRo"]).read_text())
+    spec = job["spec"]["template"]["spec"]
+    spec["restartPolicy"] = "Never"
+    spec["nodeSelector"] = {"kubernetes.io/hostname": cp.name}
+    (container,) = (c for c in spec["containers"] if c["name"] == "csi")
+    spec["containers"] = [container]
+    container["securityContext"] = {"runAsUser": 1000, "runAsGroup": 1000}
+    (volume,) = spec["volumes"]
+    volume["csi"]["readOnly"] = False
+    volume["csi"]["volumeAttributes"] |= {"presentation": "farm", "storeVolume": "disk"}
+    spec["volumes"].append({"name": "disk", "emptyDir": {}})
+    container["volumeMounts"].append({"name": "disk", "mountPath": "/disk", "readOnly": True})
+    hello = settings["workloadStorePath"].removeprefix("/nix/store/")
+    bin_ = f"{settings['busybox']}/bin"
+    container["command"] = [
+        f"{bin_}/sh",
+        "-c",
+        f"{FARM_MOUNT}/store/{hello}/bin/hello;"
+        f" {bin_}/dd if=/dev/zero of={FARM_MOUNT}/store/output bs=1M count={OUTPUT_BYTES >> 20} && echo {WROTE};"
+        f" {bin_}/touch {FARM_MOUNT}/store/{hello}/w 2>/dev/null && echo {WROTE}-bind; exec {bin_}/sleep 600",
+    ]
+    pod = Pod({"metadata": {"generateName": "buildpods-disk-", "namespace": NAMESPACE}, "spec": spec}, api=api)
+    await pod.create()
+
+    async def wrote() -> tuple[bool, str]:
+        await pod.refresh()
+        said = await pod_logs(pod, "csi") if raw(pod).get("status", {}).get("phase") == "Running" else ""
+        return WROTE in said, said or json.dumps(raw(pod).get("status", {}))
+
+    said = await until(f"pod {pod.name} writes its output", wrote, POD_TIMEOUT, cp)
+    if "Hello, world!" not in said or f"{WROTE}-bind" in said:
+        raise MachineError(f"[cp] a writable farm did not run hello, or an input took a write:\n{said}")
+
+    async def counted() -> tuple[bool, int]:
+        async with api.call_api("GET", url=f"nodes/{cp.name}/proxy/stats/summary") as response:
+            # kubelet's stats summary, `pkg/kubelet/apis/stats/v1alpha1`: only the fields read here.
+            pods: list[dict[str, Any]] = response.json().get("pods", [])
+        volumes: list[dict[str, Any]] = next((p.get("volume", []) for p in pods if p["podRef"]["name"] == pod.name), [])
+        used: int = next((v.get("usedBytes", 0) for v in volumes if v["name"] == "disk"), 0)
+        return used >= OUTPUT_BYTES, used
+
+    used = await until("kubelet counts the output on the emptyDir", counted, STATS_TIMEOUT, cp)
+    uid = raw(pod)["metadata"]["uid"]
+    disk = f"/var/lib/kubelet/pods/{uid}/volumes/kubernetes.io~empty-dir/disk"
+    leaked = int((await cp.succeed(f"grep -c ' {disk}/' /proc/self/mountinfo || true")).stdout.strip() or 0)
+    roots = f"{settings['workloadStorePath']} {settings['busybox']}"
+    closure = int((await cp.succeed(f"du -scb $(nix-store --query --requisites {roots}) | tail -1")).stdout.split()[0])
+    await pod.delete()
+    # Nix's database holds an 8 MiB `reserved` file (measured, tests/nixos/csi-farm-disk.nix).
+    if leaked or used >= OUTPUT_BYTES + (16 << 20):
+        raise MachineError(f"[cp] the emptyDir counts {used} bytes and holds {leaked} mounts; the closure is {closure}")
+    print(
+        f"[nixkube] kubelet counts {used} bytes on a writable farm's emptyDir for a {OUTPUT_BYTES}-byte output;"
+        f" the closure is {closure} bytes, and the emptyDir's path holds no mount",
+        flush=True,
+    )
 
 
 async def _farm_pod(api: kr8s.asyncio.Api, cp: Machine, settings: Settings, *, farm: bool, host_users: bool) -> str:
@@ -138,6 +208,8 @@ async def _check_farm(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) ->
 
     said = await _farm_pod(api, cp, settings, farm=True, host_users=False)
     print(f"[nixkube] a hostUsers: false pod's farm: {' '.join(said.split())[:300]}", flush=True)
+
+    await _check_store_disk(api, cp, settings)
 
     async def detached() -> tuple[bool, str]:
         # The mount point, field 5: a composefs overlay names `<volume>/erofs::/nix/store` in its options.
@@ -212,10 +284,9 @@ async def _check_central_farm_build(api: kr8s.asyncio.Api, settings: Settings) -
         raise MachineError(f"[cp] central's log names {len(roots)} farm roots, not one: {sorted(roots)}")
     (root,) = roots
     closure = len((await _central(central, "nix-store", "--query", "--requisites", root)).split())
-    loaded = _field(said, "lower_store_loaded", "paths")
-    if loaded != closure:
-        raise MachineError(f"[cp] the pod's lower store holds {loaded} paths, the closure of {root} {closure}")
-    print(f"[nixkube] central's build pod built from a farm of {root}: {closure} paths, 0 bytes copied", flush=True)
+    if "lower_store_loaded" in said:
+        raise MachineError(f"[cp] the build pod read a lower store, not the farm as its own store:\n{said}")
+    print(f"[nixkube] central's build pod built in a farm of {root}: {closure} paths, 0 bytes copied", flush=True)
 
 
 def _ran(pod: Pod) -> bool:

@@ -17,6 +17,9 @@
   system in `nixkube.systems`, `buildpods-<system>`, and a pod template for
   each. Builds then go to pods. The pod's `/nix` is a nixkube farm of the
   build's inputs and of what the template runs, so the pod copies no input.
+  The farm's store is writable, on the pod's own emptyDir `store`
+  (`storeVolume`): the outputs count against the pod's ephemeral storage, and
+  the pod's pynixd uses `/nix` as its store, with every input already valid.
 */
 {
   config,
@@ -36,11 +39,10 @@ let
       lib.recursiveUpdate {
         stores.local = {
           type = "local-socket";
-          store_path = "/build";
+          store_path = "/";
           managed = true;
           daemon = false;
           pynixd_writes = true;
-          lower_store = "/";
           op_routes.BuildDerivation = "pynixd";
           sibling_sandbox = "/build/sibling";
         };
@@ -57,11 +59,17 @@ let
     {
       name = "nix";
       mountPath = "/nix";
-      readOnly = true;
     }
     {
       name = "build";
       mountPath = "/build";
+    }
+    # The farm's store disk: the pod reads and writes it at /nix. Mounted here as well because kubelet sets up
+    # and counts only a volume some container mounts (measured).
+    {
+      name = "store";
+      mountPath = "/store-disk";
+      readOnly = true;
     }
   ];
   unprivileged = {
@@ -124,6 +132,12 @@ let
                 name = "PATH";
                 value = "${pkgs.nix}/bin:${pkgs.coreutils}/bin";
               }
+              # Nix takes HOME only when the user owns it, and the pod's store root `/` is no place for one.
+              # `build-one` makes it.
+              {
+                name = "HOME";
+                value = "/build/home";
+              }
             ];
           }
         )
@@ -149,8 +163,12 @@ let
           name = "nix";
           csi = {
             driver = "nixkube";
-            readOnly = true;
+            volumeAttributes.storeVolume = "store";
           };
+        }
+        {
+          name = "store";
+          emptyDir = { };
         }
         {
           name = "build";

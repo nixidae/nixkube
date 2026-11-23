@@ -448,6 +448,14 @@ let
       assert (probeOf on).securityContext == (sandboxOf "x86_64-linux").securityContext;
       assert (probeOf on).securityContext.seccompProfile.type == "Localhost";
       assert templatesOn.buildpods-x86_64-linux.pod.spec.nodeSelector."nixkube/userns" == "true";
+      # The farm's store is the pod's own emptyDir, so its outputs count against the pod.
+      assert
+        let
+          inherit (templatesOn.buildpods-x86_64-linux.pod.spec) volumes;
+          farm = lib.findFirst (v: v.name == storesOn.buildpods-x86_64-linux.farm.volume) null volumes;
+          disk = lib.findFirst (v: v.name == farm.csi.volumeAttributes.storeVolume) null volumes;
+        in
+        disk ? emptyDir && !(farm.csi.readOnly or false);
       assert podStores storesOff == { };
       assert !(off.nixkube ? NetworkPolicy);
       assert
