@@ -57,11 +57,6 @@ let
 
   probes = pkgs.callPackage ./probe.nix { };
 
-  # phases/buildpods.py's pynixd build pod over a CSI farm: the pynixd that runs, not the library.
-  farmBuildPod = pkgs.callPackage ./farm-build-pod.nix {
-    pynixd = (import sources.pynixd { inherit pkgs sources; }).packages.pynixd;
-  };
-
   # `nixkube.hostMountPath` in ./manifest.nix. The driver's own paths are
   # relative to it, and `settings.hostMountPath` below tells the test where
   # to look for them.
@@ -76,7 +71,8 @@ let
     probes.ro
     probes.rw
     pkgs.hello
-    farmBuildPod
+    # The input of phases/buildpods.py's build in a farm pod: central realises it from here.
+    pkgs.busybox
   ];
 
   # What both nodes share. kubeadm hands the worker the control plane's
@@ -554,7 +550,6 @@ vivarium.mkTest (
           settings.workloadStorePath
           settings.buildPodSeccomp
           settings.busybox
-          settings.farmBuildPod
         ];
       };
 
@@ -591,7 +586,6 @@ vivarium.mkTest (
       buildPodSeccompProfile = manifest.config.nixkube.buildPods.seccompProfile;
       # The farm pod's shell (phases/buildpods.py): the NRI plugin gives it this closure.
       busybox = "${pkgs.busybox}";
-      farmBuildPod = "${farmBuildPod}";
       workloadImage = "vivarium.test/busybox:1";
       runtimes = runtimesFor { inherit backend cri kata; };
       inherit cri;

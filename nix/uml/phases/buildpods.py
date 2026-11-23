@@ -17,12 +17,10 @@ turning it off means:
     control); a `hostUsers: false` pod's farm is reported, not asserted, as
     the runtime's idmap of each bind is unmeasured; the node keeps no farm
     mount after the pods go
-  - a pynixd build pod with a farm as its `/nix` builds from it, as uid
-    1000: its pynixd reads the farm as its lower store
-    (`../farm_build_pod.py`)
-  - central builds in such a pod a derivation that asks for it: the pod's
-    `/nix` is a farm of one path central made for the build, and the pod
-    copies none of its input in (`../build-pod-store.nix`)
+  - central builds a derivation that asks for it in a pynixd build pod, as
+    uid 1000: the pod's `/nix` is a farm of one path central made for the
+    build, its pynixd reads the farm as its lower store, and it copies none
+    of its input in (`../build-pod-store.nix`)
 
 Through kr8s, from the host, at `<out>/access/kubeconfig`, which the cluster
 phase's `bring_up` writes.
@@ -30,7 +28,6 @@ phase's `bring_up` writes.
 
 import json
 import re
-from typing import Any
 
 import anyio
 import kr8s.asyncio
@@ -151,81 +148,7 @@ async def _check_farm(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) ->
     print("[nixkube] the node keeps no farm mount after the pods go", flush=True)
 
 
-FARM_NIX_CONFIG = """experimental-features = nix-command
-build-users-group =
-substituters =
-require-drop-supplementary-groups = false
-"""
 BUILT = "output says: built-from-the-farm"
-
-
-async def _check_farm_build_pod(api: kr8s.asyncio.Api, cp: Machine, settings: Settings) -> None:
-    """A pynixd build pod over a farm volume builds from it: no central, so nothing reaches it from elsewhere.
-
-    The daemon container runs pynixd with the farm as its lower store (`farm_build_pod.py`); the sandbox
-    container runs the build, under the build pods' seccomp profile. Both as uid 1000, with no capability.
-    """
-    root = settings["farmBuildPod"]
-    python = f"{root}/venv/lib/venv/bin/python"
-    job = json.loads(await anyio.Path(settings["probeRo"]).read_text())
-    probe_spec = job["spec"]["template"]["spec"]
-    (volume,) = probe_spec["volumes"]
-    attributes = volume["csi"]["volumeAttributes"]
-    (system,) = attributes
-    volume["name"] = "nix"
-    volume["csi"]["volumeAttributes"] = {system: root, "presentation": "farm"}
-    (probe,) = (c for c in probe_spec["containers"] if c["name"] == "csi")
-    unprivileged = {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}
-    mounts = [{"name": "nix", "mountPath": "/nix", "readOnly": True}, {"name": "build", "mountPath": "/build"}]
-    base = {"image": probe["image"], "imagePullPolicy": probe.get("imagePullPolicy", "Never"), "volumeMounts": mounts}
-    spec = {
-        "restartPolicy": "Never",
-        "nodeSelector": {"kubernetes.io/hostname": cp.name},
-        "securityContext": {
-            "runAsUser": 1000,
-            "runAsGroup": 1000,
-            "runAsNonRoot": True,
-            "seccompProfile": {"type": "RuntimeDefault"},
-        },
-        "containers": [
-            {
-                **base,
-                "name": "pynixd",
-                "command": [python, "-I", f"{root}/run.py", root],
-                "env": [{"name": "NIX_CONFIG", "value": FARM_NIX_CONFIG}],
-                "securityContext": unprivileged,
-            },
-            {
-                **base,
-                "name": "sandbox",
-                "command": [python, "-I", "-m", "pynixd_store.builder.sibling", "run", "/build/sibling"],
-                "securityContext": {
-                    **unprivileged,
-                    "seccompProfile": {"type": "Localhost", "localhostProfile": settings["buildPodSeccompProfile"]},
-                },
-            },
-        ],
-        "volumes": [volume, {"name": "build", "emptyDir": {}}],
-    }
-    pod = Pod({"metadata": {"generateName": "buildpods-farm-build-", "namespace": NAMESPACE}, "spec": spec}, api=api)
-    await pod.create()
-
-    async def ended() -> tuple[bool, str]:
-        # The sandbox container serves for ever: the daemon container's end is the pod's answer.
-        await pod.refresh()
-        statuses = raw(pod).get("status", {}).get("containerStatuses", [])
-        daemon: dict[str, Any] = next((s.get("state", {}) for s in statuses if s["name"] == "pynixd"), {})
-        return "terminated" in daemon or daemon.get("waiting", {}).get("reason") in NOT_STARTED, json.dumps(statuses)
-
-    await until(f"pod {pod.name}", ended, POD_TIMEOUT, cp)
-    said = await pod_logs(pod, "pynixd")
-    await pod.delete()
-    print(f"[nixkube] the farm build pod said:\n{said}", flush=True)
-    if BUILT not in said or "lower_store_loaded" not in said:
-        raise MachineError(f"[cp] a pynixd build pod over a farm did not build from it:\n{said}")
-    print("[nixkube] a pynixd build pod builds from its farm volume, as uid 1000", flush=True)
-
-
 CENTRAL_NIX = ["env", "NIX_REMOTE=unix:///run/pynixd/pynixd.sock"]
 FARM_FEATURE = "nixkube-podfarm"
 FARM_ROOT = re.compile(r"/nix/store/[0-9a-z]{32}-pynixd-build-inputs")
@@ -365,5 +288,4 @@ async def test(vms: Machines) -> None:
         await _holds(node, settings)
 
     await _check_farm(api, cp, settings)
-    await _check_farm_build_pod(api, cp, settings)
     await _check_central_farm_build(api, settings)
