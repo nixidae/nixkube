@@ -468,6 +468,12 @@ vivarium.mkTest (
           script = ./phases/buildpods.py;
           after = [ "workloads" ];
         };
+        # Whether an NRI plugin can make a container into Nix's sandbox.
+        # Off `deploy`, so nixkube's own plugin is there as well.
+        nriprobe = {
+          script = ./phases/nriprobe.py;
+          after = [ "deploy" ];
+        };
         # After chaos, so a scheduler that picks chaos first cannot leave
         # these waiting behind a breakpoint on it.
         runtimes = {
@@ -550,6 +556,7 @@ vivarium.mkTest (
           settings.workloadStorePath
           settings.buildPodSeccomp
           settings.busybox
+          settings.nriProbe
         ];
       };
 
@@ -586,6 +593,10 @@ vivarium.mkTest (
       buildPodSeccompProfile = manifest.config.nixkube.buildPods.seccompProfile;
       # The farm pod's shell (phases/buildpods.py): the NRI plugin gives it this closure.
       busybox = "${pkgs.busybox}";
+      # A second NRI plugin that rewrites one container (phases/nriprobe.py).
+      nriProbe = "${pkgs.writeScript "nri-probe" (
+        "#!${pkgs.nixkube.venv}/bin/python -I\n" + builtins.readFile ./nri-probe.py
+      )}";
       workloadImage = "vivarium.test/busybox:1";
       runtimes = runtimesFor { inherit backend cri kata; };
       inherit cri;
