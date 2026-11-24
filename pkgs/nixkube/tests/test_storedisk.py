@@ -105,3 +105,17 @@ def test_two_users_on_one_store_are_refused() -> None:
     )
     with pytest.raises(StoreDiskError, match="different users"):
         store_disk(doc, "store", TARGET, UID)
+
+
+def test_one_user_in_two_groups_owns_the_store_with_the_pods_group() -> None:
+    builder = {
+        "name": "runner",
+        "securityContext": {"runAsGroup": 100},
+        "volumeMounts": [{"name": "nix", "mountPath": "/nix"}],
+    }
+    doc = spec(securityContext={"runAsUser": 1000, "runAsGroup": 1000})
+    doc["containers"].append(builder)  # type: ignore[arg-type]  # a test's partial container
+
+    disk = store_disk(doc, "store", TARGET, UID)
+
+    assert (disk.uid, disk.gid) == (1000, 1000)

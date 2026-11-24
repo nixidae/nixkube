@@ -69,26 +69,30 @@ def store_disk(spec: PodSpec, name: str, target_path: Path, pod_uid: str) -> Sto
 
 
 def store_owner(spec: PodSpec, csi_volume: str) -> tuple[int, int]:
-    """The uid and gid that every container mounting `csi_volume` runs as.
+    """The uid that every container mounting `csi_volume` runs as, and the store's gid.
 
     Required, not defaulted: without `runAsUser` the image decides the user, and nixkube cannot see it.
-    The gid is `runAsGroup`, or 0 when unset, as the runtime does."""
+    The owner writes the store whatever its group, so the containers may run with different groups, as a
+    builder with Nix's build group beside its controller does. The gid is theirs when they share one, else the
+    pod's `runAsGroup`; 0 when unset, as the runtime does."""
     pod_context = spec.get("securityContext", {})
-    owners: set[tuple[int | None, int]] = set()
+    pod_gid = pod_context.get("runAsGroup", 0)
+    uids: set[int | None] = set()
+    gids: set[int] = set()
     for container in spec.get("containers", []) + spec.get("initContainers", []):
         if not any(m.get("name") == csi_volume for m in container.get("volumeMounts", [])):
             continue
         context = container.get("securityContext", {})
-        uid = context.get("runAsUser", pod_context.get("runAsUser"))
-        gid = context.get("runAsGroup", pod_context.get("runAsGroup", 0))
-        owners.add((uid, gid))
-    if not owners:
+        uids.add(context.get("runAsUser", pod_context.get("runAsUser")))
+        gids.add(context.get("runAsGroup", pod_gid))
+    if not uids:
         raise StoreDiskError(f"no container mounts volume {csi_volume!r}")
-    if len(owners) > 1:
+    if len(uids) > 1:
         raise StoreDiskError(
-            f"the containers that mount {csi_volume!r} run as different users: {sorted(owners, key=str)}"
+            f"the containers that mount {csi_volume!r} run as different users: {sorted(uids, key=str)}"
         )
-    ((uid, gid),) = owners
+    (uid,) = uids
     if uid is None:
         raise StoreDiskError(f"set runAsUser on the containers that mount {csi_volume!r}: the store's owner")
+    (gid,) = gids if len(gids) == 1 else {pod_gid}
     return uid, gid
