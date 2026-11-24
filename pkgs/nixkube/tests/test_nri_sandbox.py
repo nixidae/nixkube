@@ -12,6 +12,7 @@ from nri import nri_pb2
 from src.nri.sandbox import (
     NETWORK_ANNOTATION,
     SANDBOX_ANNOTATION,
+    SHELL_ANNOTATION,
     SandboxRequest,
     added_variables,
     network_files,
@@ -86,6 +87,23 @@ def test_store_replaces_the_farm() -> None:
     assert store.source == f"{FARM_SOURCE}/store"
     # rbind: each input is a bind inside the farm's store.
     assert list(store.options) == ["rbind", "rprivate", "rw"]
+
+
+def test_the_build_shell_comes_from_the_farm() -> None:
+    shell = "/nix/store/x-busybox/bin/busybox"
+    request = sandbox_request({SANDBOX_ANNOTATION: "runner", SHELL_ANNOTATION: shell})
+    assert request is not None
+
+    adjust = sandbox_adjustment(request, _container(), machine="x86_64", busybox=BUSYBOX)
+
+    (sh,) = [m for m in adjust.mounts if m.destination == "/bin/sh"]
+    assert sh.source == f"{FARM_SOURCE}/store/x-busybox/bin/busybox"
+    assert "ro" in sh.options
+    for bad in ("/bin/busybox", "/nix/store", "/nix/store/../etc/passwd"):
+        with pytest.raises(ValueError, match="not a file in /nix/store"):
+            sandbox_adjustment(
+                SandboxRequest("runner", network=False, shell=bad), _container(), machine="x86_64", busybox=BUSYBOX
+            )
 
 
 def test_no_farm_is_refused() -> None:
