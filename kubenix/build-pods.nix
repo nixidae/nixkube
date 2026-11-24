@@ -265,6 +265,7 @@ let
           container
           // {
             name = "runner";
+            tty = pods.runnerTty;
             securityContext = unprivileged // {
               runAsUser = uid;
               runAsGroup = nixbldGid;
@@ -395,6 +396,15 @@ in
       nixkube's NRI plugin makes the pod's `runner` container Nix's sandbox. Central takes it before the
       unsandboxed one. Spike, nixidae/nixidae#1560
     '';
+    runnerTty = lib.mkOption {
+      description = ''
+        Give the `runner` container a terminal, as Nix gives a builder one. Off, its stdout and stderr are pipes.
+        Spike: the build pods test measures both.
+      '';
+      type = lib.types.bool;
+      default = false;
+      internal = true;
+    };
     runnerResources = lib.mkOption {
       description = ''
         The resources of the `runner` container, the builder, in a runner build pod. The build's `NIX_BUILD_CORES`
