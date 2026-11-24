@@ -219,6 +219,9 @@ let
     pod.metadata.annotations = {
       "nixkube.nixidae.org/build-sandbox" = "runner";
       "nixkube.nixidae.org/build-shell" = "${pkgs.busybox-sandbox-shell}/bin/busybox";
+      # The farm is central's root alone, which holds each store path of the template. The runner's spec also
+      # names the build's outputs, which no store holds yet: the CSI driver fails to fetch them (measured).
+      "nixkube/pod-exclude" = "true";
     };
     pod.spec = lib.recursiveUpdate (podSpec pkgs false) {
       # nixkube's NRI plugin sets it on its node (`RUNNER_LABEL`).
@@ -240,6 +243,11 @@ let
               {
                 name = "PYNIXD_POD_NAMESPACE";
                 valueFrom.fieldRef.fieldPath = "metadata.namespace";
+              }
+              # pynixd's `pod_name`, `pod_uid` and `pod_namespace` as well, which it takes all or none of.
+              {
+                name = "PYNIXD_POD_UID";
+                valueFrom.fieldRef.fieldPath = "metadata.uid";
               }
             ];
           }
@@ -479,140 +487,143 @@ in
     };
     # pynixd creates each build pod and follows its log (`store/build_pods.py`). The Role in ./rbac.nix
     # already lets it watch and delete pods, and create the pod's job Secret.
-    kubernetes.resources.${cfg.namespace} = {
-      # A build pod dials central's SSH port, and after its name, the cluster DNS. Nothing dials a build pod:
-      # central reads its log and its end through the API server. Only a CNI that enforces policies holds it.
-      NetworkPolicy.nixkube-build-pods = {
-        metadata.labels = cfg.labels;
-        spec = {
-          podSelector.matchLabels."pynixd.nixidae.org/build" = "true";
-          policyTypes = [
-            "Ingress"
-            "Egress"
-          ];
-          ingress = [ ];
-          egress = [
-            {
-              to = [
-                {
-                  podSelector.matchLabels = cfg.matchLabels // {
-                    "app.kubernetes.io/component" = "pynixd";
-                  };
-                }
-              ];
-              ports = [
-                {
-                  protocol = "TCP";
-                  port = "ssh";
-                }
-              ];
-            }
-            {
-              to = [
-                {
-                  namespaceSelector.matchLabels."kubernetes.io/metadata.name" = "kube-system";
-                  podSelector.matchLabels.k8s-app = "kube-dns";
-                }
-              ];
-              ports = [
-                {
-                  protocol = "UDP";
-                  port = 53;
-                }
-                {
-                  protocol = "TCP";
-                  port = 53;
-                }
-              ];
-            }
-          ];
-        };
-      };
-      Role.nixkube-build-pods = {
-        metadata.labels = cfg.labels;
-        rules = [
-          {
-            apiGroups = [ "" ];
-            resources = [ "pods" ];
-            verbs = [ "create" ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "pods/log" ];
-            verbs = [ "get" ];
-          }
-        ];
-      };
-      RoleBinding.nixkube-build-pods = {
-        metadata.labels = cfg.labels;
-        subjects = lib.mkNamedList {
-          nixkube.kind = "ServiceAccount";
-        };
-        roleRef = {
-          kind = "Role";
-          name = "nixkube-build-pods";
-          apiGroup = "rbac.authorization.k8s.io";
-        };
-      };
-    }
-    // lib.optionalAttrs pods.runner {
-      # A runner build pod's controller reads its pod, waits for the runner and copies its log
-      # (`pynixd/provisioning/runner_wait.py`). RBAC cannot name one pod, so it can read each pod of the namespace.
-      ServiceAccount.${runnerServiceAccount}.metadata.labels = cfg.labels;
-      Role.${runnerServiceAccount} = {
-        metadata.labels = cfg.labels;
-        rules = [
-          {
-            apiGroups = [ "" ];
-            resources = [ "pods" ];
-            verbs = [
-              "get"
-              "watch"
+    kubernetes.resources.${cfg.namespace} = lib.mkMerge [
+      {
+        # A build pod dials central's SSH port, and after its name, the cluster DNS. Nothing dials a build pod:
+        # central reads its log and its end through the API server. Only a CNI that enforces policies holds it.
+        NetworkPolicy.nixkube-build-pods = {
+          metadata.labels = cfg.labels;
+          spec = {
+            podSelector.matchLabels."pynixd.nixidae.org/build" = "true";
+            policyTypes = [
+              "Ingress"
+              "Egress"
             ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "pods/log" ];
-            verbs = [ "get" ];
-          }
-        ];
-      };
-      RoleBinding.${runnerServiceAccount} = {
-        metadata.labels = cfg.labels;
-        subjects = lib.mkNamedList {
-          ${runnerServiceAccount}.kind = "ServiceAccount";
-        };
-        roleRef = {
-          kind = "Role";
-          name = runnerServiceAccount;
-          apiGroup = "rbac.authorization.k8s.io";
-        };
-      };
-      # The controller dials the API server as well. Its port behind the Service's DNAT differs per cluster.
-      NetworkPolicy.nixkube-build-pod-runner = {
-        metadata.labels = cfg.labels;
-        spec = {
-          podSelector.matchLabels = {
-            "pynixd.nixidae.org/build" = "true";
-            "nixkube.nixidae.org/build-runner" = "true";
+            ingress = [ ];
+            egress = [
+              {
+                to = [
+                  {
+                    podSelector.matchLabels = cfg.matchLabels // {
+                      "app.kubernetes.io/component" = "pynixd";
+                    };
+                  }
+                ];
+                ports = [
+                  {
+                    protocol = "TCP";
+                    port = "ssh";
+                  }
+                ];
+              }
+              {
+                to = [
+                  {
+                    namespaceSelector.matchLabels."kubernetes.io/metadata.name" = "kube-system";
+                    podSelector.matchLabels.k8s-app = "kube-dns";
+                  }
+                ];
+                ports = [
+                  {
+                    protocol = "UDP";
+                    port = 53;
+                  }
+                  {
+                    protocol = "TCP";
+                    port = 53;
+                  }
+                ];
+              }
+            ];
           };
-          policyTypes = [ "Egress" ];
-          egress = [
+        };
+        Role.nixkube-build-pods = {
+          metadata.labels = cfg.labels;
+          rules = [
             {
-              ports = [
-                {
-                  protocol = "TCP";
-                  port = 443;
-                }
-                {
-                  protocol = "TCP";
-                  port = 6443;
-                }
-              ];
+              apiGroups = [ "" ];
+              resources = [ "pods" ];
+              verbs = [ "create" ];
+            }
+            {
+              apiGroups = [ "" ];
+              resources = [ "pods/log" ];
+              verbs = [ "get" ];
             }
           ];
         };
-      };
-    };
+        RoleBinding.nixkube-build-pods = {
+          metadata.labels = cfg.labels;
+          subjects = lib.mkNamedList {
+            nixkube.kind = "ServiceAccount";
+          };
+          roleRef = {
+            kind = "Role";
+            name = "nixkube-build-pods";
+            apiGroup = "rbac.authorization.k8s.io";
+          };
+        };
+      }
+      # Not `//`: both halves set Role, RoleBinding and NetworkPolicy, and `//` keeps only this one's.
+      (lib.mkIf pods.runner {
+        # A runner build pod's controller reads its pod, waits for the runner and copies its log
+        # (`pynixd/provisioning/runner_wait.py`). RBAC cannot name one pod, so it can read each pod of the namespace.
+        ServiceAccount.${runnerServiceAccount}.metadata.labels = cfg.labels;
+        Role.${runnerServiceAccount} = {
+          metadata.labels = cfg.labels;
+          rules = [
+            {
+              apiGroups = [ "" ];
+              resources = [ "pods" ];
+              verbs = [
+                "get"
+                "watch"
+              ];
+            }
+            {
+              apiGroups = [ "" ];
+              resources = [ "pods/log" ];
+              verbs = [ "get" ];
+            }
+          ];
+        };
+        RoleBinding.${runnerServiceAccount} = {
+          metadata.labels = cfg.labels;
+          subjects = lib.mkNamedList {
+            ${runnerServiceAccount}.kind = "ServiceAccount";
+          };
+          roleRef = {
+            kind = "Role";
+            name = runnerServiceAccount;
+            apiGroup = "rbac.authorization.k8s.io";
+          };
+        };
+        # The controller dials the API server as well. Its port behind the Service's DNAT differs per cluster.
+        NetworkPolicy.nixkube-build-pod-runner = {
+          metadata.labels = cfg.labels;
+          spec = {
+            podSelector.matchLabels = {
+              "pynixd.nixidae.org/build" = "true";
+              "nixkube.nixidae.org/build-runner" = "true";
+            };
+            policyTypes = [ "Egress" ];
+            egress = [
+              {
+                ports = [
+                  {
+                    protocol = "TCP";
+                    port = 443;
+                  }
+                  {
+                    protocol = "TCP";
+                    port = 6443;
+                  }
+                ];
+              }
+            ];
+          };
+        };
+      })
+    ];
   };
 }

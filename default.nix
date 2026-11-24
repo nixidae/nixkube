@@ -489,6 +489,22 @@ let
         && !((containerNamed "sandbox" pod.containers).securityContext ? seccompProfile)
         && lib.hasInfix "sandbox = false" (nixConfig pod.containers)
         && !(lib.hasInfix "sandbox = false" (nixConfig containers));
+      # The runner's RBAC and policy come beside central's, not in their place.
+      assert
+        let
+          ns =
+            (instance {
+              nixkube.buildPods = {
+                enable = true;
+                runner = true;
+              };
+            }).kubernetes.resources.nixkube;
+        in
+        ns.Role ? nixkube-build-pods
+        && ns.Role ? nixkube-build-pod
+        && ns.RoleBinding ? nixkube-build-pods
+        && ns.NetworkPolicy ? nixkube-build-pods
+        && ns.NetworkPolicy ? nixkube-build-pod-runner;
       # The runner's template comes before the unsandboxed one. The pod names its runner and shell, and the
       # runner mounts each file the controller writes.
       assert
