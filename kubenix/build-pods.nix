@@ -220,7 +220,9 @@ let
       "nixkube.nixidae.org/build-sandbox" = "runner";
       "nixkube.nixidae.org/build-shell" = "${pkgs.busybox-sandbox-shell}/bin/busybox";
     };
-    pod.spec = podSpec pkgs false // {
+    pod.spec = lib.recursiveUpdate (podSpec pkgs false) {
+      # nixkube's NRI plugin sets it on its node (`RUNNER_LABEL`).
+      nodeSelector."nixkube/build-runner" = "true";
       # The controller reads its own pod and the runner's log. The runtime removes the token from the runner.
       serviceAccountName = runnerServiceAccount;
       enableServiceLinks = false;

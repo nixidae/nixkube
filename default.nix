@@ -512,6 +512,7 @@ let
         && pod.metadata.annotations."nixkube.nixidae.org/build-sandbox" == "runner"
         && lib.hasPrefix "/nix/store/" pod.metadata.annotations."nixkube.nixidae.org/build-shell"
         && pod.spec.nodeSelector."nixkube/userns" == "false"
+        && pod.spec.nodeSelector."nixkube/build-runner" == "true"
         && lib.head pod.spec.containers == controller
         && controller ? lifecycle.postStart
         && runner.resources.requests.cpu == "1"

@@ -42,6 +42,11 @@ NETWORK_ANNOTATION: Final = "nixkube.nixidae.org/build-network"
 SHELL_ANNOTATION: Final = "nixkube.nixidae.org/build-shell"
 """A file in the farm's store, which the builder gets at `/bin/sh`, as Nix's `sandbox-paths` give it."""
 
+RUNNER_LABEL: Final = "nixkube/build-runner"
+"""`"true"` on a node whose runtime runs this plugin; a runner build pod's template selects it. The plugin sets it
+each time the runtime configures it, so a `"false"` set by hand lasts until then: for a runtime without NRI's
+fix for removing a variable."""
+
 STORE: Final = "/nix/store"
 SHELL: Final = "/bin/sh"
 FARM: Final = "/nix"

@@ -13,7 +13,7 @@ import anyio.abc
 import structlog
 from grpclib.server import Stream
 from grpclib_nri import NriPlugin as NriPluginBase, NriServer
-from kr8s.asyncio.objects import Pod
+from kr8s.asyncio.objects import Node, Pod
 
 from nri import nri_pb2
 
@@ -23,6 +23,7 @@ from ..constants import (
     HOST_PROC_PATH,
     HOST_ROOT,
     HOST_STORE,
+    KUBE_NODE_NAME,
     NODE_ROOT,
     NRI_BIND_FARM,
     NRI_COMPOSEFS,
@@ -57,7 +58,7 @@ from .annotations import (
 from .builds import BuildRegistry
 from .cleanup import garbage_collect_stale_volumes, schedule_garbage_collection
 from .mount import OciConfig, kernel_supports_ro, kernel_supports_rw, mount_in_container, rootfs_of
-from .sandbox import sandbox_adjustment, sandbox_request
+from .sandbox import RUNNER_LABEL, sandbox_adjustment, sandbox_request
 from .vm import (
     ALIVE,
     FAILED,
@@ -497,6 +498,10 @@ class NriPlugin(NriPluginBase):
 
         await stream.send_message(nri_pb2.Empty())
 
+    async def Configure(self, stream: Stream[nri_pb2.ConfigureRequest, nri_pb2.ConfigureResponse]) -> None:
+        await super().Configure(stream)
+        self.tasks.start_soon(label_runner_node, name="runner-label")
+
     @nri_error_handler
     async def Synchronize(self, stream: Stream[nri_pb2.SynchronizeRequest, nri_pb2.SynchronizeResponse]) -> None:
         """Sweep after every (re)connection to the runtime.
@@ -811,6 +816,19 @@ def failure_reason(error: BaseException) -> str:
     if isinstance(error, BaseExceptionGroup):
         return "; ".join(failure_reason(inner) for inner in error.exceptions)
     return str(error)
+
+
+async def label_runner_node() -> None:
+    """Label this node as one where a runner build pod gets the sandbox. A failure leaves the label as it is."""
+    logger = structlog.get_logger("nixkube.nri.runner_label")
+    try:
+        node = await Node.get(KUBE_NODE_NAME)
+        await node.patch({"metadata": {"labels": {RUNNER_LABEL: "true"}}})
+    # Anything: the plugin serves its other containers without the label.
+    except Exception:  # noqa: BLE001
+        logger.warning("runner_label_failed", node=KUBE_NODE_NAME, exc_info=True)
+        return
+    logger.info("runner_labelled", node=KUBE_NODE_NAME)
 
 
 async def sweep_loop(cri_socket: Path, building: BuildRegistry) -> None:
