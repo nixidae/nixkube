@@ -489,6 +489,41 @@ let
         && !((containerNamed "sandbox" pod.containers).securityContext ? seccompProfile)
         && lib.hasInfix "sandbox = false" (nixConfig pod.containers)
         && !(lib.hasInfix "sandbox = false" (nixConfig containers));
+      # The runner's template comes before the unsandboxed one. The pod names its runner and shell, and the
+      # runner mounts each file the controller writes.
+      assert
+        let
+          both = settings {
+            nixkube.buildPods = {
+              enable = true;
+              runner = true;
+              unsandboxed = true;
+            };
+          };
+          inherit (both.provisioning.kubernetes.templates.buildpods-x86_64-linux-nri) pod;
+          runner = containerNamed "runner" pod.spec.containers;
+          controller = containerNamed "pynixd" pod.spec.containers;
+        in
+        both.stores.buildpods-x86_64-linux.templates == [
+          "buildpods-x86_64-linux"
+          "buildpods-x86_64-linux-nri"
+          "buildpods-x86_64-linux-unsandboxed"
+        ]
+        && pod.metadata.annotations."nixkube.nixidae.org/build-sandbox" == "runner"
+        && lib.hasPrefix "/nix/store/" pod.metadata.annotations."nixkube.nixidae.org/build-shell"
+        && pod.spec.nodeSelector."nixkube/userns" == "false"
+        && lib.head pod.spec.containers == controller
+        && controller ? lifecycle.postStart
+        && runner.resources.requests.cpu == "1"
+        &&
+          map (m: m.mountPath) runner.volumeMounts == [
+            "/nix"
+            "/build"
+            "/etc/passwd"
+            "/etc/group"
+            "/etc/hosts"
+            "/etc/nsswitch.conf"
+          ];
       pkgs.runCommand "build-pods-toggle" { } "echo ok > $out";
 
     pynixdBindsEveryInterface =

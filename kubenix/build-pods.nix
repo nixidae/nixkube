@@ -37,26 +37,29 @@ let
   uid = 1000;
 
   # The settings of the pynixd in each pod. pynixd answers every operation: a Nix daemon would not know the farm.
-  podConfig = curPkgs.writeText "nixkube-build-pod-pynixd.json" (
-    builtins.toJSON (
-      lib.recursiveUpdate {
-        stores.local = {
-          type = "local-socket";
-          store_path = "/";
-          managed = true;
-          daemon = false;
-          pynixd_writes = true;
-          op_routes.BuildDerivation = "pynixd";
-          sibling_sandbox = "/build/sibling";
-        };
-        unix_path = "/build/pynixd.sock";
-        ssh_port = null;
-        gc_enabled = false;
-        ranking.min_schedule_score = -1.0e9;
-        ranking.min_free_bytes = 0;
-      } pods.podSettings
-    )
-  );
+  # *site* is where the local store's builds run: `sibling_sandbox` or `runner_sandbox`.
+  podConfig =
+    name: site:
+    curPkgs.writeText name (
+      builtins.toJSON (
+        lib.recursiveUpdate {
+          stores.local = {
+            type = "local-socket";
+            store_path = "/";
+            managed = true;
+            daemon = false;
+            pynixd_writes = true;
+            op_routes.BuildDerivation = "pynixd";
+          }
+          // site;
+          unix_path = "/build/pynixd.sock";
+          ssh_port = null;
+          gc_enabled = false;
+          ranking.min_schedule_score = -1.0e9;
+          ranking.min_free_bytes = 0;
+        } pods.podSettings
+      )
+    );
 
   mounts = [
     {
@@ -86,69 +89,101 @@ let
     volumeMounts = mounts;
   };
 
+  # What every build pod's spec holds besides its containers. *userns*: the `nixkube/userns` label a node needs.
+  podSpec = pkgs: userns: {
+    terminationGracePeriodSeconds = 5;
+    # Central's pod owns each build pod, and central deletes the pods an earlier run left: this bounds the rest.
+    activeDeadlineSeconds = pods.deadlineSeconds;
+    inherit (pods) priorityClassName;
+    nodeSelector = {
+      "kubernetes.io/arch" = pkgs.stdenv.hostPlatform.go.GOARCH;
+      # `nixkube-userns-probe` sets it, in the sandbox container's security context.
+      "nixkube/userns" = lib.boolToString userns;
+    };
+    securityContext = {
+      runAsUser = uid;
+      runAsGroup = uid;
+      runAsNonRoot = true;
+      seccompProfile.type = "RuntimeDefault";
+      # The kubelet gives this group read on the job Secret, which pynixd mounts 0400.
+      fsGroup = uid;
+    };
+    volumes = [
+      # pynixd fills `volumeAttributes` for each build.
+      {
+        name = "nix";
+        csi = {
+          driver = "nixkube";
+          volumeAttributes.storeVolume = "store";
+        };
+      }
+      {
+        name = "store";
+        emptyDir = { };
+      }
+      {
+        name = "build";
+        emptyDir = { };
+      }
+    ];
+  };
+
+  # The `pynixd` container, which runs `build-one`. *nixConfig* ends the pod's Nix settings.
+  controller =
+    pkgs:
+    {
+      config,
+      nixConfig,
+      env ? [ ],
+    }:
+    container
+    // {
+      name = "pynixd";
+      command = [
+        "${pkgs.pynixd-build-pod}/bin/pynixd"
+        "build-one"
+        "/run/pynixd-job"
+      ];
+      inherit (pods) resources;
+      env = [
+        {
+          name = "PYNIXD_CONFIG";
+          value = "${config}";
+        }
+        {
+          name = "NIX_CONFIG";
+          value = ''
+            experimental-features = nix-command
+            build-users-group =
+            substituters =
+            require-drop-supplementary-groups = false
+            system-features = ${lib.concatStringsSep " " pods.systemFeatures}
+          ''
+          + nixConfig;
+        }
+        {
+          name = "PATH";
+          value = "${pkgs.nix}/bin:${pkgs.coreutils}/bin";
+        }
+        # Nix takes HOME only when the user owns it, and the pod's store root `/` is no place for one.
+        # `build-one` makes it.
+        {
+          name = "HOME";
+          value = "/build/home";
+        }
+      ]
+      ++ env;
+    };
+
   # Unsandboxed: for a node whose probe says `false`. The build runs without Nix's sandbox, in the sandbox
   # container still, which holds no job key and no pynixd.
   template = pkgs: sandboxed: {
-    pod.spec = {
-      terminationGracePeriodSeconds = 5;
-      # Central's pod owns each build pod, and central deletes the pods an earlier run left: this bounds the rest.
-      activeDeadlineSeconds = pods.deadlineSeconds;
-      inherit (pods) priorityClassName;
-      nodeSelector = {
-        "kubernetes.io/arch" = pkgs.stdenv.hostPlatform.go.GOARCH;
-        # `nixkube-userns-probe` sets it, in the sandbox container's security context.
-        "nixkube/userns" = lib.boolToString sandboxed;
-      };
-      securityContext = {
-        runAsUser = uid;
-        runAsGroup = uid;
-        runAsNonRoot = true;
-        seccompProfile.type = "RuntimeDefault";
-        # The kubelet gives this group read on the job Secret, which pynixd mounts 0400.
-        fsGroup = uid;
-      };
+    pod.spec = podSpec pkgs sandboxed // {
       containers = [
-        (
-          container
-          // {
-            name = "pynixd";
-            command = [
-              "${pkgs.pynixd-build-pod}/bin/pynixd"
-              "build-one"
-              "/run/pynixd-job"
-            ];
-            inherit (pods) resources;
-            env = [
-              {
-                name = "PYNIXD_CONFIG";
-                value = "${podConfig}";
-              }
-              {
-                name = "NIX_CONFIG";
-                value = ''
-                  experimental-features = nix-command
-                  build-users-group =
-                  substituters =
-                  require-drop-supplementary-groups = false
-                  system-features = ${lib.concatStringsSep " " pods.systemFeatures}
-                ''
-                + lib.optionalString (!sandboxed) ''
-                  sandbox = false
-                '';
-              }
-              {
-                name = "PATH";
-                value = "${pkgs.nix}/bin:${pkgs.coreutils}/bin";
-              }
-              # Nix takes HOME only when the user owns it, and the pod's store root `/` is no place for one.
-              # `build-one` makes it.
-              {
-                name = "HOME";
-                value = "/build/home";
-              }
-            ];
-          }
-        )
+        (controller pkgs {
+          config = podConfig "nixkube-build-pod-pynixd.json" { sibling_sandbox = "/build/sibling"; };
+          nixConfig = lib.optionalString (!sandboxed) "sandbox = false\n";
+        })
         (
           container
           // {
@@ -166,33 +201,106 @@ let
           }
         )
       ];
-      volumes = [
-        # pynixd fills `volumeAttributes` for each build.
-        {
-          name = "nix";
-          csi = {
-            driver = "nixkube";
-            volumeAttributes.storeVolume = "store";
-          };
-        }
-        {
-          name = "store";
-          emptyDir = { };
-        }
-        {
-          name = "build";
-          emptyDir = { };
-        }
-      ];
     };
   };
 
+  # `SANDBOX_GID` (`pynixd_store/builder/local.py`): the group of Nix's build user, which the runner runs as.
+  nixbldGid = 100;
+  # `RunnerSandboxSpec`'s defaults: the build's top directory in `build`, and the file that lets the runner start.
+  runnerTop = "runner";
+  runnerReady = "/build/runner-ready";
+
+  # For a node whose probe says `false`, through nixkube's NRI plugin. The `runner` container's own process is
+  # the builder, and the runtime makes it Nix's sandbox (`pkgs/nixkube/src/nri/sandbox.py`). Central writes the
+  # runner's command, environment and working directory for each build. The kubelet creates the runner after
+  # the controller's postStart hook returns: then the files that the runner mounts by subPath exist.
+  runnerTemplate = pkgs: {
+    pod.metadata.labels."nixkube.nixidae.org/build-runner" = "true";
+    pod.metadata.annotations = {
+      "nixkube.nixidae.org/build-sandbox" = "runner";
+      "nixkube.nixidae.org/build-shell" = "${pkgs.busybox-sandbox-shell}/bin/busybox";
+    };
+    pod.spec = podSpec pkgs false // {
+      # The controller reads its own pod and the runner's log. The runtime removes the token from the runner.
+      serviceAccountName = runnerServiceAccount;
+      enableServiceLinks = false;
+      containers = [
+        (
+          controller pkgs {
+            config = podConfig "nixkube-build-pod-runner-pynixd.json" { runner_sandbox = { }; };
+            # The runtime binds the shell; the runner container binds nothing else.
+            nixConfig = "sandbox-paths =\n";
+            env = [
+              {
+                name = "PYNIXD_POD_NAME";
+                valueFrom.fieldRef.fieldPath = "metadata.name";
+              }
+              {
+                name = "PYNIXD_POD_NAMESPACE";
+                valueFrom.fieldRef.fieldPath = "metadata.namespace";
+              }
+            ];
+          }
+          // {
+            lifecycle.postStart.exec.command = [
+              "${pkgs.pynixd-build-pod.venv}/lib/venv/bin/python"
+              "-I"
+              "-m"
+              "pynixd.provisioning.runner_ready"
+              runnerReady
+            ];
+          }
+        )
+        (
+          container
+          // {
+            name = "runner";
+            securityContext = unprivileged // {
+              runAsUser = uid;
+              runAsGroup = nixbldGid;
+            };
+            # Central gives the build as many cores as this allows: the CPU limit, else the request.
+            resources = pods.runnerResources;
+            # Not the store disk: the runtime puts the farm's store in place of `/nix`, and the runner sees no more.
+            volumeMounts = [
+              {
+                name = "nix";
+                mountPath = "/nix";
+              }
+              {
+                name = "build";
+                mountPath = "/build";
+                subPath = "${runnerTop}/build";
+              }
+            ]
+            ++ map (file: {
+              name = "build";
+              mountPath = "/etc/${file}";
+              subPath = "${runnerTop}/etc/${file}";
+              readOnly = true;
+            }) etcFiles;
+          }
+        )
+      ];
+    };
+  };
+  # `etc_files` (`pynixd_store/builder/runner.py`), which the controller writes before the runner starts.
+  etcFiles = [
+    "passwd"
+    "group"
+    "hosts"
+    "nsswitch.conf"
+  ];
+  runnerServiceAccount = "nixkube-build-pod";
+
   store = system: {
     type = "kubernetes-build-pods";
-    # Central takes the first template a Ready node matches: the unsandboxed one only when no node can sandbox.
+    # Central takes the first template a Ready node matches: one for a node without the sandbox only when no
+    # node can sandbox, and the runner's before the unsandboxed one.
     templates = [
       "buildpods-${system}"
     ]
+    ++ lib.optional pods.runner "buildpods-${system}-nri"
     ++ lib.optional pods.unsandboxed "buildpods-${system}-unsandboxed";
     central_host = "pynixd.${cfg.namespace}.svc.cluster.local";
     central_port =
@@ -272,6 +380,19 @@ in
       Its builds run without Nix's sandbox, in the sandbox container: they share the pod's network and hostname,
       and only the farm keeps a build to its declared inputs. Central takes it only when no Ready node can sandbox
     '';
+    runner = lib.mkEnableOption ''
+      a build pod template per system for the nodes whose `userns-probe` labels `nixkube/userns` `false`, in which
+      nixkube's NRI plugin makes the pod's `runner` container Nix's sandbox. Central takes it before the
+      unsandboxed one. Spike, nixidae/nixidae#1560
+    '';
+    runnerResources = lib.mkOption {
+      description = ''
+        The resources of the `runner` container, the builder, in a runner build pod. The build's `NIX_BUILD_CORES`
+        is the CPU limit, else the request, rounded up; central refuses a template with neither.
+      '';
+      type = lib.types.attrsOf lib.types.anything;
+      default.requests.cpu = "1";
+    };
     systemFeatures = lib.mkOption {
       description = "The features a build pod offers: its store's `system_features`, and the pod's Nix `system-features`.";
       type = lib.types.listOf lib.types.str;
@@ -317,6 +438,9 @@ in
             system: pkgs:
             {
               "buildpods-${system}" = template pkgs true;
+            }
+            // lib.optionalAttrs pods.runner {
+              "buildpods-${system}-nri" = runnerTemplate pkgs;
             }
             // lib.optionalAttrs pods.unsandboxed {
               "buildpods-${system}-unsandboxed" = template pkgs false;
@@ -426,6 +550,65 @@ in
           kind = "Role";
           name = "nixkube-build-pods";
           apiGroup = "rbac.authorization.k8s.io";
+        };
+      };
+    }
+    // lib.optionalAttrs pods.runner {
+      # A runner build pod's controller reads its pod, waits for the runner and copies its log
+      # (`pynixd/provisioning/runner_wait.py`). RBAC cannot name one pod, so it can read each pod of the namespace.
+      ServiceAccount.${runnerServiceAccount}.metadata.labels = cfg.labels;
+      Role.${runnerServiceAccount} = {
+        metadata.labels = cfg.labels;
+        rules = [
+          {
+            apiGroups = [ "" ];
+            resources = [ "pods" ];
+            verbs = [
+              "get"
+              "watch"
+            ];
+          }
+          {
+            apiGroups = [ "" ];
+            resources = [ "pods/log" ];
+            verbs = [ "get" ];
+          }
+        ];
+      };
+      RoleBinding.${runnerServiceAccount} = {
+        metadata.labels = cfg.labels;
+        subjects = lib.mkNamedList {
+          ${runnerServiceAccount}.kind = "ServiceAccount";
+        };
+        roleRef = {
+          kind = "Role";
+          name = runnerServiceAccount;
+          apiGroup = "rbac.authorization.k8s.io";
+        };
+      };
+      # The controller dials the API server as well. Its port behind the Service's DNAT differs per cluster.
+      NetworkPolicy.nixkube-build-pod-runner = {
+        metadata.labels = cfg.labels;
+        spec = {
+          podSelector.matchLabels = {
+            "pynixd.nixidae.org/build" = "true";
+            "nixkube.nixidae.org/build-runner" = "true";
+          };
+          policyTypes = [ "Egress" ];
+          egress = [
+            {
+              ports = [
+                {
+                  protocol = "TCP";
+                  port = 443;
+                }
+                {
+                  protocol = "TCP";
+                  port = 6443;
+                }
+              ];
+            }
+          ];
         };
       };
     };
