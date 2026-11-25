@@ -134,8 +134,9 @@ What each mount path gives a pod. `ro` and `rw` are the NRI modes.
 | `net.ipv6.bindv6only=0` | Fallback: the metrics listener binds IPv4. |
 | The compat driver `nix.csi.store` | Optional and deprecated (`nixkube.node.compat`). |
 
-A build pod waits about 1 s after its last log line, because the kubelet
-checks a followed log for the container's end once a second.
+Central reads a build pod's result from its log. The kubelet checks a
+followed log for the container's end once a second, so the pod's status is
+only the fallback.
 
 ## Host OS and Nix
 
