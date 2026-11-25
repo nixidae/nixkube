@@ -29,14 +29,11 @@ About 5.4 s stays the same for every build.
 
 A runner pod (`nixkube.buildPods.runner`) costs more: it starts two
 containers, and the builder waits for the controller. One measured busybox
-build took 10.8 s. From the kubelet's first sight of the pod:
-
-| part | seconds |
-| --- | --- |
-| the farm volume | 0.8 |
-| volume mounted to pod sandbox (not yet divided) | 2.9 |
-| sandbox and controller container | 0.7 |
-| controller start to runner start (`postStart`) | 3.2 |
+build took 7.4 s, and 3.2 s of that was the time to container running. The
+farm volume took 0.6 s of it. The runner then starts about 3 s after the
+controller: the controller's `postStart` hook waits until pynixd in the
+controller has started and prepared the build, so this part is pynixd's own
+start.
 
 ## Send small builds elsewhere
 
