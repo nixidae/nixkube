@@ -141,17 +141,22 @@ def farm_source(pods: Path, pod_uid: str, volume: str | None) -> str:
     return str(pods / pod_uid / "volumes" / "kubernetes.io~csi" / volume / "mount")
 
 
+def runner_store(farm: str) -> str:
+    """The runner's own store in the pod's *farm* (`volume.RUNNER_STORE`): what Nix's sandbox holds, as binds."""
+    return f"{farm}/runner/nix/store"
+
+
 def _store_mount(farm: str) -> nri_pb2.Mount:
-    """`/nix/store` of the pod's farm, with what it holds: each input is a bind in it."""
-    return nri_pb2.Mount(destination=STORE, type="bind", source=f"{farm}/store", options=["rbind", "rprivate", "rw"])
+    """The runner's own store at `/nix/store`, not the farm's: the farm also holds the controller's closure."""
+    return nri_pb2.Mount(destination=STORE, type="bind", source=runner_store(farm), options=["rbind", "rprivate", "rw"])
 
 
 def _shell_mount(farm: str, shell: str) -> nri_pb2.Mount:
-    """*shell* at `/bin/sh`, read-only, from the farm's bind of its store path."""
+    """*shell* at `/bin/sh`, read-only, from the runner's store, which holds its store path's closure."""
     path = PurePosixPath(shell)
     if not path.is_relative_to(STORE) or len(path.parts) < 4 or ".." in path.parts:
         raise ValueError(f"the build shell {shell!r} is not a file in {STORE}")
-    source = f"{farm}/{path.relative_to(FARM)}"
+    source = f"{runner_store(farm)}/{path.relative_to(STORE)}"
     return nri_pb2.Mount(destination=SHELL, type="bind", source=source, options=["bind", "ro", "rprivate"])
 
 

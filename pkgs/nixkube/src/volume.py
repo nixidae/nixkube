@@ -321,6 +321,11 @@ FARM_DISK = Path("nix")
 """A writable CSI farm's mount in its volume root: a bind of the pod's emptyDir (`csi/storedisk.py`). One
 detach takes it with every bind under it, and no delete of the volume root reaches the pod's outputs."""
 
+RUNNER_STORE = Path("nix/runner/nix/store")
+"""A runner build pod's own store, on the same disk as the farm's: what Nix's sandbox holds, and the outputs.
+nixkube's NRI plugin makes it the runner's `/nix/store`; the controller sees `nix/runner` as the build's chroot,
+and renames each output into the farm's store, on the same mount."""
+
 
 def bind_store_disk(volume_root: Path, disk: Path) -> None:
     """Bind the pod's emptyDir at `FARM_DISK`, private.
@@ -383,6 +388,23 @@ def mount_farm(volume_root: Path, store_paths: list[Path], *, writable: bool = F
         detach_farm(volume_root)
         raise MountError(f"Failed to build the farm: {error}", logs="") from error
     return bound
+
+
+def mount_runner_store(volume_root: Path, store_paths: list[Path], uid: int, gid: int) -> int:
+    """The runner's store at `RUNNER_STORE`: one read-only bind of each path, in a directory the pod's user owns.
+
+    After `mount_farm` with `writable`: the directory is on the pod's disk, under the private bind that one detach
+    takes down. Answers how many it bound."""
+    if not is_mount(volume_root / FARM_DISK):
+        raise MountError(f"a runner's store needs the store disk at {volume_root / FARM_DISK}", logs="")
+    store_dir = volume_root / RUNNER_STORE
+    store_dir.mkdir(parents=True, exist_ok=True)
+    os.chown(store_dir, uid, gid)
+    try:
+        return build_farm(store_dir, store_paths)
+    except (FarmError, OSError) as error:
+        detach_farm(volume_root)
+        raise MountError(f"Failed to build the runner's store: {error}", logs="") from error
 
 
 def is_farm(volume_root: Path) -> bool:

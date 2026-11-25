@@ -46,6 +46,7 @@ from ..nix import (
     get_build_args,
     get_current_system,
 )
+from ..nix.closure import get_closure_paths
 from ..nri.annotations import parse_pod_exclude
 from ..presentation import Presentation
 from ..volume import (
@@ -56,6 +57,7 @@ from ..volume import (
     is_farm,
     is_mount,
     mount_farm,
+    mount_runner_store,
     mount_volume,
     own_store,
     prepare_volume,
@@ -70,6 +72,9 @@ _NIXKUBE_DRIVERS = {"nixkube", "nix.csi.store"}
 PRESENTATION_ATTRIBUTE = "presentation"
 """A volume attribute: `farm` asks for one read-only bind per store path, published as the volume's `nix`
 directory, to be mounted at `/nix` with no `subPath` and `readOnly: true`. Absent: nixkube chooses."""
+RUNNER_STORE_ATTRIBUTE = "runnerStore"
+"""A volume attribute of a writable farm: a store path whose references' closure nixkube binds as a runner build
+pod's own store (`volume.RUNNER_STORE`). pynixd's central writes it (`kubernetes.RUNNER_STORE_ATTRIBUTE`)."""
 
 
 def asks_for_farm(volume: Volume) -> bool:
@@ -240,6 +245,11 @@ class NodeServicer(csi_grpc.NodeBase):
             )
         if store_volume is not None and request.readonly:
             raise GRPCError(Status.INVALID_ARGUMENT, f"a volume with {STORE_VOLUME_ATTRIBUTE} is writable")
+        runner_root = request.volume_context.get(RUNNER_STORE_ATTRIBUTE)
+        if runner_root is not None and store_volume is None:
+            raise GRPCError(
+                Status.INVALID_ARGUMENT, f"volume attribute {RUNNER_STORE_ATTRIBUTE} needs {STORE_VOLUME_ATTRIBUTE}"
+            )
 
         log = logger.bind(volume_id=request.volume_id)
 
@@ -423,6 +433,18 @@ class NodeServicer(csi_grpc.NodeBase):
                             partial(mount_farm, volume_root, prepared.paths, writable=disk is not None)
                         )
                         log.debug("farm_bound", paths=bound)
+                    if runner_root is not None and disk is not None:
+                        root = Path(runner_root)
+                        if not prepared.bind_farm or root not in prepared.paths:
+                            raise MountError(
+                                f"the runner's store {runner_root} needs a bound farm that holds it", logs=""
+                            )
+                        # The closure of what the root refers to, as Nix's sandbox holds it: not the root itself.
+                        runner_paths = sorted((await get_closure_paths({root})) - {root})
+                        bound = await anyio.to_thread.run_sync(
+                            mount_runner_store, volume_root, runner_paths, disk.uid, disk.gid
+                        )
+                        log.debug("runner_store_bound", paths=bound)
                     (volume_root / TARGET_FILE).write_text(request.target_path)
                     if disk is not None:
                         await anyio.to_thread.run_sync(bind_writable, volume_root / "nix", Path(request.target_path))

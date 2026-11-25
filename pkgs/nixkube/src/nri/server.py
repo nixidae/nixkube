@@ -64,6 +64,7 @@ from .mount import OciConfig, kernel_supports_ro, kernel_supports_rw, mount_in_c
 from .sandbox import (
     RUNNER_LABEL,
     farm_source,
+    runner_store,
     sandbox_adjustment,
     sandbox_request,
     setup_sources,
@@ -322,16 +323,23 @@ class NriPlugin(NriPluginBase):
             if (refused := unprepared(sources, files)) is not None:
                 raise GRPCError(Status.FAILED_PRECONDITION, refused)
             try:
+                # A path for the runtime, on the node: the kubelet's root is /var/lib/kubelet there.
+                farm = farm_source(KUBELET_PODS_PATH, req.pod.uid, sandbox.farm)
                 adjust = sandbox_adjustment(
                     sandbox,
                     req.container,
                     machine=platform.machine(),
                     busybox=host_source(Path(NRI_VM_BUSYBOX), NODE_ROOT),
-                    # A path for the runtime, on the node: the kubelet's root is /var/lib/kubelet there.
-                    farm=farm_source(KUBELET_PODS_PATH, req.pod.uid, sandbox.farm),
+                    farm=farm,
                 )
             except ValueError as error:
                 raise GRPCError(Status.FAILED_PRECONDITION, str(error)) from error
+            # Not the farm's store in its place: that one holds the controller's closure too.
+            if not await anyio.Path(HOST_ROOT / runner_store(farm).lstrip("/")).is_dir():
+                raise GRPCError(
+                    Status.FAILED_PRECONDITION,
+                    f"the pod's farm has no runner store at {runner_store(farm)}: its volume names no runnerStore",
+                )
             logger.info("build_sandbox", network=sandbox.network)
             NRI_CONTAINERS_SEEN.labels(result="build_sandbox").inc()
             await stream.send_message(nri_pb2.CreateContainerResponse(adjust=adjust))

@@ -87,12 +87,13 @@ def test_a_sandboxed_build_keeps_its_own_hosts_and_loses_the_kubelets() -> None:
     assert network_files([own]) == ["/etc/resolv.conf"]
 
 
-def test_the_store_comes_from_the_pods_farm() -> None:
+def test_the_store_is_the_runners_own_in_the_pods_farm() -> None:
+    """Not the farm's store, which holds the controller's closure too: the runner's holds what Nix's sandbox does."""
     adjust = _adjust(SandboxRequest("runner", network=False))
     (store,) = [m for m in adjust.mounts if not m.destination.startswith("-")]
     assert store.destination == "/nix/store"
-    assert store.source == f"{FARM_SOURCE}/store"
-    # rbind: each input is a bind inside the farm's store.
+    assert store.source == f"{FARM_SOURCE}/runner/nix/store"
+    # rbind: each input is a bind inside the runner's store.
     assert list(store.options) == ["rbind", "rprivate", "rw"]
     assert "-/nix" not in {m.destination for m in adjust.mounts}
 
@@ -110,7 +111,7 @@ def test_the_farm_is_the_pods_csi_volume_on_the_node() -> None:
             farm_source(PODS, uid, volume)
 
 
-def test_the_build_shell_comes_from_the_farm() -> None:
+def test_the_build_shell_comes_from_the_runners_store() -> None:
     shell = "/nix/store/x-busybox/bin/busybox"
     request = sandbox_request({SANDBOX_ANNOTATION: "runner", SHELL_ANNOTATION: shell})
     assert request is not None
@@ -118,7 +119,7 @@ def test_the_build_shell_comes_from_the_farm() -> None:
     adjust = _adjust(request)
 
     (sh,) = [m for m in adjust.mounts if m.destination == "/bin/sh"]
-    assert sh.source == f"{FARM_SOURCE}/store/x-busybox/bin/busybox"
+    assert sh.source == f"{FARM_SOURCE}/runner/nix/store/x-busybox/bin/busybox"
     assert "ro" in sh.options
     for bad in ("/bin/busybox", "/nix/store", "/nix/store/../etc/passwd"):
         with pytest.raises(ValueError, match="not a file in /nix/store"):

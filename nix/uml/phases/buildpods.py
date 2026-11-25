@@ -387,11 +387,32 @@ RUNNER_EXPECTED = {
 }
 
 
-async def _runner_templates(api: kr8s.asyncio.Api, seen: dict[str, bool], before: set[str]) -> None:
-    """Whether each new build pod is a runner build pod; *before* are the pods an earlier build left."""
+SHELL_ANNOTATION = "nixkube.nixidae.org/build-shell"
+
+
+async def _runner_templates(api: kr8s.asyncio.Api, seen: dict[str, bool], shells: set[str], before: set[str]) -> None:
+    """Whether each new build pod is a runner build pod, and the build shell it names; *before* are the pods an
+    earlier build left."""
     async for _event, pod in api.watch("pods", namespace=NAMESPACE, label_selector=BUILD_PODS):
         if pod.name not in before:
-            seen[pod.name] = raw(pod)["metadata"].get("labels", {}).get(RUNNER_POD) == "true"
+            metadata = raw(pod)["metadata"]
+            seen[pod.name] = metadata.get("labels", {}).get(RUNNER_POD) == "true"
+            if shell := metadata.get("annotations", {}).get(SHELL_ANNOTATION):
+                shells.add(shell)
+
+
+def store_path_of(path: str) -> str:
+    """The store path that *path* is in."""
+    return "/".join(path.split("/")[:4])
+
+
+async def _sandbox_store(central: Pod, busybox: str, shells: set[str]) -> set[str]:
+    """What Nix's sandbox holds in `/nix/store` for the runner's build before its output: the closure of its input,
+    and the closure of each store path in `sandbox-paths` (the shell). `chroot-derivation-builder.cc:52`,
+    `derivation-building-goal.cc:951`."""
+    roots = [busybox, *(store_path_of(shell) for shell in shells)]
+    closure = (await _central(central, "nix-store", "--query", "--requisites", *roots)).split()
+    return {path.removeprefix("/nix/store/") for path in closure}
 
 
 async def _check_runner_build(api: kr8s.asyncio.Api, settings: Settings) -> None:
@@ -411,7 +432,8 @@ async def _check_runner_build(api: kr8s.asyncio.Api, settings: Settings) -> None
         f" netdev=$({b}/wc -l < /proc/net/dev) sh=$(test -x /bin/sh && echo yes || echo no)"
         f" job=$(test -e /run/pynixd-job && echo yes || echo no)"
         f" token=$(test -e /var/run/secrets/kubernetes.io && echo yes || echo no)"
-        f" nixbld=$({b}/grep -c nixbld /etc/passwd) cores=$NIX_BUILD_CORES > $out"
+        f" nixbld=$({b}/grep -c nixbld /etc/passwd) cores=$NIX_BUILD_CORES"
+        f" store=$({b}/ls /nix/store | {b}/tr '\\\\n' ,) > $out"
     )
 
     def expr(name: str, feature: str) -> str:
@@ -422,6 +444,7 @@ async def _check_runner_build(api: kr8s.asyncio.Api, settings: Settings) -> None
         )
 
     seen: dict[str, bool] = {}
+    shells: set[str] = set()
     before = {
         pod.name
         async for pod in api.get("pods", namespace=NAMESPACE, label_selector=BUILD_PODS)
@@ -430,7 +453,7 @@ async def _check_runner_build(api: kr8s.asyncio.Api, settings: Settings) -> None
     await _label_userns(api, "false")
     try:
         async with anyio.create_task_group() as watching:
-            watching.start_soon(_runner_templates, api, seen, before)
+            watching.start_soon(_runner_templates, api, seen, shells, before)
             with anyio.fail_after(UNSANDBOXED_TIMEOUT):
                 said = await _central(
                     central, "nix-build", "--no-out-link", "--expr", expr("nixkube-runner", f'"{FARM_FEATURE}"')
@@ -446,6 +469,15 @@ async def _check_runner_build(api: kr8s.asyncio.Api, settings: Settings) -> None
     if wrong:
         raise MachineError(f"[cp] the runner's build in {sorted(seen)} saw {built}, not {RUNNER_EXPECTED}: {wrong}")
     print(f"[nixkube] the runner built in Nix's sandbox: {built}", flush=True)
+    # The shell lists the store before it opens `$out`: the output is not there yet.
+    store = set(filter(None, built.get("store", "").split(",")))
+    sandbox = await _sandbox_store(central, busybox, shells)
+    if store != sandbox:
+        raise MachineError(
+            f"[cp] the runner's /nix/store is not Nix's sandbox store: {len(store - sandbox)} extra"
+            f" {sorted(store - sandbox)[:10]}, {len(sandbox - store)} missing {sorted(sandbox - store)}"
+        )
+    print(f"[nixkube] the runner's /nix/store holds what Nix's sandbox does: {len(store)} paths", flush=True)
     # The runner's terminal keeps the order of stdout and stderr; two pipes did not (measured).
     lines = [line for line in said.splitlines(keepends=True) if "to-std" in line or "again-std" in line]
     if lines != ["to-stdout\n", "to-stderr\n", "again-stdout\n"]:
