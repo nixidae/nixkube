@@ -27,13 +27,16 @@ Measured on a QEMU node, a busybox input (37 MiB), 5.8 s in all:
 The inputs grow with the closure: 1.5 s for 210 MiB, 3.3 s for 378 MiB.
 About 5.4 s stays the same for every build.
 
-A runner pod (`nixkube.buildPods.runner`) costs more: it starts two
-containers, and the builder waits for the controller. One measured busybox
-build took 7.4 s, and 3.2 s of that was the time to container running. The
-farm volume took 0.6 s of it. The runner then starts about 3 s after the
-controller: the controller's `postStart` hook waits until pynixd in the
-controller has started and prepared the build, so this part is pynixd's own
-start.
+The table was measured before two changes. The pod's store no longer runs
+probe builds, which took 1.6 s of pynixd's start. Central reads the result
+from the pod's log, so the last row is now near 0.
+
+A runner pod (`nixkube.buildPods.runner`) starts two containers, and the
+builder waits for the controller. The controller's `postStart` hook waits
+until pynixd in the controller has started and prepared the build. So the
+time to container running includes pynixd's own start, and the parts
+overlap. A busybox build took 5.9 s in all, in two runs with both changes.
+Before them it took 6.9 s, on a host with less load.
 
 ## Send small builds elsewhere
 
