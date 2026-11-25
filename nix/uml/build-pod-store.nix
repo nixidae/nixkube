@@ -20,8 +20,6 @@
       requests.cpu = "100m";
       limits.cpu = "1";
     };
-    # The runner's log through a terminal or through pipes; phases/buildpods.py prints it beside central's.
-    runnerTty = builtins.getEnv "NIXKUBE_TEST_RUNNER_TTY" == "1";
     podSettings.log_level = "INFO";
   };
 }

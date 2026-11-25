@@ -396,8 +396,8 @@ async def _check_runner_build(api: kr8s.asyncio.Api, settings: Settings) -> None
 
     The runner container is the builder, and nixkube's NRI plugin makes it Nix's sandbox: the host name
     `localhost`, loopback alone, uid 1000 and gid 100, Nix's `/etc/passwd`, the build shell at `/bin/sh`, no
-    job key and no service account token. What the builder writes to stdout and stderr reaches the client.
-    The same derivation built by central's own Nix shows how the log differs, which this prints.
+    job key and no service account token. What the builder writes to stdout and stderr reaches the client in
+    the order it wrote it.
     """
     central = await Pod.get("pynixd-0", namespace=NAMESPACE, api=api)
     busybox = settings["busybox"]
@@ -442,13 +442,12 @@ async def _check_runner_build(api: kr8s.asyncio.Api, settings: Settings) -> None
     wrong = {name: built.get(name) for name, value in RUNNER_EXPECTED.items() if built.get(name) != value}
     if wrong:
         raise MachineError(f"[cp] the runner's build in {sorted(seen)} saw {built}, not {RUNNER_EXPECTED}: {wrong}")
-    if "to-stdout" not in said or "to-stderr" not in said:
-        raise MachineError(f"[cp] the client did not get the runner's output:\n{said}")
     print(f"[nixkube] the runner built in Nix's sandbox: {built}", flush=True)
-    local = await _central(central, "nix-build", "--no-out-link", "--expr", expr("nixkube-runner-local", ""))
-    for source, log in (("runner", said), ("central", local)):
-        lines = [line for line in log.splitlines(keepends=True) if "to-std" in line or "again-std" in line]
-        print(f"[nixkube] the {source}'s build log, as the client got it: {lines!r}", flush=True)
+    # The runner's terminal keeps the order of stdout and stderr; two pipes did not (measured).
+    lines = [line for line in said.splitlines(keepends=True) if "to-std" in line or "again-std" in line]
+    if lines != ["to-stdout\n", "to-stderr\n", "again-stdout\n"]:
+        raise MachineError(f"[cp] the client got the runner's output as {lines!r}:\n{said}")
+    print(f"[nixkube] the client got the runner's output in order: {lines!r}", flush=True)
 
 
 def _ran(pod: Pod) -> bool:
