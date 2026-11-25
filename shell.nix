@@ -3,8 +3,11 @@
 let
   default = (import ./. { }).internal;
   inherit (default) pkgs;
+  inherit (pkgs) lib;
+  suites = builtins.attrValues default.pythonTests;
 
-  # One venv holding every project in this repository with its `test` extra.
+  # One venv holding every project a suite in `nix/tests.nix` tests, with the
+  # extras that suite asks for.
   #
   # **Not `python3.withPackages`.** That keeps only importable modules, so it
   # drops an application together with everything the application propagates,
@@ -15,13 +18,9 @@ let
   #
   # What zuban checks against, by hand: in a package directory,
   # `zuban mypy --python-executable "$(command -v python)"`.
-  python = pkgs.pythonSet.mkVirtualEnv "nixkube-dev-env" {
-    nixkube = [ "test" ];
-    pynixd-nixkube = [ "test" ];
-    nri-wait = [ "test" ];
-    grpclib-ttrpc = [ "test" ];
-    grpclib-nri = [ "test" ];
-  };
+  python = pkgs.pythonSet.mkVirtualEnv "nixkube-dev-env" (
+    lib.mergeAttrsList (map (s: s.spec) suites)
+  );
 
   # Sphinx and what it imports, as their own environment. They are a tool this
   # shell runs, not something any project here declares, so they have no place
@@ -70,9 +69,33 @@ let
     ];
     executables = [ "pylsp" ];
   };
+
+  # One pytest per project, as `nix/tests.nix` runs them. Every project's
+  # `tests/` is a package named `tests`, so one pytest over two refuses the
+  # second with ImportPathMismatchError.
+  unitTests = pkgs.writeShellApplication {
+    name = "nixkube-unit-tests";
+    text = ''
+      if [ ! -d pkgs/nixkube ]; then
+        echo "nixkube-unit-tests: run it from nixkube/" >&2
+        exit 2
+      fi
+      failed=()
+      for project in ${lib.escapeShellArgs (map (s: s.project) suites)}; do
+        (cd "pkgs/$project" && python -m pytest "$@") || failed+=("$project")
+      done
+      if [ ''${#failed[@]} -gt 0 ]; then
+        echo "nixkube-unit-tests: failed: ''${failed[*]}" >&2
+        exit 1
+      fi
+    '';
+  };
 in
 pkgs.mkShell {
+  # What each suite needs at run time, as `nix/tests.nix` sets it.
+  env = lib.mergeAttrsList (map (s: s.suiteEnv) suites);
   packages = [
+    unitTests
     python
     pkgs.xonsh
     docsPython

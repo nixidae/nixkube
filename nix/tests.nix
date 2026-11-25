@@ -72,6 +72,13 @@ let
             pkgs.zuban
           ]
           ++ nativeBuildInputs;
+          # For the dev shell's `nixkube-unit-tests`: the suite runs from
+          # `pkgs/<project>` with this environment.
+          passthru = {
+            project = name;
+            suiteEnv = env;
+            inherit spec;
+          };
         }
       )
       ''
