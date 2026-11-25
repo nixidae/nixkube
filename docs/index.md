@@ -8,5 +8,6 @@ getting-started
 store-presentation
 preview-rendering
 build-pods
+compatibility
 options
 ```
