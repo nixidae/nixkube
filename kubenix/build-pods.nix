@@ -226,6 +226,11 @@ let
     pod.spec = lib.recursiveUpdate (podSpec pkgs false) {
       # nixkube's NRI plugin sets it on its node (`RUNNER_LABEL`).
       nodeSelector."nixkube/build-runner" = "true";
+      # Every container in Nix's build group: `fsGroup` adds its group to each, and the build has no other.
+      securityContext = {
+        runAsGroup = nixbldGid;
+        fsGroup = nixbldGid;
+      };
       # The controller reads its own pod and the runner's log. The runtime removes the token from the runner.
       serviceAccountName = runnerServiceAccount;
       enableServiceLinks = false;
@@ -268,10 +273,7 @@ let
             # One terminal for stdout and stderr, as Nix gives a builder. Measured: through two pipes the client
             # got a builder's stdout, stderr, stdout as stdout, stdout, stderr.
             tty = true;
-            securityContext = unprivileged // {
-              runAsUser = uid;
-              runAsGroup = nixbldGid;
-            };
+            securityContext = unprivileged;
             # Central gives the build as many cores as this allows: the CPU limit, else the request.
             resources = pods.runnerResources;
             # Not the store disk: the runtime puts the farm's store in place of `/nix`, and the runner sees no more.

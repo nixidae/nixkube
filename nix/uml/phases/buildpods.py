@@ -375,6 +375,7 @@ RUNNER_POD = "nixkube.nixidae.org/build-runner"
 RUNNER_EXPECTED = {
     "host": "localhost",
     "id": "1000:100",
+    "groups": "100",
     "netdev": "3",
     "sh": "yes",
     "job": "no",
