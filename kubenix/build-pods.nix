@@ -277,7 +277,7 @@ let
           // {
             volumeMounts = mounts ++ [
               {
-                name = apiAccess.name;
+                inherit (apiAccess) name;
                 mountPath = "/var/run/secrets/kubernetes.io/serviceaccount";
                 readOnly = true;
               }
