@@ -27,10 +27,16 @@ Measured on a QEMU node, a busybox input (37 MiB), 5.8 s in all:
 The inputs grow with the closure: 1.5 s for 210 MiB, 3.3 s for 378 MiB.
 About 5.4 s stays the same for every build.
 
-A runner pod (`nixkube.buildPods.runner`) costs more. One measured busybox
-build took 9.9 s, and 5.9 s of that was the time to container running: the
-pod starts two containers, and the builder waits for the controller. That
-part is not divided further yet.
+A runner pod (`nixkube.buildPods.runner`) costs more: it starts two
+containers, and the builder waits for the controller. One measured busybox
+build took 10.8 s. From the kubelet's first sight of the pod:
+
+| part | seconds |
+| --- | --- |
+| the farm volume | 0.8 |
+| volume mounted to pod sandbox (not yet divided) | 2.9 |
+| sandbox and controller container | 0.7 |
+| controller start to runner start (`postStart`) | 3.2 |
 
 ## Send small builds elsewhere
 
