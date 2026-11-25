@@ -58,7 +58,7 @@ from .annotations import (
 from .builds import BuildRegistry
 from .cleanup import garbage_collect_stale_volumes, schedule_garbage_collection
 from .mount import OciConfig, kernel_supports_ro, kernel_supports_rw, mount_in_container, rootfs_of
-from .sandbox import RUNNER_LABEL, sandbox_adjustment, sandbox_request
+from .sandbox import RUNNER_LABEL, sandbox_adjustment, sandbox_request, setup_sources, unprepared
 from .vm import (
     ALIVE,
     FAILED,
@@ -304,6 +304,12 @@ class NriPlugin(NriPluginBase):
         if sandbox is not None and sandbox.container == req.container.name:
             if not NRI_VM_BUSYBOX:
                 raise RuntimeError("NRI_VM_BUSYBOX is not set, so the build sandbox cannot set its host name")
+            sources = setup_sources(req.container.mounts)
+            files = {
+                source for source in sources.values() if await anyio.Path(HOST_ROOT / source.lstrip("/")).is_file()
+            }
+            if (refused := unprepared(sources, files)) is not None:
+                raise ValueError(refused)
             adjust = sandbox_adjustment(
                 sandbox,
                 req.container,

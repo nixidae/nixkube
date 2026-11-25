@@ -12,6 +12,7 @@ from nri import nri_pb2
 from src.nri.sandbox import (
     NETWORK_ANNOTATION,
     SANDBOX_ANNOTATION,
+    SETUP_FILES,
     SHELL_ANNOTATION,
     SandboxRequest,
     added_variables,
@@ -19,6 +20,8 @@ from src.nri.sandbox import (
     sandbox_adjustment,
     sandbox_request,
     seccomp_policy,
+    setup_sources,
+    unprepared,
 )
 
 FARM_SOURCE = "/var/lib/kubelet/pods/u/volumes/kubernetes.io~csi/nix/mount"
@@ -104,6 +107,20 @@ def test_the_build_shell_comes_from_the_farm() -> None:
             sandbox_adjustment(
                 SandboxRequest("runner", network=False, shell=bad), _container(), machine="x86_64", busybox=BUSYBOX
             )
+
+
+def test_a_builder_starts_only_on_the_files_its_controller_wrote() -> None:
+    subpaths = "/var/lib/kubelet/pods/u/volume-subpaths/build/runner"
+    mounts = [nri_pb2.Mount(destination=path, source=f"{subpaths}/{index}") for index, path in enumerate(SETUP_FILES)]
+    sources = setup_sources([*mounts, *_container().mounts])
+
+    assert set(sources) == set(SETUP_FILES)
+    assert unprepared(sources, set(sources.values())) is None
+    # The kubelet made a directory for a file the controller did not write.
+    refused = unprepared(sources, set(sources.values()) - {sources["/etc/hosts"]})
+    assert refused is not None and "/etc/hosts" in refused
+    # A builder that mounts none of them is no runner the controller prepared.
+    assert unprepared(setup_sources(_container().mounts), set()) is not None
 
 
 def test_no_farm_is_refused() -> None:

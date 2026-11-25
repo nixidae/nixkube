@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Final
 from nri import nri_pb2
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Collection, Iterable, Mapping, Sequence
     from pathlib import Path
 
 SANDBOX_ANNOTATION: Final = "nixkube.nixidae.org/build-sandbox"
@@ -148,6 +148,27 @@ def network_files(mounts: Sequence[nri_pb2.Mount]) -> list[str]:
     """What a build without the network loses: the runtime's and the kubelet's files, not the container's own."""
     own = {m.destination for m in mounts if m.destination == "/etc/hosts" and not m.source.endswith(KUBELET_HOSTS)}
     return [path for path in NETWORK_FILES if path not in own]
+
+
+SETUP_FILES: Final = ("/etc/passwd", "/etc/group", "/etc/hosts", "/etc/nsswitch.conf")
+"""The builder's own files, which pynixd's controller writes before it lets the builder start (`etc_files`)."""
+
+
+def setup_sources(mounts: Sequence[nri_pb2.Mount]) -> dict[str, str]:
+    """The source of each of `SETUP_FILES` that the container mounts."""
+    return {m.destination: m.source for m in mounts if m.destination in SETUP_FILES}
+
+
+def unprepared(sources: Mapping[str, str], files: Collection[str]) -> str | None:
+    """Why the builder must not start: a file of `SETUP_FILES` is no file, of the *sources* that are *files*.
+
+    A failed postStart hook does not stop the kubelet: it kills the controller and starts the next container
+    (`kuberuntime_container.go:327`, `kuberuntime_manager.go:1955`). For a subPath whose file is missing, the
+    kubelet makes a directory. So a builder whose controller died before its check finds a directory here."""
+    missing = [path for path in SETUP_FILES if sources.get(path) not in files]
+    if not missing:
+        return None
+    return f"the builder's {', '.join(missing)} are not the files pynixd's controller writes before it starts"
 
 
 def added_variables(env: Iterable[str]) -> list[str]:

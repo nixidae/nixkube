@@ -371,6 +371,7 @@ async def _check_unsandboxed_build(api: kr8s.asyncio.Api, settings: Settings) ->
 
 
 RUNNER_POD = "nixkube.nixidae.org/build-runner"
+SANDBOX_ANNOTATION = "nixkube.nixidae.org/build-sandbox"
 # What a build in Nix's sandbox sees, as the runner's builder writes it to `$out`.
 RUNNER_EXPECTED = {
     "host": "localhost",
@@ -452,6 +453,60 @@ async def _check_runner_build(api: kr8s.asyncio.Api, settings: Settings) -> None
     # The pod's own store sends no probe build: the runner runs the job's alone.
     if "probe_crashed" in said:
         raise MachineError(f"[cp] the runner build pod's store probed through the runner:\n{said}")
+
+
+async def _check_runner_gate(api: kr8s.asyncio.Api, cp: Machine) -> None:
+    """A runner whose controller wrote none of its files does not start: the NRI plugin refuses to create it.
+
+    The kubelet starts the runner even when the controller's postStart hook fails, and makes a directory for
+    each subPath file that is missing. `_check_runner_build` is the control: there the files are there.
+    """
+    central = raw(await Pod.get("pynixd-0", namespace=NAMESPACE, api=api))
+    image = central["spec"]["containers"][0]["image"]
+    etc = [
+        {"name": "build", "mountPath": f"/etc/{name}", "subPath": f"runner/etc/{name}"}
+        for name in ("passwd", "group", "hosts", "nsswitch.conf")
+    ]
+    pod = Pod(
+        {
+            "metadata": {
+                "generateName": "buildpods-runner-gate-",
+                "namespace": NAMESPACE,
+                "annotations": {SANDBOX_ANNOTATION: "runner"},
+            },
+            "spec": {
+                "restartPolicy": "Never",
+                "containers": [
+                    {
+                        "name": "runner",
+                        "image": image,
+                        "imagePullPolicy": "Never",
+                        "command": ["/never-runs"],
+                        "volumeMounts": etc,
+                    }
+                ],
+                "volumes": [{"name": "build", "emptyDir": {}}],
+            },
+        },
+        api=api,
+    )
+    await pod.create()
+
+    async def ended() -> tuple[bool, str]:
+        await pod.refresh()
+        statuses = raw(pod).get("status", {}).get("containerStatuses", [])
+        reasons = {s.get("state", {}).get("waiting", {}).get("reason") for s in statuses}
+        return bool(reasons & NOT_STARTED) or _ran(pod), json.dumps(statuses)
+
+    try:
+        await until("the runner is created or refused", ended, POD_TIMEOUT, cp)
+        statuses = raw(pod)["status"].get("containerStatuses", [])
+        said = " ".join(s.get("state", {}).get("waiting", {}).get("message", "") for s in statuses)
+        if _ran(pod) or "not the files" not in said:
+            raise MachineError(f"[cp] a runner without its controller's files was not refused: {statuses}")
+    finally:
+        await pod.delete()
+    print(f"[nixkube] a runner without its controller's files does not start: {said}", flush=True)
 
 
 def _ran(pod: Pod) -> bool:
@@ -544,3 +599,4 @@ async def test(vms: Machines) -> None:
     await _check_central_farm_build(api, settings)
     await _check_unsandboxed_build(api, settings)
     await _check_runner_build(api, settings)
+    await _check_runner_gate(api, cp)
