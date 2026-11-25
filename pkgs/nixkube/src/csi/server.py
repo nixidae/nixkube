@@ -456,11 +456,17 @@ class NodeServicer(csi_grpc.NodeBase):
                 # the closure is where the time goes, and a pod waits for all
                 # of it. `start_time` is the top of this handler.
                 VOLUME_PREPARE_DURATION.observe(elapsed)
-                await report_event(
-                    pod,
-                    reason="VolumeMount",
-                    note=f"Mounted Nix volume with {len(package_paths)} store paths in {elapsed:.2f}s",
-                    event_type="Normal",
+                # In the background: the kubelet starts no container before this handler answers, and the
+                # event took 2.6 s to create (run nkrunsplit1).
+                self.tasks.start_soon(
+                    partial(
+                        report_event,
+                        pod,
+                        reason="VolumeMount",
+                        note=f"Mounted Nix volume with {len(package_paths)} store paths in {elapsed:.2f}s",
+                        event_type="Normal",
+                    ),
+                    name="volume-mount-event",
                 )
             except CSIError as e:
                 VOLUME_MOUNTS.labels(result="error").inc()
