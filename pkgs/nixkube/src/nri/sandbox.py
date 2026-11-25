@@ -8,7 +8,8 @@ builder, so the runtime makes what Nix's sandbox makes, on a node where an unpri
   - Nix's system call filter in place of the container's;
   - no kubelet file and no service account token;
   - no variable that the kubelet or the runtime adds;
-  - `/nix/store` of the pod's farm, without its database;
+  - `/nix/store` of the pod's farm, without its database, which the builder does not mount itself: without this
+    plugin it has no store (`FARM_ANNOTATION`);
   - `/bin/sh`, the store path in `SHELL_ANNOTATION`, from the farm: central puts each store path the
     template names in the farm;
   - the host name `localhost`, which a createContainer hook sets: NRI has no field for it.
@@ -24,6 +25,7 @@ go only with NRI's fix for removing one (containerd/nri 193a7fdfa4, after v0.12.
 from __future__ import annotations
 
 import errno
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -41,6 +43,12 @@ NETWORK_ANNOTATION: Final = "nixkube.nixidae.org/build-network"
 """`"true"`: the builder keeps the pod's network, as a fixed-output build does."""
 SHELL_ANNOTATION: Final = "nixkube.nixidae.org/build-shell"
 """A file in the farm's store, which the builder gets at `/bin/sh`, as Nix's `sandbox-paths` give it."""
+FARM_ANNOTATION: Final = "nixkube.nixidae.org/build-farm"
+"""The pod's farm volume. The builder does not mount it: this plugin alone gives the builder `/nix/store`. The
+runtime creates a container without this plugin's adjustment when the plugin is gone or late (nri `plugin.go:1022`),
+and that builder has no store, so its builder, a store path, does not run."""
+KUBERNETES_NAME: Final = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?")
+"""A DNS label, as a volume's name is; a pod's uid matches it too."""
 
 RUNNER_LABEL: Final = "nixkube/build-runner"
 """`"true"` on a node whose runtime runs this plugin; a runner build pod's template selects it. The plugin sets it
@@ -86,6 +94,7 @@ class SandboxRequest:
     container: str
     network: bool
     shell: str | None = None
+    farm: str | None = None
 
 
 def sandbox_request(annotations: Mapping[str, str]) -> SandboxRequest | None:
@@ -97,6 +106,7 @@ def sandbox_request(annotations: Mapping[str, str]) -> SandboxRequest | None:
         container=container,
         network=annotations.get(NETWORK_ANNOTATION) == "true",
         shell=annotations.get(SHELL_ANNOTATION) or None,
+        farm=annotations.get(FARM_ANNOTATION) or None,
     )
 
 
@@ -122,25 +132,26 @@ def seccomp_policy(machine: str) -> nri_pb2.LinuxSeccomp:
     )
 
 
-def _farm(mounts: Sequence[nri_pb2.Mount]) -> nri_pb2.Mount:
-    farm = next((m for m in mounts if m.destination == FARM), None)
-    if farm is None:
-        raise ValueError(f"the builder container has no {FARM} to take {STORE} from")
-    return farm
+def farm_source(pods: Path, pod_uid: str, volume: str | None) -> str:
+    """Where the kubelet publishes the pod's farm *volume*, on the node: the CSI volume's target."""
+    if volume is None or not KUBERNETES_NAME.fullmatch(volume):
+        raise ValueError(f"the build pod names no farm volume in {FARM_ANNOTATION}: {volume!r}")
+    if not KUBERNETES_NAME.fullmatch(pod_uid):
+        raise ValueError(f"the build pod's uid {pod_uid!r} is no Kubernetes uid")
+    return str(pods / pod_uid / "volumes" / "kubernetes.io~csi" / volume / "mount")
 
 
-def _store_mount(farm: nri_pb2.Mount) -> nri_pb2.Mount:
-    """`/nix/store` of the container's farm at `/nix`, with what it holds: each input is a bind in it."""
-    options = [o for o in farm.options if o not in {"bind", "rbind"}]
-    return nri_pb2.Mount(destination=STORE, type="bind", source=f"{farm.source}/store", options=["rbind", *options])
+def _store_mount(farm: str) -> nri_pb2.Mount:
+    """`/nix/store` of the pod's farm, with what it holds: each input is a bind in it."""
+    return nri_pb2.Mount(destination=STORE, type="bind", source=f"{farm}/store", options=["rbind", "rprivate", "rw"])
 
 
-def _shell_mount(farm: nri_pb2.Mount, shell: str) -> nri_pb2.Mount:
+def _shell_mount(farm: str, shell: str) -> nri_pb2.Mount:
     """*shell* at `/bin/sh`, read-only, from the farm's bind of its store path."""
     path = PurePosixPath(shell)
     if not path.is_relative_to(STORE) or len(path.parts) < 4 or ".." in path.parts:
         raise ValueError(f"the build shell {shell!r} is not a file in {STORE}")
-    source = f"{farm.source}/{path.relative_to(FARM)}"
+    source = f"{farm}/{path.relative_to(FARM)}"
     return nri_pb2.Mount(destination=SHELL, type="bind", source=source, options=["bind", "ro", "rprivate"])
 
 
@@ -178,17 +189,18 @@ def added_variables(env: Iterable[str]) -> list[str]:
 
 
 def sandbox_adjustment(
-    request: SandboxRequest, container: nri_pb2.Container, *, machine: str, busybox: Path
+    request: SandboxRequest, container: nri_pb2.Container, *, machine: str, busybox: Path, farm: str
 ) -> nri_pb2.ContainerAdjustment:
-    """The adjustment that makes *container* Nix's sandbox. *busybox* is a static busybox, as the runtime sees it.
+    """The adjustment that makes *container* Nix's sandbox. *busybox* is a static busybox, as the runtime sees it;
+    *farm* is the pod's farm, on the node (`farm_source`).
 
     A createContainer hook runs in the container's namespaces before the runtime drops its capabilities
     (measured), and its path resolves in the runtime's mount namespace.
     """
-    removed = [*KUBELET_FILES, FARM, *(() if request.network else network_files(container.mounts))]
+    own_farm = [FARM] if any(m.destination == FARM for m in container.mounts) else []
+    removed = [*KUBELET_FILES, *own_farm, *(() if request.network else network_files(container.mounts))]
     namespaces = [*OWN_NAMESPACES, *(() if request.network else ("network",))]
     hooks = nri_pb2.Hooks(create_container=[nri_pb2.Hook(path=str(busybox), args=["hostname", "localhost"])])
-    farm = _farm(container.mounts)
     added = [_store_mount(farm), *(() if request.shell is None else (_shell_mount(farm, request.shell),))]
     return nri_pb2.ContainerAdjustment(
         hooks=hooks,

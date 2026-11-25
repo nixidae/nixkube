@@ -11,6 +11,8 @@ from typing import Any, Protocol
 import anyio
 import anyio.abc
 import structlog
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError
 from grpclib.server import Stream
 from grpclib_nri import NriPlugin as NriPluginBase, NriServer
 from kr8s.asyncio.objects import Node, Pod
@@ -24,6 +26,7 @@ from ..constants import (
     HOST_ROOT,
     HOST_STORE,
     KUBE_NODE_NAME,
+    KUBELET_PODS_PATH,
     NODE_ROOT,
     NRI_BIND_FARM,
     NRI_COMPOSEFS,
@@ -58,7 +61,14 @@ from .annotations import (
 from .builds import BuildRegistry
 from .cleanup import garbage_collect_stale_volumes, schedule_garbage_collection
 from .mount import OciConfig, kernel_supports_ro, kernel_supports_rw, mount_in_container, rootfs_of
-from .sandbox import RUNNER_LABEL, sandbox_adjustment, sandbox_request, setup_sources, unprepared
+from .sandbox import (
+    RUNNER_LABEL,
+    farm_source,
+    sandbox_adjustment,
+    sandbox_request,
+    setup_sources,
+    unprepared,
+)
 from .vm import (
     ALIVE,
     FAILED,
@@ -308,14 +318,20 @@ class NriPlugin(NriPluginBase):
             files = {
                 source for source in sources.values() if await anyio.Path(HOST_ROOT / source.lstrip("/")).is_file()
             }
+            # A GRPCError: its message reaches the pod's event; any other exception says only that one failed.
             if (refused := unprepared(sources, files)) is not None:
-                raise ValueError(refused)
-            adjust = sandbox_adjustment(
-                sandbox,
-                req.container,
-                machine=platform.machine(),
-                busybox=host_source(Path(NRI_VM_BUSYBOX), NODE_ROOT),
-            )
+                raise GRPCError(Status.FAILED_PRECONDITION, refused)
+            try:
+                adjust = sandbox_adjustment(
+                    sandbox,
+                    req.container,
+                    machine=platform.machine(),
+                    busybox=host_source(Path(NRI_VM_BUSYBOX), NODE_ROOT),
+                    # A path for the runtime, on the node: the kubelet's root is /var/lib/kubelet there.
+                    farm=farm_source(KUBELET_PODS_PATH, req.pod.uid, sandbox.farm),
+                )
+            except ValueError as error:
+                raise GRPCError(Status.FAILED_PRECONDITION, str(error)) from error
             logger.info("build_sandbox", network=sandbox.network)
             NRI_CONTAINERS_SEEN.labels(result="build_sandbox").inc()
             await stream.send_message(nri_pb2.CreateContainerResponse(adjust=adjust))

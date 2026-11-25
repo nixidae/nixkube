@@ -222,6 +222,7 @@ let
       # The farm is central's root alone, which holds each store path of the template. The runner's spec also
       # names the build's outputs, which no store holds yet: the CSI driver fails to fetch them (measured).
       "nixkube/pod-exclude" = "true";
+      "nixkube.nixidae.org/build-farm" = "nix";
     };
     pod.spec = lib.recursiveUpdate (podSpec pkgs false) {
       # nixkube's NRI plugin sets it on its node (`RUNNER_LABEL`).
@@ -231,43 +232,56 @@ let
         runAsGroup = nixbldGid;
         fsGroup = nixbldGid;
       };
-      # The controller reads its own pod and the runner's log. The runtime removes the token from the runner.
+      # The controller reads its own pod and the runner's log. Its token is its own mount: the runner gets none,
+      # with or without the NRI plugin.
       serviceAccountName = runnerServiceAccount;
+      automountServiceAccountToken = false;
       enableServiceLinks = false;
+      volumes = (podSpec pkgs false).volumes ++ [ apiAccess ];
       containers = [
         (
-          controller pkgs {
-            config = podConfig "nixkube-build-pod-runner-pynixd.json" {
-              runner_sandbox = { };
-              # A probe build would go to the runner too, whose spec is the job's: each failed the helper's check
-              # (measured, 1.6 s). `build-one` builds the job alone, which central placed.
-              probe = false;
-            };
-            # The runtime binds the shell; the runner container binds nothing else.
-            nixConfig = "sandbox-paths =\n";
-            env = [
-              {
-                name = "PYNIXD_POD_NAME";
-                valueFrom.fieldRef.fieldPath = "metadata.name";
-              }
-              {
-                name = "PYNIXD_POD_NAMESPACE";
-                valueFrom.fieldRef.fieldPath = "metadata.namespace";
-              }
-              # pynixd's `pod_name`, `pod_uid` and `pod_namespace` as well, which it takes all or none of.
-              {
-                name = "PYNIXD_POD_UID";
-                valueFrom.fieldRef.fieldPath = "metadata.uid";
-              }
-            ];
-          }
+          lib.recursiveUpdate
+            (controller pkgs {
+              config = podConfig "nixkube-build-pod-runner-pynixd.json" {
+                runner_sandbox = { };
+                # A probe build would go to the runner too, whose spec is the job's: each failed the helper's check
+                # (measured, 1.6 s). `build-one` builds the job alone, which central placed.
+                probe = false;
+              };
+              # The runtime binds the shell; the runner container binds nothing else.
+              nixConfig = "sandbox-paths =\n";
+              env = [
+                {
+                  name = "PYNIXD_POD_NAME";
+                  valueFrom.fieldRef.fieldPath = "metadata.name";
+                }
+                {
+                  name = "PYNIXD_POD_NAMESPACE";
+                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                }
+                # pynixd's `pod_name`, `pod_uid` and `pod_namespace` as well, which it takes all or none of.
+                {
+                  name = "PYNIXD_POD_UID";
+                  valueFrom.fieldRef.fieldPath = "metadata.uid";
+                }
+              ];
+            })
+            {
+              lifecycle.postStart.exec.command = [
+                "${pkgs.pynixd-build-pod.venv}/lib/venv/bin/python"
+                "-I"
+                "-m"
+                "pynixd.provisioning.runner_ready"
+                runnerReady
+              ];
+            }
           // {
-            lifecycle.postStart.exec.command = [
-              "${pkgs.pynixd-build-pod.venv}/lib/venv/bin/python"
-              "-I"
-              "-m"
-              "pynixd.provisioning.runner_ready"
-              runnerReady
+            volumeMounts = mounts ++ [
+              {
+                name = apiAccess.name;
+                mountPath = "/var/run/secrets/kubernetes.io/serviceaccount";
+                readOnly = true;
+              }
             ];
           }
         )
@@ -281,12 +295,9 @@ let
             securityContext = unprivileged;
             # Central gives the build as many cores as this allows: the CPU limit, else the request.
             resources = pods.runnerResources;
-            # Not the store disk: the runtime puts the farm's store in place of `/nix`, and the runner sees no more.
+            # No farm and no store disk: nixkube's NRI plugin gives the runner the farm's store and no more. Without
+            # the plugin the runner has no store, and its builder, a store path, does not run.
             volumeMounts = [
-              {
-                name = "nix";
-                mountPath = "/nix";
-              }
               {
                 name = "build";
                 mountPath = "/build";
@@ -312,6 +323,32 @@ let
     "nsswitch.conf"
   ];
   runnerServiceAccount = "nixkube-build-pod";
+  # What the kubelet mounts in every container with `automountServiceAccountToken`, for the controller alone.
+  apiAccess = {
+    name = "kube-api-access";
+    projected.sources = [
+      { serviceAccountToken.path = "token"; }
+      {
+        configMap = {
+          name = "kube-root-ca.crt";
+          items = [
+            {
+              key = "ca.crt";
+              path = "ca.crt";
+            }
+          ];
+        };
+      }
+      {
+        downwardAPI.items = [
+          {
+            path = "namespace";
+            fieldRef.fieldPath = "metadata.namespace";
+          }
+        ];
+      }
+    ];
+  };
 
   store = system: {
     type = "kubernetes-build-pods";

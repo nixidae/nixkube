@@ -10,12 +10,14 @@ import pytest
 
 from nri import nri_pb2
 from src.nri.sandbox import (
+    FARM_ANNOTATION,
     NETWORK_ANNOTATION,
     SANDBOX_ANNOTATION,
     SETUP_FILES,
     SHELL_ANNOTATION,
     SandboxRequest,
     added_variables,
+    farm_source,
     network_files,
     sandbox_adjustment,
     sandbox_request,
@@ -24,19 +26,22 @@ from src.nri.sandbox import (
     unprepared,
 )
 
+PODS = Path("/var/lib/kubelet/pods")
 FARM_SOURCE = "/var/lib/kubelet/pods/u/volumes/kubernetes.io~csi/nix/mount"
 BUSYBOX = Path("/var/lib/nix-csi/nix/store/x-busybox/bin/busybox")
 
 
-def _container() -> nri_pb2.Container:
+def _container(*mounts: nri_pb2.Mount) -> nri_pb2.Container:
+    """A runner as the template makes it: no `/nix` of its own."""
     return nri_pb2.Container(
         name="runner",
         env=["out=/nix/store/a-x", "HOSTNAME=pod", "KUBERNETES_SERVICE_HOST=10.0.0.1", "PATH=/path-not-set"],
-        mounts=[
-            nri_pb2.Mount(destination="/nix", type="bind", source=FARM_SOURCE, options=["rbind", "rprivate", "rw"]),
-            nri_pb2.Mount(destination="/build", type="bind", source="/b", options=["rbind"]),
-        ],
+        mounts=[nri_pb2.Mount(destination="/build", type="bind", source="/b", options=["rbind"]), *mounts],
     )
+
+
+def _adjust(request: SandboxRequest, container: nri_pb2.Container | None = None) -> nri_pb2.ContainerAdjustment:
+    return sandbox_adjustment(request, container or _container(), machine="x86_64", busybox=BUSYBOX, farm=FARM_SOURCE)
 
 
 def test_request_reads_the_annotations() -> None:
@@ -45,6 +50,9 @@ def test_request_reads_the_annotations() -> None:
     assert sandbox_request({SANDBOX_ANNOTATION: "runner", NETWORK_ANNOTATION: "true"}) == SandboxRequest(
         "runner", network=True
     )
+    assert sandbox_request({SANDBOX_ANNOTATION: "runner", FARM_ANNOTATION: "nix"}) == SandboxRequest(
+        "runner", network=False, farm="nix"
+    )
 
 
 def test_only_added_variables_go() -> None:
@@ -52,13 +60,11 @@ def test_only_added_variables_go() -> None:
 
 
 def test_sandboxed_build_gets_its_own_network_and_no_network_files() -> None:
-    adjust = sandbox_adjustment(
-        SandboxRequest("runner", network=False), _container(), machine="x86_64", busybox=BUSYBOX
-    )
+    adjust = _adjust(SandboxRequest("runner", network=False))
     assert {n.type for n in adjust.linux.namespaces} == {"network", "ipc", "uts", "cgroup"}
     assert all(n.path == "" for n in adjust.linux.namespaces)
     removed = {m.destination for m in adjust.mounts if m.destination.startswith("-")}
-    assert {"-/nix", "-/etc/hosts", "-/etc/resolv.conf", "-/etc/hostname", "-/dev/termination-log"} <= removed
+    assert {"-/etc/hosts", "-/etc/resolv.conf", "-/etc/hostname", "-/dev/termination-log"} <= removed
     assert [e.key for e in adjust.env] == ["-HOSTNAME", "-KUBERNETES_SERVICE_HOST"]
     assert [(h.path, list(h.args)) for h in adjust.hooks.create_container] == [
         (str(BUSYBOX), ["hostname", "localhost"])
@@ -66,7 +72,7 @@ def test_sandboxed_build_gets_its_own_network_and_no_network_files() -> None:
 
 
 def test_network_build_keeps_the_pods_network() -> None:
-    adjust = sandbox_adjustment(SandboxRequest("runner", network=True), _container(), machine="x86_64", busybox=BUSYBOX)
+    adjust = _adjust(SandboxRequest("runner", network=True))
     assert "network" not in {n.type for n in adjust.linux.namespaces}
     removed = {m.destination for m in adjust.mounts}
     assert "-/etc/resolv.conf" not in removed
@@ -81,15 +87,27 @@ def test_a_sandboxed_build_keeps_its_own_hosts_and_loses_the_kubelets() -> None:
     assert network_files([own]) == ["/etc/resolv.conf"]
 
 
-def test_store_replaces_the_farm() -> None:
-    adjust = sandbox_adjustment(
-        SandboxRequest("runner", network=False), _container(), machine="x86_64", busybox=BUSYBOX
-    )
+def test_the_store_comes_from_the_pods_farm() -> None:
+    adjust = _adjust(SandboxRequest("runner", network=False))
     (store,) = [m for m in adjust.mounts if not m.destination.startswith("-")]
     assert store.destination == "/nix/store"
     assert store.source == f"{FARM_SOURCE}/store"
     # rbind: each input is a bind inside the farm's store.
     assert list(store.options) == ["rbind", "rprivate", "rw"]
+    assert "-/nix" not in {m.destination for m in adjust.mounts}
+
+
+def test_a_farm_the_builder_mounts_itself_goes() -> None:
+    own = nri_pb2.Mount(destination="/nix", type="bind", source=FARM_SOURCE, options=["rbind"])
+    adjust = _adjust(SandboxRequest("runner", network=False), _container(own))
+    assert "-/nix" in {m.destination for m in adjust.mounts}
+
+
+def test_the_farm_is_the_pods_csi_volume_on_the_node() -> None:
+    assert farm_source(PODS, "u", "nix") == FARM_SOURCE
+    for uid, volume in (("u", None), ("u", "../etc"), ("u", "a/b"), ("../x", "nix"), ("", "nix")):
+        with pytest.raises(ValueError, match=r"farm volume|uid"):
+            farm_source(PODS, uid, volume)
 
 
 def test_the_build_shell_comes_from_the_farm() -> None:
@@ -97,22 +115,20 @@ def test_the_build_shell_comes_from_the_farm() -> None:
     request = sandbox_request({SANDBOX_ANNOTATION: "runner", SHELL_ANNOTATION: shell})
     assert request is not None
 
-    adjust = sandbox_adjustment(request, _container(), machine="x86_64", busybox=BUSYBOX)
+    adjust = _adjust(request)
 
     (sh,) = [m for m in adjust.mounts if m.destination == "/bin/sh"]
     assert sh.source == f"{FARM_SOURCE}/store/x-busybox/bin/busybox"
     assert "ro" in sh.options
     for bad in ("/bin/busybox", "/nix/store", "/nix/store/../etc/passwd"):
         with pytest.raises(ValueError, match="not a file in /nix/store"):
-            sandbox_adjustment(
-                SandboxRequest("runner", network=False, shell=bad), _container(), machine="x86_64", busybox=BUSYBOX
-            )
+            _adjust(SandboxRequest("runner", network=False, shell=bad))
 
 
 def test_a_builder_starts_only_on_the_files_its_controller_wrote() -> None:
     subpaths = "/var/lib/kubelet/pods/u/volume-subpaths/build/runner"
     mounts = [nri_pb2.Mount(destination=path, source=f"{subpaths}/{index}") for index, path in enumerate(SETUP_FILES)]
-    sources = setup_sources([*mounts, *_container().mounts])
+    sources = setup_sources(_container(*mounts).mounts)
 
     assert set(sources) == set(SETUP_FILES)
     assert unprepared(sources, set(sources.values())) is None
@@ -121,12 +137,6 @@ def test_a_builder_starts_only_on_the_files_its_controller_wrote() -> None:
     assert refused is not None and "/etc/hosts" in refused
     # A builder that mounts none of them is no runner the controller prepared.
     assert unprepared(setup_sources(_container().mounts), set()) is not None
-
-
-def test_no_farm_is_refused() -> None:
-    container = nri_pb2.Container(name="runner")
-    with pytest.raises(ValueError, match="no /nix"):
-        sandbox_adjustment(SandboxRequest("runner", network=False), container, machine="x86_64", busybox=BUSYBOX)
 
 
 def test_filter_is_nixs() -> None:

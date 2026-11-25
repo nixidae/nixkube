@@ -532,9 +532,15 @@ let
         && lib.head pod.spec.containers == controller
         && controller ? lifecycle.postStart
         && runner.resources.requests.cpu == "1"
+        # Fail closed: only nixkube's NRI plugin gives the runner a store, and no container gets a token unasked.
+        && pod.metadata.annotations."nixkube.nixidae.org/build-farm" == "nix"
+        && !pod.spec.automountServiceAccountToken
+        && lib.any (
+          m: m.mountPath == "/var/run/secrets/kubernetes.io/serviceaccount"
+        ) controller.volumeMounts
+        && lib.any (m: m.mountPath == "/nix") controller.volumeMounts
         &&
           map (m: m.mountPath) runner.volumeMounts == [
-            "/nix"
             "/build"
             "/etc/passwd"
             "/etc/group"
