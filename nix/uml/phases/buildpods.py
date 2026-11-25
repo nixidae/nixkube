@@ -25,12 +25,10 @@ turning it off means:
     the build, its pynixd uses it as its own store, and it copies none of its
     input in (`../build-pod-store.nix`); the build pod names central's pod as
     its owner, from the downward API
-  - with every node labelled as one that cannot sandbox, central's build
-    goes to the unsandboxed template: no sandbox, no job key beside the
-    build, and a process the build leaves does not hold the build open
-  - with every node labelled so, and `nixkube/build-runner` as the NRI
-    plugin set it, central's build goes to the runner's template: its runner
-    container is the builder, in Nix's sandbox as the NRI plugin makes it
+  - with every node labelled as one that cannot sandbox in a pod, and
+    `nixkube/build-runner` as the NRI plugin set it, central's build goes to
+    the runner's template: its runner container is the builder, in Nix's
+    sandbox as the NRI plugin makes it, with the store Nix's sandbox has
 
 Through kr8s, from the host, at `<out>/access/kubeconfig`, which the cluster
 phase's `bring_up` writes.
@@ -297,7 +295,7 @@ async def _check_central_farm_build(api: kr8s.asyncio.Api, settings: Settings) -
 
 USERNS = "nixkube/userns"
 BUILD_RUNNER = "nixkube/build-runner"
-UNSANDBOXED_TIMEOUT = 3 * 60
+RUNNER_TIMEOUT = 3 * 60
 
 
 async def _label_nodes(api: kr8s.asyncio.Api, labels: dict[str, str]) -> None:
@@ -311,38 +309,8 @@ async def _label_userns(api: kr8s.asyncio.Api, value: str) -> None:
     await _label_nodes(api, {USERNS: value})
 
 
-async def _selectors(api: kr8s.asyncio.Api, seen: dict[str, str | None], before: set[str]) -> None:
-    """The `nixkube/userns` each new build pod selects; *before* are the pods an earlier build left."""
-    async for _event, pod in api.watch("pods", namespace=NAMESPACE, label_selector=BUILD_PODS):
-        if pod.name not in before:
-            seen[pod.name] = raw(pod)["spec"].get("nodeSelector", {}).get(USERNS)
-
-
-async def _check_unsandboxed_build(api: kr8s.asyncio.Api, settings: Settings) -> None:
-    """With every node labelled as one that cannot sandbox, central takes the unsandboxed template.
-
-    The build runs without Nix's sandbox, so its hostname is the pod's, not `localhost`. It runs in the sandbox
-    container, which has no job key. It leaves a process that holds its terminal: the sandbox container kills
-    it, or the build waits for the pod's deadline. The probe's label goes back after.
-    """
-    central = await Pod.get("pynixd-0", namespace=NAMESPACE, api=api)
-    busybox = settings["busybox"]
-    script = (
-        f"{busybox}/bin/sleep 600 & echo host=$({busybox}/bin/hostname)"
-        f" job=$(test -e /run/pynixd-job && echo yes || echo no) > $out"
-    )
-    expr = (
-        f'derivation {{ name = "nixkube-unsandboxed"; system = builtins.currentSystem;'
-        f' builder = "${{builtins.storePath "{busybox}"}}/bin/sh"; args = [ "-c" "{script}" ];'
-        f' requiredSystemFeatures = [ "{FARM_FEATURE}" ]; }}'
-    )
-    seen: dict[str, str | None] = {}
-    before = {
-        pod.name
-        async for pod in api.get("pods", namespace=NAMESPACE, label_selector=BUILD_PODS)
-        if isinstance(pod, Pod)
-    }
-    # nixkube's NRI plugin labels its node: nothing in this test has written the label yet.
+async def _check_runner_label(api: kr8s.asyncio.Api) -> None:
+    """nixkube's NRI plugin labels its node for the runner's template: nothing in this test writes the label first."""
     found = {
         node.name: raw(node)["metadata"].get("labels", {}).get(BUILD_RUNNER)
         async for node in api.get("nodes")
@@ -350,24 +318,7 @@ async def _check_unsandboxed_build(api: kr8s.asyncio.Api, settings: Settings) ->
     }
     if set(found.values()) != {"true"}:
         raise MachineError(f"[cp] the NRI plugin did not label every node {BUILD_RUNNER}=true: {found}")
-    # Not a node for the runner's template either, which central would take first.
-    await _label_nodes(api, {USERNS: "false", BUILD_RUNNER: "false"})
-    try:
-        async with anyio.create_task_group() as watching:
-            watching.start_soon(_selectors, api, seen, before)
-            with anyio.fail_after(UNSANDBOXED_TIMEOUT):
-                said = await _central(central, "nix-build", "--no-out-link", "--expr", expr)
-            watching.cancel_scope.cancel()
-    finally:
-        await _label_nodes(api, {USERNS: "true", BUILD_RUNNER: "true"})
-    if not seen or set(seen.values()) != {"false"}:
-        raise MachineError(f"[cp] the build pods select {USERNS} {seen}, not only the unsandboxed template's false")
-    out = next(line for line in reversed(said.splitlines()) if line.startswith("/nix/store/"))
-    built = (await _central(central, "cat", out)).strip()
-    host, job = (field.partition("=")[2] for field in built.split())
-    if host == "localhost" or host not in seen or job != "no":
-        raise MachineError(f"[cp] the unsandboxed build in {sorted(seen)} wrote {built!r}")
-    print(f"[nixkube] the unsandboxed template built in {host}, beside no job key, and its leftover died", flush=True)
+    print(f"[nixkube] the NRI plugin labelled every node {BUILD_RUNNER}=true", flush=True)
 
 
 RUNNER_POD = "nixkube.nixidae.org/build-runner"
@@ -454,7 +405,7 @@ async def _check_runner_build(api: kr8s.asyncio.Api, settings: Settings) -> None
     try:
         async with anyio.create_task_group() as watching:
             watching.start_soon(_runner_templates, api, seen, shells, before)
-            with anyio.fail_after(UNSANDBOXED_TIMEOUT):
+            with anyio.fail_after(RUNNER_TIMEOUT):
                 said = await _central(
                     central, "nix-build", "--no-out-link", "--expr", expr("nixkube-runner", f'"{FARM_FEATURE}"')
                 )
@@ -656,6 +607,6 @@ async def test(vms: Machines) -> None:
 
     await _check_farm(api, cp, settings)
     await _check_central_farm_build(api, settings)
-    await _check_unsandboxed_build(api, settings)
+    await _check_runner_label(api)
     await _check_runner_build(api, settings)
     await _check_runner_gate(api, cp, settings)

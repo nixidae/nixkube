@@ -21,8 +21,9 @@
   (`storeVolume`): the outputs count against the pod's ephemeral storage, and
   the pod's pynixd uses `/nix` as its store, with every input already valid.
 
-  With `buildPods.unsandboxed`, each system gets a second template, for the
-  nodes that cannot run the sandbox.
+  With `buildPods.runner`, each system gets a second template, for the nodes
+  that cannot run the sandbox in a pod: nixkube's NRI plugin makes a container
+  of the pod Nix's sandbox.
 */
 {
   config,
@@ -175,14 +176,13 @@ let
       ++ env;
     };
 
-  # Unsandboxed: for a node whose probe says `false`. The build runs without Nix's sandbox, in the sandbox
-  # container still, which holds no job key and no pynixd.
-  template = pkgs: sandboxed: {
-    pod.spec = podSpec pkgs sandboxed // {
+  # For a node whose probe says `true`: the sandbox container makes Nix's sandbox for each build.
+  template = pkgs: {
+    pod.spec = podSpec pkgs true // {
       containers = [
         (controller pkgs {
           config = podConfig "nixkube-build-pod-pynixd.json" { sibling_sandbox = "/build/sibling"; };
-          nixConfig = lib.optionalString (!sandboxed) "sandbox = false\n";
+          nixConfig = "";
         })
         (
           container
@@ -196,8 +196,7 @@ let
               "run"
               "/build/sibling"
             ];
-            # Unsandboxed, the pod's RuntimeDefault seccomp profile: the build makes no namespace.
-            securityContext = if sandboxed then pods.sandboxSecurityContext else unprivileged;
+            securityContext = pods.sandboxSecurityContext;
           }
         )
       ];
@@ -352,13 +351,11 @@ let
 
   store = system: {
     type = "kubernetes-build-pods";
-    # Central takes the first template a Ready node matches: one for a node without the sandbox only when no
-    # node can sandbox, and the runner's before the unsandboxed one.
+    # Central takes the first template a Ready node matches: the runner's only when no node can sandbox in a pod.
     templates = [
       "buildpods-${system}"
     ]
-    ++ lib.optional pods.runner "buildpods-${system}-nri"
-    ++ lib.optional pods.unsandboxed "buildpods-${system}-unsandboxed";
+    ++ lib.optional pods.runner "buildpods-${system}-nri";
     central_host = "pynixd.${cfg.namespace}.svc.cluster.local";
     central_port =
       (lib.findFirst (port: port.name == "ssh") (throw "Service pynixd has no ssh port")
@@ -432,15 +429,10 @@ in
       // {
         default = true;
       };
-    unsandboxed = lib.mkEnableOption ''
-      a second build pod template per system, for the nodes whose `userns-probe` labels `nixkube/userns` `false`.
-      Its builds run without Nix's sandbox, in the sandbox container: they share the pod's network and hostname,
-      and only the farm keeps a build to its declared inputs. Central takes it only when no Ready node can sandbox
-    '';
     runner = lib.mkEnableOption ''
       a build pod template per system for the nodes whose `userns-probe` labels `nixkube/userns` `false`, in which
-      nixkube's NRI plugin makes the pod's `runner` container Nix's sandbox. Central takes it before the
-      unsandboxed one. Spike, nixidae/nixidae#1560
+      nixkube's NRI plugin makes the pod's `runner` container Nix's sandbox. Central takes it only when no Ready
+      node can sandbox in a pod. Spike, nixidae/nixidae#1560
     '';
     runnerResources = lib.mkOption {
       description = ''
@@ -494,13 +486,10 @@ in
           templates = lib.concatMapAttrs (
             system: pkgs:
             {
-              "buildpods-${system}" = template pkgs true;
+              "buildpods-${system}" = template pkgs;
             }
             // lib.optionalAttrs pods.runner {
               "buildpods-${system}-nri" = runnerTemplate pkgs;
-            }
-            // lib.optionalAttrs pods.unsandboxed {
-              "buildpods-${system}-unsandboxed" = template pkgs false;
             }
           ) csiPkgs;
         };

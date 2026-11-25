@@ -13,7 +13,6 @@
     systemFeatures = [ "nixkube-podfarm" ];
     mandatoryFeatures = [ "nixkube-podfarm" ];
     deadlineSeconds = 600;
-    unsandboxed = true;
     runner = true;
     # One CPU node: a small request, and the limit gives the build `NIX_BUILD_CORES=1`.
     runnerResources = {

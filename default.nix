@@ -463,32 +463,6 @@ let
           "pynixd.nixidae.org/build" = "true";
         };
       assert podStores storesNoBuilds == { };
-      # Off by default. On, a second template per system, second in the store's list, for the nodes that cannot sandbox.
-      assert !(templatesOn ? buildpods-x86_64-linux-unsandboxed);
-      assert
-        let
-          on' =
-            module:
-            settings {
-              nixkube.buildPods = {
-                enable = true;
-              }
-              // module;
-            };
-          unsandboxed = on' { unsandboxed = true; };
-          pod = unsandboxed.provisioning.kubernetes.templates.buildpods-x86_64-linux-unsandboxed.pod.spec;
-          inherit (unsandboxed.provisioning.kubernetes.templates.buildpods-x86_64-linux.pod.spec) containers;
-          envOf = c: lib.listToAttrs (map (e: lib.nameValuePair e.name e.value) c.env);
-          nixConfig = cs: (envOf (containerNamed "pynixd" cs)).NIX_CONFIG;
-        in
-        unsandboxed.stores.buildpods-x86_64-linux.templates == [
-          "buildpods-x86_64-linux"
-          "buildpods-x86_64-linux-unsandboxed"
-        ]
-        && pod.nodeSelector."nixkube/userns" == "false"
-        && !((containerNamed "sandbox" pod.containers).securityContext ? seccompProfile)
-        && lib.hasInfix "sandbox = false" (nixConfig pod.containers)
-        && !(lib.hasInfix "sandbox = false" (nixConfig containers));
       # The runner's RBAC and policy come beside central's, not in their place.
       assert
         let
@@ -505,15 +479,14 @@ let
         && ns.RoleBinding ? nixkube-build-pods
         && ns.NetworkPolicy ? nixkube-build-pods
         && ns.NetworkPolicy ? nixkube-build-pod-runner;
-      # The runner's template comes before the unsandboxed one. The pod names its runner and shell, and the
-      # runner mounts each file the controller writes.
+      # The runner's template comes second. The pod names its runner and shell, and the runner mounts each file
+      # the controller writes.
       assert
         let
           both = settings {
             nixkube.buildPods = {
               enable = true;
               runner = true;
-              unsandboxed = true;
             };
           };
           inherit (both.provisioning.kubernetes.templates.buildpods-x86_64-linux-nri) pod;
@@ -523,7 +496,6 @@ let
         both.stores.buildpods-x86_64-linux.templates == [
           "buildpods-x86_64-linux"
           "buildpods-x86_64-linux-nri"
-          "buildpods-x86_64-linux-unsandboxed"
         ]
         && pod.metadata.annotations."nixkube.nixidae.org/build-sandbox" == "runner"
         && lib.hasPrefix "/nix/store/" pod.metadata.annotations."nixkube.nixidae.org/build-shell"
