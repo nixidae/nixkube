@@ -237,7 +237,12 @@ let
       containers = [
         (
           controller pkgs {
-            config = podConfig "nixkube-build-pod-runner-pynixd.json" { runner_sandbox = { }; };
+            config = podConfig "nixkube-build-pod-runner-pynixd.json" {
+              runner_sandbox = { };
+              # A probe build would go to the runner too, whose spec is the job's: each failed the helper's check
+              # (measured, 1.6 s). `build-one` builds the job alone, which central placed.
+              probe = false;
+            };
             # The runtime binds the shell; the runner container binds nothing else.
             nixConfig = "sandbox-paths =\n";
             env = [

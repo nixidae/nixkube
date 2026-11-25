@@ -449,6 +449,9 @@ async def _check_runner_build(api: kr8s.asyncio.Api, settings: Settings) -> None
     if lines != ["to-stdout\n", "to-stderr\n", "again-stdout\n"]:
         raise MachineError(f"[cp] the client got the runner's output as {lines!r}:\n{said}")
     print(f"[nixkube] the client got the runner's output in order: {lines!r}", flush=True)
+    # The pod's own store sends no probe build: the runner runs the job's alone.
+    if "probe_crashed" in said:
+        raise MachineError(f"[cp] the runner build pod's store probed through the runner:\n{said}")
 
 
 def _ran(pod: Pod) -> bool:
