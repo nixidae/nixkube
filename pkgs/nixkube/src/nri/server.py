@@ -19,7 +19,7 @@ from kr8s.asyncio.objects import Node, Pod
 
 from nri import nri_pb2
 
-from .. import presentation
+from .. import mountattr, presentation
 from ..cache import schedule_copy_to_cache
 from ..constants import (
     HOST_PROC_PATH,
@@ -724,7 +724,7 @@ class NriPlugin(NriPluginBase):
             vm=False,
             enabled=NRI_COMPOSEFS,
             kernel=NRI_COMPOSEFS and await composefs.available(),
-            bind_farm=NRI_BIND_FARM,
+            bind_farm=bind_farm(),
             host_store=HOST_STORE,
         )
         log.debug("nix_presentation", presentation=str(shown))
@@ -813,7 +813,7 @@ class NriPlugin(NriPluginBase):
             vm=True,
             enabled=NRI_COMPOSEFS,
             kernel=False,
-            bind_farm=NRI_BIND_FARM,
+            bind_farm=bind_farm(),
             host_store=HOST_STORE,
         )
         if shown is Presentation.REFUSED:
@@ -879,6 +879,13 @@ async def sweep_loop(cri_socket: Path, building: BuildRegistry) -> None:
         await garbage_collect_stale_volumes(cri_socket, building=building)
 
 
+def bind_farm() -> bool:
+    """NRI_BIND_FARM, on a kernel that can make the farm read-only. A farm
+    without mount_setattr fails each mount (`nri/farm.py`), so such a node
+    serves hardlink trees instead."""
+    return NRI_BIND_FARM and mountattr.available()
+
+
 async def nri_serve() -> None:
     """Run the NRI plugin server with automatic reconnection and kernel checks."""
     logger = structlog.get_logger("nixkube.nri.serve")
@@ -894,6 +901,27 @@ async def nri_serve() -> None:
             event_type="Warning",
         )
         raise RuntimeError("Kernel does not support required mount API syscalls")
+
+    if not mountattr.available():
+        if HOST_STORE:
+            # A host-store node has only the farm: a hardlink out of the
+            # host's store fails with EXDEV.
+            logger.critical("kernel_mount_setattr_unsupported", host_store=True)
+            await report_event(
+                None,
+                reason="KernelIncompatible",
+                note="NRI plugin failed: a host-store node needs the bind farm, and the kernel cannot make it read-only (mount_setattr, requires Linux 5.12+)",
+                event_type="Warning",
+            )
+            raise RuntimeError("Kernel does not support mount_setattr, which the bind farm requires")
+        if NRI_BIND_FARM:
+            logger.warning("kernel_mount_setattr_unsupported", note="NRI serves hardlink trees, not the bind farm")
+            await report_event(
+                None,
+                reason="KernelLimited",
+                note="NRI plugin serves hardlink trees, not the bind farm: kernel cannot make the farm read-only (mount_setattr, requires Linux 5.12+)",
+                event_type="Warning",
+            )
 
     if not kernel_supports_rw():
         # RW support is optional; warn but continue

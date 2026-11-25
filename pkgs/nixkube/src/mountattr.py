@@ -16,7 +16,12 @@ import ctypes.util
 import errno
 import os
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
+
+import structlog
+
+_logger = structlog.get_logger("nixkube.mountattr")
 
 # Introduced via the common syscall table, so x86_64 and aarch64 share them.
 _NR_OPEN_TREE = 428
@@ -50,6 +55,46 @@ class MountSetattrUnsupported(OSError):
     """The kernel has no mount_setattr. Raised only for ENOSYS."""
 
 
+def _mount_setattr(dfd: int, path: bytes, flags: int, attr: MountAttr) -> int:
+    return int(
+        _libc.syscall(
+            ctypes.c_long(_NR_MOUNT_SETATTR),
+            ctypes.c_int(dfd),
+            ctypes.c_char_p(path),
+            ctypes.c_uint(flags),
+            ctypes.byref(attr),
+            ctypes.c_size_t(ctypes.sizeof(attr)),
+        )
+    )
+
+
+@cache
+def available() -> bool:
+    """Whether the kernel can make a mount read-only with mount_setattr (Linux 5.12).
+
+    Asked of a detached clone of `/`, so no mount anyone sees changes. Needs
+    CAP_SYS_ADMIN, as every caller of `set_readonly` does. An error other
+    than ENOSYS, such as a seccomp EPERM, also answers no: `set_readonly`
+    would meet it too.
+    """
+    fd = _libc.syscall(
+        ctypes.c_long(_NR_OPEN_TREE),
+        ctypes.c_int(AT_FDCWD),
+        ctypes.c_char_p(b"/"),
+        ctypes.c_uint(OPEN_TREE_CLONE | os.O_CLOEXEC),
+    )
+    _check(fd, "open_tree(/)")
+    try:
+        attr = MountAttr(attr_set=MOUNT_ATTR_RDONLY, attr_clr=0, propagation=0, userns_fd=0)
+        if _mount_setattr(fd, b"", AT_EMPTY_PATH, attr) == 0:
+            return True
+        err = ctypes.get_errno()
+    finally:
+        os.close(fd)
+    _logger.warning("mount_setattr_unavailable", errno=errno.errorcode.get(err, str(err)), requires="linux_5.12")
+    return False
+
+
 def set_readonly(path: Path | str, recursive: bool) -> None:
     """Make the mount at `path` read-only, and everything under it if asked.
 
@@ -58,14 +103,7 @@ def set_readonly(path: Path | str, recursive: bool) -> None:
     ordinary OSError.
     """
     attr = MountAttr(attr_set=MOUNT_ATTR_RDONLY, attr_clr=0, propagation=0, userns_fd=0)
-    ret = _libc.syscall(
-        ctypes.c_long(_NR_MOUNT_SETATTR),
-        ctypes.c_int(AT_FDCWD),
-        ctypes.c_char_p(os.fsencode(path)),
-        ctypes.c_uint(AT_RECURSIVE if recursive else 0),
-        ctypes.byref(attr),
-        ctypes.c_size_t(ctypes.sizeof(attr)),
-    )
+    ret = _mount_setattr(AT_FDCWD, os.fsencode(path), AT_RECURSIVE if recursive else 0, attr)
     if ret == 0:
         return
 
@@ -134,14 +172,7 @@ def bind_idmapped(source: Path, target: Path, userns: UserNamespace) -> None:
         ns_fd = os.open(userns.path, os.O_RDONLY | os.O_CLOEXEC)
         try:
             attr = MountAttr(attr_set=MOUNT_ATTR_IDMAP, attr_clr=0, propagation=0, userns_fd=ns_fd)
-            ret = _libc.syscall(
-                ctypes.c_long(_NR_MOUNT_SETATTR),
-                ctypes.c_int(fd),
-                ctypes.c_char_p(b""),
-                ctypes.c_uint(AT_EMPTY_PATH),
-                ctypes.byref(attr),
-                ctypes.c_size_t(ctypes.sizeof(attr)),
-            )
+            ret = _mount_setattr(fd, b"", AT_EMPTY_PATH, attr)
             _check(ret, f"mount_setattr({source}, MOUNT_ATTR_IDMAP)")
         finally:
             os.close(ns_fd)

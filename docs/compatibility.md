@@ -18,7 +18,7 @@ what nixkube does instead and what selects it.
 | --- | --- | --- | --- |
 | `open_tree`, `move_mount` | 5.2 | NRI: every mount into a container | Required. The NRI plugin does not start, event `KernelIncompatible`. CSI does not need them. |
 | `fsopen`, `fsconfig`, `fsmount` for an overlay | 6.5 (the code's claim) | NRI: a writable `/nix` (`nixkube/pod-rw`) | Fallback: NRI serves read-only only, event `KernelLimited`. A writable request fails. |
-| `mount_setattr` with `MOUNT_ATTR_RDONLY` | 5.12 | NRI: the bind farm (the default NRI route) | Required. A remount would leave the binds writable into the node's store, so nixkube refuses. |
+| `mount_setattr` with `MOUNT_ATTR_RDONLY` | 5.12 | NRI: the bind farm (the default NRI route) | Fallback: the NRI plugin probes it at start and serves hardlink trees, event `KernelLimited`. A host-store node has only the farm, so there the plugin does not start, event `KernelIncompatible`. nixkube never remounts a farm: a remount would leave the binds writable into the node's store. |
 | `mount_setattr` with `MOUNT_ATTR_RDONLY` | 5.12 | CSI: a read-only bind | Fallback: `MS_BIND\|MS_REMOUNT\|MS_RDONLY`. |
 | `MOUNT_ATTR_IDMAP` | 5.12, per filesystem | NRI: a writable `/nix` in a pod with `hostUsers: false` | Optional. The kernel refuses to idmap an overlay, so nixkube idmaps the lower layer and chowns the upper directory. |
 | recursive bind (`MS_REC`) | any | CSI, NRI | Required. Without it a pod sees none of the store paths (measured: 0 of 3 readable). |
@@ -26,10 +26,6 @@ what nixkube does instead and what selects it.
 
 nixkube calls these syscalls by number (428 to 432, 442). x86_64 and
 aarch64 share these numbers.
-
-Known gap: the NRI start probe tests `open_tree` only. A kernel from 5.2 to
-5.11 passes it, and then each farm mount fails with "needs Linux 5.12"
-(nixidae/nixidae#1608).
 
 ## Kernel: filesystems
 

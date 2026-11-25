@@ -1,11 +1,52 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import ctypes
+import errno
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from src import mountattr
 from src.mountattr import UserNamespace, own_tree, user_namespace_of
+
+
+class FakeSyscall:
+    """open_tree answers a real fd; mount_setattr answers `setattr_errno`, or 0 when None."""
+
+    def __init__(self, setattr_errno: int | None) -> None:
+        self.setattr_errno = setattr_errno
+
+    def __call__(self, number: ctypes.c_long, *_args: object) -> int:
+        if number.value == mountattr._NR_OPEN_TREE:
+            return os.open(os.devnull, os.O_RDONLY)
+        if number.value == mountattr._NR_MOUNT_SETATTR:
+            if self.setattr_errno is None:
+                return 0
+            ctypes.set_errno(self.setattr_errno)
+            return -1
+        raise AssertionError(f"unexpected syscall {number.value}")
+
+
+@pytest.fixture
+def fresh_probe() -> Iterator[None]:
+    mountattr.available.cache_clear()
+    yield
+    mountattr.available.cache_clear()
+
+
+@pytest.mark.usefixtures("fresh_probe")
+@pytest.mark.parametrize(
+    ("setattr_errno", "expected"),
+    [(None, True), (errno.ENOSYS, False), (errno.EPERM, False)],
+)
+def test_probe_answers_what_mount_setattr_answers(
+    monkeypatch: pytest.MonkeyPatch, setattr_errno: int | None, expected: bool
+) -> None:
+    """A 5.2 to 5.11 kernel has open_tree and answers ENOSYS for mount_setattr. nixidae/nixidae#1608."""
+    monkeypatch.setattr(mountattr._libc, "syscall", FakeSyscall(setattr_errno))
+    assert mountattr.available() is expected
 
 
 def fake_proc(tmp_path: Path, uid_map: str, gid_map: str) -> Path:
