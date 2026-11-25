@@ -168,7 +168,8 @@ async def test_trailing_unary_error_sends_response_empty_payload() -> None:
     assert frame.msg_type == MSG_TYPE_RESPONSE
     resp = Response.FromString(frame.payload)
     assert resp.status.code == Status.NOT_FOUND.value
-    # Note: ttrpc Status message only has code field, not message field like gRPC
+    # `google.rpc.Status` field 2, which containerd reads into the error it logs and puts in the pod's event.
+    assert resp.status.message == "gone"
     assert resp.payload == b""
 
 

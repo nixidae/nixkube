@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The wire form of `google.rpc.Status`, which ttrpc sends (`request.pb.go:10` imports
+// `google.golang.org/genproto/googleapis/rpc/status`). ttrpc's own `proto/status.proto` declares `code`
+// alone, so an error's message did not reach containerd: it logged "code = Unknown desc = " (measured).
+// `details` (field 3) is left out: nothing here reads or writes it, and protobuf keeps it as an unknown field.
+syntax = "proto3";
+
+message Status {
+	int32 code = 1;
+	string message = 2;
+}

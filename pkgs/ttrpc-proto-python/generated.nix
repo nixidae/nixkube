@@ -22,7 +22,7 @@ protoGenerated {
   prepareProtos = ''
     mkdir -p "$protoDir/proto"
     cp ${ttrpc}/request.proto "$protoDir/ttrpc.proto"
-    cp ${ttrpc}/proto/status.proto "$protoDir/proto/status.proto"
+    cp ${./status.proto} "$protoDir/proto/status.proto"
     cp ${ttrpc}/integration/streaming/test.proto "$protoDir/streaming.proto"
   '';
   protoFiles = [

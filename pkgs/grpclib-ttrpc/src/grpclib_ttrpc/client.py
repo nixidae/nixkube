@@ -129,15 +129,13 @@ async def unary_call[T](
         )
         resp = Response.FromString(resp_bytes)
 
-        # ttrpc Status has no message field. These two reads raise AttributeError
-        # on an error reply. Kept as is; see the report. Fix: drop the message.
         if resp.status.code != 0:
             log.debug(
                 "unary_call_rpc_error",
                 code=resp.status.code,
+                message=resp.status.message,
             )
-            # ttrpc's Status carries a code and nothing else.
-            raise GRPCError(Status(resp.status.code))
+            raise GRPCError(Status(resp.status.code), resp.status.message or None)
 
         log.debug("unary_call_success")
         decoded: T = codec.decode(resp.payload, response_type)
@@ -304,7 +302,7 @@ class Client:
 
         resp = Response.FromString(resp_payload)
         if resp.status.code != 0:
-            raise GRPCError(Status(resp.status.code))
+            raise GRPCError(Status(resp.status.code), resp.status.message or None)
 
         decoded: ResponseT = self.codec.decode(resp.payload, response_type)
         return decoded
@@ -354,7 +352,7 @@ class Client:
                 # Error response
                 resp = Response.FromString(resp_payload)
                 if resp.status.code != 0:
-                    raise GRPCError(Status(resp.status.code))
+                    raise GRPCError(Status(resp.status.code), resp.status.message or None)
                 break
 
             if msg_type != MSG_TYPE_DATA:
@@ -464,7 +462,7 @@ class ClientStreamContext[ResponseT]:
 
         resp = Response.FromString(resp_payload)
         if resp.status.code != 0:
-            raise GRPCError(Status(resp.status.code))
+            raise GRPCError(Status(resp.status.code), resp.status.message or None)
 
         decoded: ResponseT = self.client.codec.decode(resp.payload, self.response_type)
         return decoded
@@ -538,7 +536,7 @@ class BidirectionalStreamContext[ResponseT]:
                     # Error response
                     resp = Response.FromString(resp_payload)
                     if resp.status.code != 0:
-                        exc: Exception = GRPCError(Status(resp.status.code))
+                        exc: Exception = GRPCError(Status(resp.status.code), resp.status.message or None)
                         await self._response_queue.put(exc)
                     else:
                         await self._response_queue.put(None)
