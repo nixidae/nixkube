@@ -4,9 +4,9 @@ import platform
 import shutil
 import time
 from collections.abc import Awaitable, Callable, Coroutine
-from functools import wraps
+from functools import partial, wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import anyio
 import anyio.abc
@@ -218,7 +218,11 @@ from .zmq import ZeroMQServer
 # ============================================================================
 
 
-def nri_error_handler[S, Req, Resp, T](
+class _Handles(Protocol):
+    tasks: anyio.abc.TaskGroup
+
+
+def nri_error_handler[S: _Handles, Req, Resp, T](
     func: Callable[[S, Stream[Req, Resp]], Awaitable[T]],
 ) -> Callable[[S, Stream[Req, Resp]], Coroutine[Any, Any, T]]:
     """Decorator for NRI handlers: logs exceptions and reports events."""
@@ -230,12 +234,19 @@ def nri_error_handler[S, Req, Resp, T](
             return await func(self, stream)
         except Exception as e:
             handler_logger.exception("handler_failed")
-            await report_event(
-                None,
-                reason="InternalError",
-                note=f"{func.__name__} failed: {type(e).__name__}",
-                logs=str(e),
-                event_type="Warning",
+            # In the background: the error must reach the runtime within its request timeout (2 s). containerd
+            # takes a timeout as fatal (nri `plugin.go:1022`): it closes the plugin and creates the container
+            # with no adjustment, so a refused build sandbox started without the sandbox (measured).
+            self.tasks.start_soon(
+                partial(
+                    report_event,
+                    None,
+                    reason="InternalError",
+                    note=f"{func.__name__} failed: {type(e).__name__}",
+                    logs=str(e),
+                    event_type="Warning",
+                ),
+                name="handler-failed-event",
             )
             raise
 
