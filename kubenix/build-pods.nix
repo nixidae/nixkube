@@ -192,6 +192,8 @@ let
 
   # For a node whose probe says `true`: the sandbox container makes Nix's sandbox for each build.
   template = pkgs: {
+    # The build runs here: central puts the pod's requests on this container.
+    build_container = "sandbox";
     pod.spec = podSpec pkgs true // {
       containers = [
         (controller pkgs {
@@ -211,6 +213,7 @@ let
               "/build/sibling"
             ];
             securityContext = pods.sandboxSecurityContext;
+            resources = pods.sandboxResources;
           }
         )
       ];
@@ -379,6 +382,8 @@ let
     system_features = pods.systemFeatures;
     mandatory_features = pods.mandatoryFeatures;
     max_connections = pods.maxBuilds;
+    pod_cores = pods.cores;
+    pod_memory_bytes = pods.memoryBytes;
     farm.volume = "nix";
     priority_classes = [
       pods.priorityClassName
@@ -450,11 +455,42 @@ in
     '';
     runnerResources = lib.mkOption {
       description = ''
-        The resources of the `runner` container, the builder, in a runner build pod. The build's `NIX_BUILD_CORES`
-        is the CPU limit, else the request, rounded up; central refuses a template with neither.
+        The resources of the `runner` container, the builder, in a runner build pod: its requests for a build
+        with no history. Central replaces the requests of a build it has measured (`cores`).
       '';
       type = lib.types.attrsOf lib.types.anything;
-      default.requests.cpu = "1";
+      default.requests = {
+        cpu = "1";
+        memory = "1Gi";
+      };
+    };
+    sandboxResources = lib.mkOption {
+      description = ''
+        The resources of a build pod's `sandbox` container, where the build runs: its requests for a build with
+        no history. Central replaces the requests of a build it has measured (`cores`).
+      '';
+      type = lib.types.attrsOf lib.types.anything;
+      default.requests = {
+        cpu = "1";
+        memory = "1Gi";
+      };
+    };
+    cores = lib.mkOption {
+      description = ''
+        The most cores a build in a pod gets, its `NIX_BUILD_CORES`. A build whose memory history needs more than
+        `memoryBytes` at that many gets fewer. The pod requests the memory its history needs at those cores, and
+        the CPU its history kept busy: a build may use idle cores past its request.
+      '';
+      type = lib.types.ints.positive;
+      default = 8;
+    };
+    memoryBytes = lib.mkOption {
+      description = ''
+        The most memory a build pod requests. Keep it below the free memory of a node, or a large build's pod
+        waits for a node until central asks again with the template's requests.
+      '';
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = 16 * 1024 * 1024 * 1024;
     };
     systemFeatures = lib.mkOption {
       description = "The features a build pod offers: its store's `system_features`, and the pod's Nix `system-features`.";

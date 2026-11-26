@@ -448,6 +448,11 @@ let
       assert (probeOf on).securityContext == (sandboxOf "x86_64-linux").securityContext;
       assert (probeOf on).securityContext.seccompProfile.type == "Localhost";
       assert templatesOn.buildpods-x86_64-linux.pod.spec.nodeSelector."nixkube/userns" == "true";
+      # The build runs in the sandbox container: it takes the pod's requests, which central sizes up to these.
+      assert templatesOn.buildpods-x86_64-linux.build_container == "sandbox";
+      assert (sandboxOf "x86_64-linux").resources.requests.memory == "1Gi";
+      assert storesOn.buildpods-x86_64-linux.pod_cores == 8;
+      assert storesOn.buildpods-x86_64-linux.pod_memory_bytes == 16 * 1024 * 1024 * 1024;
       # A wave of build pods spreads over the nodes, and still lands on a full cluster. The selector is a label
       # pynixd puts on each build pod (`BuildPodOwner.labels`).
       assert
