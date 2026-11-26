@@ -101,6 +101,9 @@ let
       # `nixkube-userns-probe` sets it, in the sandbox container's security context.
       "nixkube/userns" = lib.boolToString userns;
     };
+    # A build pod needs the node DaemonSet on its node (the farm, the seccomp profile, the userns label), so it
+    # goes where that goes. Without them an aarch64 pod on sg1 waits for ever: its only arm64 nodes are tainted.
+    inherit (cfg.node) tolerations;
     securityContext = {
       runAsUser = uid;
       runAsGroup = uid;
