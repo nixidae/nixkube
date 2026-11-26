@@ -87,7 +87,7 @@ in
       hostCheck = store: {
         name = "host-check";
         image = cfg.images.nix;
-        inherit (cfg) imagePullPolicy;
+        imagePullPolicy = cfg.pullPolicies.nix;
         command = [
           "nixkube-host-check"
           "--mode"
@@ -193,7 +193,7 @@ in
                       "1" = {
                         name = "appstarter-init";
                         image = cfg.images.nix;
-                        inherit (cfg) imagePullPolicy;
+                        imagePullPolicy = cfg.pullPolicies.nix;
                         securityContext.privileged = true; # chroot store
                         command = [
                           "appstarter"
@@ -526,7 +526,7 @@ in
                     # nix-node has installed the seccomp profile it names; the kubelet retries until then.
                     userns-probe = lib.mkIf cfg.buildPods.enable {
                       image = cfg.images.nix;
-                      inherit (cfg) imagePullPolicy;
+                      imagePullPolicy = cfg.pullPolicies.nix;
                       command = [ "nixkube-userns-probe" ];
                       securityContext = cfg.buildPods.sandboxSecurityContext;
                       env = lib.mkNamedList {

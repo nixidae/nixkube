@@ -85,7 +85,7 @@ let
   };
   container = {
     image = cfg.images.scratch;
-    inherit (cfg) imagePullPolicy;
+    imagePullPolicy = cfg.pullPolicies.scratch;
     securityContext = unprivileged;
     volumeMounts = mounts;
   };

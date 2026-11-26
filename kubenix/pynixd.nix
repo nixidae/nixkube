@@ -501,7 +501,7 @@ in
                 "1" = {
                   name = "appstarter-init";
                   image = cfg.images.nix;
-                  inherit (cfg) imagePullPolicy;
+                  imagePullPolicy = cfg.pullPolicies.nix;
                   securityContext.privileged = true; # chroot store
                   command = [
                     "appstarter"

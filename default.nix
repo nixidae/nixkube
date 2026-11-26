@@ -456,6 +456,20 @@ let
           disk = lib.findFirst (v: v.name == farm.csi.volumeAttributes.storeVolume) null volumes;
         in
         disk ? emptyDir && !(farm.csi.readOnly or false);
+      # A digest names one content, so a pod skips the registry: kubelet pulls one image at a time on a node, and
+      # each check holds the queue about 0.5 s (sg1). A tag moves, so it still pulls.
+      assert lib.all (
+        c: c.imagePullPolicy == "IfNotPresent"
+      ) templatesOn.buildpods-x86_64-linux.pod.spec.containers;
+      assert
+        let
+          tagged =
+            (settings {
+              nixkube.buildPods.enable = true;
+              nixkube.images.scratch = "ghcr.io/nixidae/nixkube/scratch:main";
+            }).provisioning.kubernetes.templates;
+        in
+        lib.all (c: c.imagePullPolicy == "Always") tagged.buildpods-x86_64-linux.pod.spec.containers;
       assert podStores storesOff == { };
       assert !(off.nixkube ? NetworkPolicy);
       assert

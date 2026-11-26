@@ -55,7 +55,7 @@ in
           containers = lib.mkNamedList {
             switch = {
               image = cfg.images.scratch;
-              inherit (cfg) imagePullPolicy;
+              imagePullPolicy = cfg.pullPolicies.scratch;
               command = [ "/nix/var/result/bin/nixkube-nixos-switch" ];
               env = lib.mkNamedList {
                 ACTION.value = "switch";

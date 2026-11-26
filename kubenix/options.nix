@@ -69,7 +69,8 @@ in
     };
     imagePullPolicy = lib.mkOption {
       description = ''
-        How every container that runs nixkube's own image gets it.
+        How every container that runs nixkube's own image gets it, unless
+        `pullPolicies` relaxes it for that image.
 
         `Always` for a cluster: the tag moves, and a node holding an older
         image under the same name would run it forever.
@@ -87,6 +88,25 @@ in
         "Never"
       ];
       default = "Always";
+    };
+    pullPolicies = lib.mkOption {
+      internal = true;
+      readOnly = true;
+      description = ''
+        By image in `images`, the `imagePullPolicy` of its containers. A ref
+        pinned by digest names one content, so `Always` becomes
+        `IfNotPresent` for it. Kubelet pulls one image at a time on a node,
+        and each check of an `Always` image waits about 0.5 s for the
+        registry in that queue (measured on sg1: a build pod per 0.5 s).
+      '';
+      type = lib.types.attrsOf lib.types.str;
+      default = lib.mapAttrs (
+        _: image:
+        if cfg.imagePullPolicy == "Always" && lib.hasInfix "@sha256:" image then
+          "IfNotPresent"
+        else
+          cfg.imagePullPolicy
+      ) cfg.images;
     };
     images = {
       nix = lib.mkOption {

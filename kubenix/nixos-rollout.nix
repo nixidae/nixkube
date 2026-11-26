@@ -424,7 +424,7 @@ in
               containers = lib.mkNamedList {
                 controller = {
                   image = cfg.images.scratch;
-                  inherit (cfg) imagePullPolicy;
+                  imagePullPolicy = cfg.pullPolicies.scratch;
                   command = [
                     "/nix/var/result/bin/tini"
                     "--"

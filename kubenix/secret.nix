@@ -94,7 +94,7 @@ in
                 containers = lib.mkNamedList {
                   init = {
                     image = cfg.images.nix;
-                    inherit (cfg) imagePullPolicy;
+                    imagePullPolicy = cfg.pullPolicies.nix;
                     command = [ "init-secrets" ];
                     volumeMounts = lib.mkNamedList {
                       nix-config.mountPath = "/etc/nix";
