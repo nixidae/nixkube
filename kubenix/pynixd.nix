@@ -251,6 +251,19 @@ in
     };
     builder = {
       settings = pynixdSettings;
+      daemon = lib.mkOption {
+        description = ''
+          Whether a builder pod runs Nix's daemon. Off, pynixd builds in the pod itself, in its own sandbox: the
+          pod takes the build pods' seccomp profile (`buildPods.seccompProfile`), which allows the namespaces, and
+          lands only on a node whose `userns-probe` says `true`. The profile comes with `buildPods.enable`.
+
+          Under the RuntimeDefault profile Nix's daemon cannot make a namespace, and its `sandbox-fallback`
+          builds with no sandbox, silently. Measured on sg1.
+        '';
+        type = lib.types.bool;
+        default = !cfg.buildPods.enable;
+        defaultText = lib.literalExpression "!config.nixkube.buildPods.enable";
+      };
       nixConfig = lib.mkOption {
         description = "nix.conf for builder pods";
         type = (import ./nixOptions.nix) {
@@ -391,13 +404,34 @@ in
         # holds the public half beside the private key.
         ssh_admin_keys = [ "/etc/ssh-key/id_ed25519.pub" ];
       })
+      (lib.mkIf (!cfg.pynixd.builder.daemon) {
+        # As a build pod's store: pynixd answers every operation.
+        stores.local = lib.mapAttrs (_: lib.mkDefault) {
+          type = "local-socket";
+          daemon = false;
+          pynixd_writes = true;
+        };
+      })
       config.nixkube.pynixd.settings
     ];
 
     nixkube.pynixd.builder.nixConfig.settings = {
       max-jobs = lib.mkDefault 5;
       warn-dirty = lib.mkDefault false;
+    }
+    // lib.optionalAttrs (!cfg.pynixd.builder.daemon) {
+      # The container masks its /proc, so a sandbox binds it and has no pid namespace of its own. A build user
+      # then ends what a build leaves running (pynixd's `site.pid_namespace`); fake-nss holds nixbld1..32.
+      build-users-group = lib.mkDefault "nixbld";
+      build-dir = lib.mkDefault "/nix/var/nix/builds";
     };
+
+    assertions = [
+      {
+        assertion = cfg.pynixd.builder.daemon || cfg.buildPods.enable;
+        message = "nixkube.pynixd.builder.daemon = false needs nixkube.buildPods.enable: the node DaemonSet installs the seccomp profile that lets a builder pod sandbox.";
+      }
+    ];
 
     kubernetes.resources.${cfg.namespace} = {
       # The controller and the builders both serve `/metrics`, and neither is
@@ -752,6 +786,7 @@ in
           spec = {
             serviceAccountName = "nixkube";
             restartPolicy = "Never";
+            nodeSelector = lib.mkIf (!cfg.pynixd.builder.daemon) { "nixkube/userns" = "true"; };
             affinity = {
               podAntiAffinity = {
                 preferredDuringSchedulingIgnoredDuringExecution = [
@@ -809,6 +844,12 @@ in
                   http.containerPort = pynixdHttpPort;
                 };
                 inherit (probes) readinessProbe livenessProbe startupProbe;
+                securityContext = lib.mkIf (!cfg.pynixd.builder.daemon) {
+                  seccompProfile = {
+                    type = "Localhost";
+                    localhostProfile = cfg.buildPods.seccompProfile;
+                  };
+                };
                 volumeMounts = lib.mkNamedList {
                   nix-config.mountPath = "/etc/nix";
                   nix-store = {

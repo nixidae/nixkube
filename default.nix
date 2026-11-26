@@ -425,6 +425,9 @@ let
         sandboxOf = system: containerNamed "sandbox" templatesOn."buildpods-${system}".pod.spec.containers;
         priority = on.none.PriorityClass.pynixd-build;
         nested = on.none.PriorityClass.pynixd-build-nested;
+        builderPod = resources: resources.nixkube.PodTemplate.nixkube-builder.template.spec;
+        builderOf = resources: containerNamed "pynixd" (builderPod resources).containers;
+        builderWith = enable: (instance { nixkube.buildPods.enable = enable; }).nixkube.pynixd.builder;
       in
       assert !(off.none ? PriorityClass);
       assert priority.value == -2;
@@ -432,6 +435,16 @@ let
       # Above the build pods it may wait on, below every ordinary pod.
       assert priority.value < nested.value && nested.value < 0;
       assert nested.preemptionPolicy == "PreemptLowerPriority";
+      # With the build pods' seccomp profile, a builder sandboxes and runs no Nix daemon. Without it, Nix's
+      # daemon builds unsandboxed through its sandbox-fallback.
+      assert (builderWith true).settings.stores.local.daemon == false;
+      assert (builderWith true).nixConfig.settings.build-users-group == "nixbld";
+      assert
+        (builderOf on).securityContext.seccompProfile.localhostProfile == "nixkube/pynixd-builder.json";
+      assert (builderPod on).nodeSelector."nixkube/userns" == "true";
+      assert !((builderWith false).settings.stores or { } ? local);
+      assert !((builderOf off) ? securityContext);
+      assert !((builderPod off) ? nodeSelector);
       assert (nodeEnv off).BUILD_PODS_ENABLED == "false";
       assert (nodeEnv on).BUILD_PODS_ENABLED == "true";
       # One store and one template per system, and none while off or with builds off.
