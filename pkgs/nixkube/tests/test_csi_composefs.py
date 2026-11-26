@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from src.csi import cleanup
-from src.csi.composefs import Tools, expression, overlay_options, probe_root_is_exact
+from src.constants import CSI_ROOT
+from src.csi import cleanup, composefs
+from src.csi.composefs import Tools, Verdict, expression, overlay_options, probe_root_is_exact
 
 TOOLS = Tools(
     nixkube=Path("/nix/store/aaa-nixkube-wrapped"),
@@ -92,3 +94,62 @@ def test_the_sweep_keeps_a_composefs_volume_whose_target_is_mounted(csi_dirs: tu
 
 def test_target_is_mounted_without_a_target_file_is_no(tmp_path: Path) -> None:
     assert cleanup.target_is_mounted(tmp_path) is False
+
+
+@pytest.fixture
+def probes(monkeypatch: pytest.MonkeyPatch) -> list[Verdict]:
+    """The verdicts `_probe` gives, in turn; the test sees how many it asked for."""
+    answers: list[Verdict] = []
+    monkeypatch.setattr(composefs, "_answer", None)
+    monkeypatch.setattr(composefs, "tools", lambda: TOOLS)
+
+    def probe(where: Path) -> Verdict:
+        # The store's filesystem, where a volume's image is: not the container's /tmp.
+        assert where == CSI_ROOT
+        return answers.pop(0)
+
+    monkeypatch.setattr(composefs, "_probe", probe)
+    return answers
+
+
+@pytest.mark.asyncio
+async def test_a_probe_that_could_not_set_up_is_asked_again(probes: list[Verdict]) -> None:
+    # sg1-n1: the probe found no loop device, and the node refused every volume until its plugin restarted.
+    probes.extend(
+        [
+            Verdict(ok=False, why="failed to set up loop device", final=False),
+            Verdict(ok=True, why="one file, read through the image", final=True),
+        ]
+    )
+    assert await composefs.available() is False
+    assert "loop device" in composefs.reason()
+    assert await composefs.available() is True
+    assert await composefs.available() is True
+    assert probes == []
+
+
+@pytest.mark.asyncio
+async def test_a_kernel_verdict_is_kept(probes: list[Verdict]) -> None:
+    probes.append(Verdict(ok=False, why="the root shows ['probe', 'probe-object']", final=True))
+    assert await composefs.available() is False
+    assert await composefs.available() is False
+    assert "probe-object" in composefs.reason()
+
+
+def test_the_probe_image_is_on_the_store_filesystem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """In the container's /tmp, an overlay, EROFS takes a loop device that no volume takes (sg1-n1)."""
+    images: list[Path] = []
+
+    def compose(image: Path, *_args: object) -> None:
+        images.append(image)
+        raise OSError(32, "failed to set up loop device")
+
+    def mkcomposefs(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        Path(argv[-1]).write_bytes(b"")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(composefs, "compose", compose)
+    monkeypatch.setattr(subprocess, "run", mkcomposefs)
+    verdict = composefs._probe(tmp_path / "state")
+    assert verdict.final is False
+    assert images and images[0].is_relative_to(tmp_path / "state")

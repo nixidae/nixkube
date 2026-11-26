@@ -455,8 +455,8 @@ class NodeServicer(csi_grpc.NodeBase):
                         "this node shares its host's store, where a volume can only be"
                         " a composefs mount, and this pod cannot have one: either it"
                         " sets hostUsers: false, and the kernel cannot idmap an overlay,"
-                        " or this kernel failed the composefs probe (see"
-                        " nixkube_composefs_available). Issues #25 and #68.",
+                        f" or the composefs probe failed: {composefs.reason()}"
+                        " (see nixkube_composefs_available). Issues #25 and #68.",
                         logs="",
                     )
                 else:

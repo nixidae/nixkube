@@ -38,7 +38,7 @@ import anyio
 import anyio.to_thread
 import structlog
 
-from ..constants import MNT_DETACH, MS_RDONLY, NIX_BUILD_TIMEOUT
+from ..constants import CSI_ROOT, MNT_DETACH, MS_RDONLY, NIX_BUILD_TIMEOUT
 from ..errors import MountError
 from ..metrics import COMPOSEFS_AVAILABLE
 from ..mountattr import UserNamespace, bind_idmapped, own_upper
@@ -250,30 +250,53 @@ def probe_root_is_exact(listing: list[str], content: bytes) -> bool:
     return sorted(listing) == ["probe"] and content == _PROBE_CONTENT
 
 
-_answer: bool | None = None
+@dataclass(frozen=True)
+class Verdict:
+    ok: bool
+    why: str
+    final: bool
+    """The kernel's answer, which holds for the process. Not final: the probe could not set up, and the next
+    publish asks again."""
+
+
+_answer: Verdict | None = None
+_last = "not probed yet"
+
+
+def reason() -> str:
+    """Why the last probe answered as it did, for a publish it refused."""
+    return _last
 
 
 async def available() -> bool:
     """Whether this kernel mounts composefs as the volume layout needs it.
-    Asked once per process: a kernel does not change under it. Two first
-    publishes at once may both probe, which costs a mount and nothing else.
-    CSI_COMPOSEFS and NRI_COMPOSEFS are the callers' to check."""
-    global _answer
+    Only a verdict is kept: a kernel does not change under the process, but a
+    probe that could not set up says nothing about it. Two publishes at once
+    may both probe, which costs a mount and nothing else. CSI_COMPOSEFS and
+    NRI_COMPOSEFS are the callers' to check."""
+    global _answer, _last
     if _answer is None:
         try:
             tools()
-            ok, why = await anyio.to_thread.run_sync(_probe)
+            verdict = await anyio.to_thread.run_sync(_probe, CSI_ROOT)
         except FileNotFoundError as error:
-            ok, why = False, str(error)
-        COMPOSEFS_AVAILABLE.set(1 if ok else 0)
-        log = logger.info if ok else logger.warning
-        log("composefs_probe", available=ok, why=why)
-        _answer = ok
-    return _answer
+            verdict = Verdict(ok=False, why=str(error), final=True)
+        COMPOSEFS_AVAILABLE.set(1 if verdict.ok else 0)
+        log = logger.info if verdict.ok else logger.warning
+        log("composefs_probe", available=verdict.ok, why=verdict.why, final=verdict.final)
+        _last = verdict.why
+        if verdict.final:
+            _answer = verdict
+        return verdict.ok
+    return _answer.ok
 
 
-def _probe() -> tuple[bool, str]:
-    with tempfile.TemporaryDirectory(prefix="nixkube-composefs-probe-") as tmp:
+def _probe(where: Path) -> Verdict:
+    """The probe's image goes on the store's filesystem, where a volume's image is. In the container's /tmp,
+    an overlay, EROFS refuses the file and takes a loop device, which no volume does: on sg1 the eight loop
+    devices the container started with were all busy, and the probe refused a node whose volumes mount."""
+    where.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="nixkube-composefs-probe-", dir=where) as tmp:
         work = Path(tmp)
         base = work / "objects"
         base.mkdir()
@@ -291,12 +314,12 @@ def _probe() -> tuple[bool, str]:
             compose(work / IMAGE, target, str(base), work, None)
         except (OSError, subprocess.SubprocessError) as error:
             stderr = getattr(error, "stderr", b"") or b""
-            return False, f"{error}: {stderr.decode(errors='replace').strip()}"
+            return Verdict(ok=False, why=f"{error}: {stderr.decode(errors='replace').strip()}", final=False)
         try:
             listing = os.listdir(target)
             content = (target / "probe").read_bytes() if "probe" in listing else b""
         finally:
             subprocess.run(["umount", str(target)], check=False, capture_output=True)
         if probe_root_is_exact(listing, content):
-            return True, "one file, read through the image"
-        return False, f"the root shows {sorted(listing)}: no data-only lower layers"
+            return Verdict(ok=True, why="one file, read through the image", final=True)
+        return Verdict(ok=False, why=f"the root shows {sorted(listing)}: no data-only lower layers", final=True)
