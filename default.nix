@@ -1450,6 +1450,40 @@ let
           ];
         };
 
+        # Central runs no Nix daemon and builds nothing itself, as sg1's
+        # does: every build reaches a build pod.
+        #
+        #     NIXKUBE_UML_PHASES=cluster,deploy,workloads,buildpods \
+        #       nix run --file . internal.umlMatrix.qemu-containerd-daemonless.driver -- --out ./o
+        qemu-containerd-daemonless = pkgs.callPackage ./nix/uml {
+          inherit sources umlImages;
+          manifest = kubenixInstance {
+            module.imports = [
+              ./kubenix/ci
+              ./nix/uml/manifest.nix
+              ./nix/uml/workloads.nix
+              {
+                nixkube.pynixd.controller.settings.stores.local = {
+                  type = "local-socket";
+                  daemon = false;
+                  pynixd_writes = true;
+                  no_schedule = true;
+                };
+              }
+            ];
+          };
+          matrixCell = {
+            backend = "qemu";
+            cri = "containerd";
+            kata = false;
+          };
+          attrPath = [
+            "internal"
+            "umlMatrix"
+            "qemu-containerd-daemonless"
+          ];
+        };
+
         # CSI volumes as hardlink trees, which every node whose kernel fails
         # the composefs probe still uses. Issue #68.
         uml-containerd-hardlinks = pkgs.callPackage ./nix/uml {
