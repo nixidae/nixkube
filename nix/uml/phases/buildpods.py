@@ -260,6 +260,9 @@ async def _check_central_farm_build(api: kr8s.asyncio.Api, settings: Settings) -
 
     The build's input is busybox. The pod copies no byte of it from central, and its lower store holds exactly
     the closure of the path central made.
+
+    The build chmods a directory it made, as stdenv's unpack does. The pod's `fsGroup` volume is setgid, and Nix's
+    seccomp filter refuses a chmod that keeps S_ISGID: every stdenv build failed there (nixidae/nixidae#1642).
     """
     central = await Pod.get("pynixd-0", namespace=NAMESPACE, api=api)
     busybox = settings["busybox"]
@@ -267,7 +270,7 @@ async def _check_central_farm_build(api: kr8s.asyncio.Api, settings: Settings) -
     expr = (
         f'derivation {{ name = "nixkube-central-farm"; system = builtins.currentSystem;'
         f' builder = "${{builtins.storePath "{busybox}"}}/bin/sh";'
-        f' args = [ "-c" "{busybox}/bin/echo {BUILT} > $out" ];'
+        f' args = [ "-c" "{busybox}/bin/mkdir d && {busybox}/bin/chmod u+w d && {busybox}/bin/echo {BUILT} > $out" ];'
         f' requiredSystemFeatures = [ "{FARM_FEATURE}" ]; }}'
     )
     owners: dict[str, list[str]] = {}
@@ -377,8 +380,10 @@ async def _check_runner_build(api: kr8s.asyncio.Api, settings: Settings) -> None
     central = await Pod.get("pynixd-0", namespace=NAMESPACE, api=api)
     busybox = settings["busybox"]
     b = f"{busybox}/bin"
+    # The chmod is stdenv's unpack in miniature: a setgid build directory fails it (nixidae/nixidae#1642).
     script = (
-        f"echo to-stdout; echo to-stderr >&2; echo again-stdout;"
+        f"{b}/mkdir d && {b}/chmod u+w d || exit 1;"
+        f" echo to-stdout; echo to-stderr >&2; echo again-stdout;"
         f" echo host=$({b}/hostname) id=$({b}/id -u):$({b}/id -g) groups=$({b}/id -G | {b}/tr ' ' ,)"
         f" netdev=$({b}/wc -l < /proc/net/dev) sh=$(test -x /bin/sh && echo yes || echo no)"
         f" job=$(test -e /run/pynixd-job && echo yes || echo no)"
