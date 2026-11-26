@@ -448,6 +448,17 @@ let
       assert (probeOf on).securityContext == (sandboxOf "x86_64-linux").securityContext;
       assert (probeOf on).securityContext.seccompProfile.type == "Localhost";
       assert templatesOn.buildpods-x86_64-linux.pod.spec.nodeSelector."nixkube/userns" == "true";
+      # A wave of build pods spreads over the nodes, and still lands on a full cluster. The selector is a label
+      # pynixd puts on each build pod (`BuildPodOwner.labels`).
+      assert
+        templatesOn.buildpods-x86_64-linux.pod.spec.topologySpreadConstraints == [
+          {
+            maxSkew = 1;
+            topologyKey = "kubernetes.io/hostname";
+            whenUnsatisfiable = "ScheduleAnyway";
+            labelSelector.matchLabels."pynixd.nixidae.org/build" = "true";
+          }
+        ];
       # The farm's store is the pod's own emptyDir, so its outputs count against the pod.
       assert
         let

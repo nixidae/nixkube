@@ -104,6 +104,17 @@ let
     # A build pod needs the node DaemonSet on its node (the farm, the seccomp profile, the userns label), so it
     # goes where that goes. Without them an aarch64 pod on sg1 waits for ever: its only arm64 nodes are tainted.
     inherit (cfg.node) tolerations;
+    # LeastAllocated scores the node with the most unrequested room highest, and a wave of builds created in one
+    # second all see the same node: on sg1 every pod of a wave went to one node. A preference, so a full cluster
+    # still takes a pod.
+    topologySpreadConstraints = [
+      {
+        maxSkew = 1;
+        topologyKey = "kubernetes.io/hostname";
+        whenUnsatisfiable = "ScheduleAnyway";
+        labelSelector.matchLabels."pynixd.nixidae.org/build" = "true";
+      }
+    ];
     securityContext = {
       runAsUser = uid;
       runAsGroup = uid;
