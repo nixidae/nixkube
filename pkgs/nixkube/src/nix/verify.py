@@ -10,6 +10,7 @@ import structlog
 
 from ..constants import NIX_VERIFY_TIMEOUT
 from ..errors import VerifyStorePathsError
+from ..tracing import annotate, step
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,12 +47,14 @@ async def verify_store_paths(store: AsyncStore, package_paths: set[Path]) -> Non
 
     logger.debug("verify_store_paths", paths=package_paths)
     try:
-        with anyio.fail_after(NIX_VERIFY_TIMEOUT):
+        with step("store verify"), anyio.fail_after(NIX_VERIFY_TIMEOUT):
             roots = [await store.parse_store_path(str(path)) for path in package_paths]
             closure = await store.compute_fs_closure(roots)
+            annotate("nixkube.verify.paths", len(closure))
             async with anyio.create_task_group() as tg:
                 for path in closure:
                     tg.start_soon(verify, path)
+            annotate("nixkube.verify.failures", len(failures))
     except TimeoutError as e:
         raise VerifyStorePathsError(
             f"Store path verification timeout after {NIX_VERIFY_TIMEOUT}s",

@@ -10,6 +10,7 @@ import huggorm
 
 from ..constants import NIX_PATH_INFO_TIMEOUT
 from ..errors import StorePathClosureError
+from ..tracing import annotate, step
 
 if TYPE_CHECKING:
     from huggorm import AsyncStore
@@ -25,10 +26,12 @@ async def get_closure_paths(store: AsyncStore, package_paths: set[Path]) -> set[
     task, and neither has anything above it that would give up.
     """
     try:
-        with anyio.fail_after(NIX_PATH_INFO_TIMEOUT):
+        with step("store closure"), anyio.fail_after(NIX_PATH_INFO_TIMEOUT):
             roots = [await store.parse_store_path(str(path)) for path in package_paths]
             closure = await store.compute_fs_closure(roots)
             store_dir = Path(await store.store_dir())
+            annotate("nixkube.closure.roots", len(roots))
+            annotate("nixkube.closure.paths", len(closure))
     except TimeoutError as e:
         raise StorePathClosureError(
             f"Store path closure timeout after {NIX_PATH_INFO_TIMEOUT}s",
