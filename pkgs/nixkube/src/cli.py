@@ -31,6 +31,7 @@ from .constants import (
 )
 from .csi.server import csi_serve
 from .gc_task import gc_loop
+from .nix import open_node_store
 from .nri.server import nri_serve
 from .retire import retire_loop
 from .startup import run_setup
@@ -228,7 +229,9 @@ async def async_main() -> None:
     except (OSError, RuntimeError):
         logger.exception("seccomp_profiles_failed")
 
-    async with anyio.create_task_group() as tg:
+    # Opened before the server it dials: Nix's client connects per call, and
+    # every caller runs after the server is up or retries.
+    async with open_node_store(), anyio.create_task_group() as tg:
         loops = store_loops(host_store=HOST_STORE)
         logger.info("store_loops", host_store=HOST_STORE, loops=sorted(loops))
         if "store-server" in loops:

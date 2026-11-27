@@ -31,6 +31,7 @@ from .nix import (
     init_database,
     install_gcroots,
     install_result_link,
+    node_store,
     verify_store_paths,
 )
 from .nri.farm import FarmError, build_farm
@@ -132,7 +133,7 @@ async def prepare_volume(
         await verify_store_paths(package_paths)
 
     # Get storepaths from all packages
-    store_paths = await get_closure_paths(package_paths)
+    store_paths = await get_closure_paths(node_store(), package_paths)
 
     # Asked before anything is prepared, because the fallback changes what
     # preparing means.

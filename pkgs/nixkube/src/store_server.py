@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Final
 import anyio
 import structlog
 
-from .constants import HOST_STORE, STORE_SERVER, StoreServer
+from .constants import DEFAULT_DAEMON_SOCKET, HOST_STORE, STORE_SERVER, StoreServer
 from .subprocessing import iter_lines, run_captured
 from .supervision import CrashLoopTracker
 
@@ -40,10 +40,6 @@ logger = structlog.get_logger("nixkube.store_server")
 # What `nix daemon` itself says, apart from the supervisor's own events, so a
 # level can quiet one and keep the other.
 nix_logger = structlog.get_logger("nixkube.store_server.nix")
-
-# Nix's own socket for a store at /nix: what a client finds with no
-# NIX_DAEMON_SOCKET_PATH.
-DEFAULT_SOCKET: Final = Path("/nix/var/nix/daemon-socket/socket")
 
 # ANSI escape sequence pattern for stripping terminal colour codes
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -61,7 +57,7 @@ def _nix_level_to_structlog(verbosity: int) -> str:
 
 
 # The host's own daemon, at Nix's default socket for /nix.
-HOST_DAEMON: Final = "unix:///nix/var/nix/daemon-socket/socket"
+HOST_DAEMON: Final = f"unix://{DEFAULT_DAEMON_SOCKET}"
 
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)")
 
@@ -128,7 +124,7 @@ def server_socket(server: StoreServer, environ: Mapping[str, str]) -> Path:
     if value:
         return Path(value)
     if server is StoreServer.NIX_DAEMON:
-        return DEFAULT_SOCKET
+        return DEFAULT_DAEMON_SOCKET
     raise RuntimeError(f"STORE_SERVER={server.value} needs PYNIXD_UNIX_PATH: pynixd's default is not the node's socket")
 
 

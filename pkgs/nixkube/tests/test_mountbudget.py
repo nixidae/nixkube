@@ -153,7 +153,7 @@ class TestTheVolumeFallsBackRatherThanFailing:
 
         linked: list[set[Path]] = []
 
-        async def closure(paths: set[Path]) -> set[Path]:
+        async def closure(_store: object, paths: set[Path]) -> set[Path]:
             return {Path(f"/nix/store/{n:032d}-p") for n in range(3)}
 
         async def link(store_paths: set[Path], dst: Path) -> None:
@@ -163,6 +163,7 @@ class TestTheVolumeFallsBackRatherThanFailing:
             return None
 
         monkeypatch.setattr(volume_module, "get_closure_paths", closure)
+        monkeypatch.setattr(volume_module, "node_store", object)
         monkeypatch.setattr(volume_module, "hardlink_closure", link)
         monkeypatch.setattr(volume_module, "init_database", nothing)
         monkeypatch.setattr(volume_module, "install_gcroots", nothing)
@@ -184,7 +185,7 @@ class TestTheVolumeFallsBackRatherThanFailing:
 
         linked: list[set[Path]] = []
 
-        async def closure(paths: set[Path]) -> set[Path]:
+        async def closure(_store: object, paths: set[Path]) -> set[Path]:
             return {Path("/nix/store/aaa-pkg")}
 
         async def link(store_paths: set[Path], dst: Path) -> None:
@@ -194,6 +195,7 @@ class TestTheVolumeFallsBackRatherThanFailing:
             return None
 
         monkeypatch.setattr(volume_module, "get_closure_paths", closure)
+        monkeypatch.setattr(volume_module, "node_store", object)
         monkeypatch.setattr(volume_module, "hardlink_closure", link)
         monkeypatch.setattr(volume_module, "init_database", nothing)
         monkeypatch.setattr(volume_module, "install_gcroots", nothing)
@@ -214,13 +216,14 @@ class TestTheVolumeFallsBackRatherThanFailing:
         from src import volume as volume_module
         from src.errors import MountError
 
-        async def closure(paths: set[Path]) -> set[Path]:
+        async def closure(_store: object, paths: set[Path]) -> set[Path]:
             return {Path("/nix/store/aaa-pkg")}
 
         async def nothing(*_args: object, **_kwargs: object) -> None:
             return None
 
         monkeypatch.setattr(volume_module, "get_closure_paths", closure)
+        monkeypatch.setattr(volume_module, "node_store", object)
         monkeypatch.setattr(volume_module, "hardlink_closure", nothing)
         monkeypatch.setattr(volume_module, "init_database", nothing)
         monkeypatch.setattr(volume_module, "affordable", lambda _needed: False)

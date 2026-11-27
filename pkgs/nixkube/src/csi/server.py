@@ -44,9 +44,10 @@ from ..nix import (
     build_pod_packages,
     build_primary_package,
     get_build_args,
+    get_closure_paths,
     get_current_system,
+    node_store,
 )
-from ..nix.closure import get_closure_paths
 from ..nri.annotations import parse_pod_exclude
 from ..presentation import Presentation
 from ..tracing import annotate, publish_span, step
@@ -485,7 +486,7 @@ class NodeServicer(csi_grpc.NodeBase):
                             )
                         # The closure of what the root refers to, as Nix's sandbox holds it: not the root itself.
                         with step("runner store"):
-                            runner_paths = sorted((await get_closure_paths({root})) - {root})
+                            runner_paths = sorted((await get_closure_paths(node_store(), {root})) - {root})
                             bound = await anyio.to_thread.run_sync(
                                 mount_runner_store, volume_root, runner_paths, disk.uid, disk.gid
                             )

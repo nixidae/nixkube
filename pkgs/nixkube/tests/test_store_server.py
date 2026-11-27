@@ -4,9 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from src.constants import StoreServer
+from src.constants import DEFAULT_DAEMON_SOCKET, StoreServer
 from src.store_server import (
-    DEFAULT_SOCKET,
     host_version_refusal,
     minor_version,
     prepare_socket,
@@ -19,7 +18,7 @@ NODE_SOCKET = "/nix/var/nix-csi/daemon-socket/socket"
 
 def test_nix_daemon_listens_on_nix_socket_or_its_default() -> None:
     assert server_command(StoreServer.NIX_DAEMON)[:2] == ["nix", "daemon"]
-    assert server_socket(StoreServer.NIX_DAEMON, {}) == DEFAULT_SOCKET
+    assert server_socket(StoreServer.NIX_DAEMON, {}) == DEFAULT_DAEMON_SOCKET
     assert server_socket(StoreServer.NIX_DAEMON, {"NIX_DAEMON_SOCKET_PATH": NODE_SOCKET}) == Path(NODE_SOCKET)
 
 

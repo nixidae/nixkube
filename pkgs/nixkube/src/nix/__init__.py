@@ -13,5 +13,6 @@ from .build import (
 from .closure import get_closure_paths as get_closure_paths
 from .database import init_database as init_database
 from .gc import install_gcroots as install_gcroots, install_result_link as install_result_link
+from .node_store import node_store as node_store, open_node_store as open_node_store
 from .system import get_current_system as get_current_system
 from .verify import verify_store_paths as verify_store_paths

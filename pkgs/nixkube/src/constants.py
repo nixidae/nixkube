@@ -132,6 +132,14 @@ class StoreServer(StrEnum):
 
 STORE_SERVER = StoreServer(os.environ.get("STORE_SERVER", StoreServer.NIX_DAEMON))
 
+# Nix's own socket for a store at /nix: what a client finds with no
+# NIX_DAEMON_SOCKET_PATH.
+DEFAULT_DAEMON_SOCKET = Path("/nix/var/nix/daemon-socket/socket")
+
+# Where every client in the pod dials the store server. The manifest sets the
+# server's socket to the same path (`serverSocket` in kubenix/daemonset.nix).
+NODE_STORE_SOCKET = Path(os.environ.get("NIX_DAEMON_SOCKET_PATH") or DEFAULT_DAEMON_SOCKET)
+
 # Present a CSI volume as one composefs mount where the kernel can, and as a
 # hardlink tree where it cannot. Issue #68. False keeps the hardlink tree
 # everywhere, which a test cell uses so that path keeps running.
@@ -166,8 +174,9 @@ NRI_VM_BUSYBOX = os.environ.get("NRI_VM_BUSYBOX", "")
 # not to bound a slow but working node.
 NIX_VERIFY_TIMEOUT: float = _parse_float_env("NIX_VERIFY_TIMEOUT", "900")
 
-# How long `nix path-info --recursive` may take. Metadata only, no bytes: it
-# answers in well under a second for the closures above.
+# How long a closure query may take (`nix/closure.py`). Metadata only, no
+# bytes: `nix path-info --recursive` answered in well under a second for the
+# closures above.
 NIX_PATH_INFO_TIMEOUT: float = _parse_float_env("NIX_PATH_INFO_TIMEOUT", "120")
 
 # How long `nix-store --dump-db | nix-store --load-db` may take. Metadata
