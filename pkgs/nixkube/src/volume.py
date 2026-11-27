@@ -192,7 +192,7 @@ async def prepare_volume(
         await install_gcroots(
             package_paths,
             NIX_STATE_DIR / "gcroots" / "csi",
-            store=volume_root,
+            volume_root=volume_root,
             timeout=NIX_BUILD_TIMEOUT,
         )
 
