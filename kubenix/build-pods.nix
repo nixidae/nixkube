@@ -155,7 +155,7 @@ let
     // {
       name = "pynixd";
       command = [
-        "${pkgs.pynixd-build-pod}/bin/pynixd"
+        "${pkgs.pynixd-cli}/bin/pynixd"
         "build-one"
         "/run/pynixd-job"
       ];
@@ -205,7 +205,7 @@ let
           // {
             name = "sandbox";
             command = [
-              "${pkgs.pynixd-build-pod.venv}/lib/venv/bin/python"
+              "${pkgs.pynixd-cli.venv}/lib/venv/bin/python"
               "-I"
               "-m"
               "pynixd_store.builder.sibling"
@@ -284,7 +284,7 @@ let
             })
             {
               lifecycle.postStart.exec.command = [
-                "${pkgs.pynixd-build-pod.venv}/lib/venv/bin/python"
+                "${pkgs.pynixd-cli.venv}/lib/venv/bin/python"
                 "-I"
                 "-m"
                 "pynixd.provisioning.runner_ready"
