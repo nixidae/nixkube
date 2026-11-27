@@ -37,6 +37,27 @@ roles change:
    `flakeRef` and `nixExpr` evaluate arbitrary code. A worker
    (`huggorm.worker`) keeps the evaluator's memory and a crash out of the
    CSI and NRI server.
+6. **Each ported operation is a span.** It is a child of the current
+   publish span, named `store <operation>`, with its counts as attributes.
+   A port that adds no span is not done. User, 2026-11-27: trace every step
+   on sg1, from the build that pynixd's central receives to the container
+   that runs it.
+
+## Tracing
+
+The chain on sg1, and where it is broken:
+
+1. pynixd's central traces the build attempt (nixidae/nixidae#1570) and
+   writes its `traceparent` into the build pod's volume attributes.
+2. `NodePublishVolume` is a span under that `traceparent`
+   (nixidae/nixidae#1654), and each step of the publish is a child span.
+3. Each ported store operation is a child span of its step (decision 6).
+4. **Broken:** the node's pynixd traces each operation it serves, but the
+   call does not carry the publish's trace. The daemon protocol has a
+   carrier, the `open-telemetry` feature, and pynixd reads it. huggorm's
+   client does not send it yet (nixidae/nixidae#1664).
+5. **Not traced:** a call that still runs the `nix` CLI, until its port
+   lands; and the NRI path, which has no `traceparent` to start from.
 
 ## The server
 
