@@ -18,9 +18,19 @@
     subnet = 112;
     nixkube.node.storeServer = "pynixd-daemonless";
   };
-  # pynixd alone, on the host's /nix beside the host's daemon: sg1's shape.
+  # pynixd alone, on the host's /nix beside the host's daemon.
   pynixd-daemonless-hoststore = {
     subnet = 115;
+    nixkube = {
+      hostStore.enable = true;
+      node.storeServer = "pynixd-daemonless";
+    };
+  };
+  # sg1's whole node shape: the above with the pynixd cache, so the node's
+  # clients name `ssh-ng://nix@pynixd` and its pynixd substitutes over SSH.
+  pynixd-daemonless-hoststore-cache = {
+    subnet = 116;
+    cache = true;
     nixkube = {
       hostStore.enable = true;
       node.storeServer = "pynixd-daemonless";
