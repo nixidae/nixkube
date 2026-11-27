@@ -10,6 +10,7 @@ reads and ensure consistent defaults across the codebase.
 
 import os
 import sys
+from enum import StrEnum
 from importlib import metadata
 from pathlib import Path
 
@@ -116,10 +117,20 @@ MOUNT_BUDGET_FALLBACK_RATIO: float = _parse_float_env("MOUNT_BUDGET_FALLBACK_RAT
 # storage disagrees can go back to hardlinks without a new image.
 NRI_BIND_FARM = os.environ.get("NRI_BIND_FARM", "true") == "true"
 
-# This node's /nix is the host's, with the host's nix-daemon on its socket.
-# Issue #25. nixkube then runs no nix-daemon of its own and leaves garbage
-# collection to the host.
+# This node's /nix is the host's. nixkube serves it on a socket of its own
+# (`NIX_DAEMON_SOCKET_PATH`) and leaves garbage collection to the host. Issue #25.
 HOST_STORE = os.environ.get("HOST_STORE", "false") == "true"
+
+
+class StoreServer(StrEnum):
+    """What answers on the node's store socket. nixidae/nixidae#1661."""
+
+    NIX_DAEMON = "nix-daemon"
+    PYNIXD = "pynixd"
+    PYNIXD_DAEMONLESS = "pynixd-daemonless"
+
+
+STORE_SERVER = StoreServer(os.environ.get("STORE_SERVER", StoreServer.NIX_DAEMON))
 
 # Present a CSI volume as one composefs mount where the kernel can, and as a
 # hardlink tree where it cannot. Issue #68. False keeps the hardlink tree

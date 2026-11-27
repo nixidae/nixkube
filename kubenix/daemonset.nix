@@ -69,6 +69,36 @@ in
         nix = config.nixkube.nix.package;
       };
     };
+    storeServer = lib.mkOption {
+      description = ''
+        What answers on the node's store socket. Every Nix client in the pod
+        talks to it over the daemon protocol, and does not know which one
+        answers. nixidae/nixidae#1661; `docs/node-store.md`.
+
+        - `nix-daemon`: `nix daemon`.
+        - `pynixd`: pynixd, with a private Nix daemon under it for what
+          pynixd does not answer.
+        - `pynixd-daemonless`: pynixd answers every operation and writes the
+          store itself (pynixd `docs/design/daemonless.md`). An operation
+          only a Nix daemon answers fails with "runs no Nix daemon".
+      '';
+      type = lib.types.enum [
+        "nix-daemon"
+        "pynixd"
+        "pynixd-daemonless"
+      ];
+      default = "nix-daemon";
+    };
+    pynixd.settings = lib.mkOption {
+      description = ''
+        pynixd's configuration (`PYNIXD_CONFIG`) when `storeServer` is a
+        pynixd. nixkube sets the local store from `storeServer`, turns off
+        pynixd's SSH listener and its garbage collector (nixkube's sweep, or
+        the host, owns collection), and takes the socket from the DaemonSet.
+      '';
+      type = lib.types.submodule { freeformType = (curPkgs.formats.json { }).type; };
+      default = { };
+    };
   };
   config =
     let
@@ -81,6 +111,8 @@ in
 
       # Set by `nixkube-host-check` on a node whose host runs NixOS.
       hostLabel = "nixkube/host";
+
+      servedByPynixd = cfg.node.storeServer != "nix-daemon";
 
       # First in both pods when `hostStore` is on: on the wrong host it moves
       # the node to the other DaemonSet by its label, and waits to be deleted.
@@ -122,6 +154,8 @@ in
         store:
         let
           hostDaemonSocket = "/nix/var/nix-csi/daemon-socket/socket";
+          # Where the store server listens and every client dials.
+          serverSocket = if store == "host" then hostDaemonSocket else "/nix/var/nix/daemon-socket/socket";
           storeLabel = lib.optionalAttrs (store != null) { "nixkube/store" = store; };
           labels' = labels // storeLabel;
           matchLabels' = matchLabels // storeLabel;
@@ -341,9 +375,14 @@ in
                         # host's daemon at the default socket. Both the daemon
                         # and every nix client in this container read it.
                         // lib.optionalAttrs (store == "host") {
-                          NIX_DAEMON_SOCKET_PATH.value = hostDaemonSocket;
+                          NIX_DAEMON_SOCKET_PATH.value = serverSocket;
+                        }
+                        // lib.optionalAttrs servedByPynixd {
+                          PYNIXD_CONFIG.value = "/etc/nix/pynixd.json";
+                          PYNIXD_UNIX_PATH.value = serverSocket;
                         }
                         // {
+                          STORE_SERVER.value = cfg.node.storeServer;
                           PYNIXD_ENABLED.value = lib.boolToString cfg.pynixd.enable;
                           # Also what rolls the DaemonSet when the mode changes:
                           # nixkube installs or removes the profile only at start.
@@ -616,7 +655,30 @@ in
         };
     in
     lib.mkIf (cfg.enable && cfg.node.enable) {
+      nixkube.node.pynixd.settings = lib.mkIf servedByPynixd {
+        ssh_port = lib.mkDefault null;
+        # One collector per store: nixkube's sweep on its own store, the
+        # host's on a host store (`store_loops` in cli.py).
+        gc_enabled = false;
+        stores.local = {
+          type = "local-socket";
+        }
+        // (
+          if cfg.node.storeServer == "pynixd-daemonless" then
+            {
+              daemon = false;
+              pynixd_writes = true;
+            }
+          else
+            # A store at / reads as the machine's to pynixd, which then dials
+            # the machine's daemon. The pod has none: pynixd starts its own.
+            { managed = true; }
+        );
+      };
       kubernetes.resources.${cfg.namespace} = {
+        ConfigMap.nix-node.data = lib.mkIf servedByPynixd {
+          "pynixd.json" = builtins.toJSON cfg.node.pynixd.settings;
+        };
         # **The operator's own kind, and the checked path.** An operator
         # ignores the `prometheus.io/*` annotations on the pod template and
         # selects pods by this object instead. A VictoriaMetrics operator

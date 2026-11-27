@@ -1,34 +1,49 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Supervised nix-daemon subprocess with structured log forwarding.
+"""The node's store server: a supervised subprocess on the node's store socket.
 
-Runs `nix daemon --store local --log-format internal-json` as a child process,
-forwards its structured JSON log lines through structlog, and restarts on exit
-with crash-loop detection via CrashLoopTracker.
+`STORE_SERVER` picks the server (nixidae/nixidae#1661). `nix daemon` logs
+internal-json, which this module forwards through structlog. pynixd logs
+through its own structlog, to the container's stderr. Either one restarts on
+exit, with crash-loop detection via CrashLoopTracker.
 
-On a host-store node the daemon serves the host's /nix on a socket of its own,
+On a host-store node the server serves the host's /nix on a socket of its own,
 `NIX_DAEMON_SOCKET_PATH`, which every nix call in the pod reads too. Before it
 starts, `check_host_version` refuses a Nix newer than the host daemon's: a
 newer Nix can migrate the store's database, and the host's Nix then cannot
-read it. Issue #25.
+read it. Issue #25. pynixd's own schema is not checked yet
+(nixidae/nixidae#1528).
 """
+
+from __future__ import annotations
 
 import json
 import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import anyio
 import structlog
-from anyio.abc import ByteReceiveStream
 
-from .constants import HOST_STORE
+from .constants import HOST_STORE, STORE_SERVER, StoreServer
 from .subprocessing import iter_lines, run_captured
 from .supervision import CrashLoopTracker
 
-logger = structlog.get_logger("nixkube.nix_daemon")
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from anyio.abc import ByteReceiveStream
+
+logger = structlog.get_logger("nixkube.store_server")
+# What `nix daemon` itself says, apart from the supervisor's own events, so a
+# level can quiet one and keep the other.
+nix_logger = structlog.get_logger("nixkube.store_server.nix")
+
+# Nix's own socket for a store at /nix: what a client finds with no
+# NIX_DAEMON_SOCKET_PATH.
+DEFAULT_SOCKET: Final = Path("/nix/var/nix/daemon-socket/socket")
 
 # ANSI escape sequence pattern for stripping terminal colour codes
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -93,45 +108,64 @@ def prepare_socket(path: Path) -> None:
     path.unlink(missing_ok=True)
 
 
-async def supervise_nix_daemon() -> None:
-    """Supervised loop for the nix daemon subprocess.
+def server_command(server: StoreServer) -> list[str]:
+    """The argv of `server`.
 
-    Launches nix daemon, forwards its logs, and restarts on exit.
+    The manifest configures each server, from the same option that sets
+    `STORE_SERVER`: Nix's daemon reads `NIX_DAEMON_SOCKET_PATH` and nix.conf,
+    pynixd reads `PYNIXD_UNIX_PATH` and `PYNIXD_CONFIG`, which says whether a
+    Nix daemon runs under it. Both inherit this process's environment.
+    """
+    if server is StoreServer.NIX_DAEMON:
+        return ["nix", "daemon", "--store", "local", "--log-format", "internal-json", "--debug"]
+    return ["pynixd", "daemon"]
+
+
+def server_socket(server: StoreServer, environ: Mapping[str, str]) -> Path:
+    """The socket `server` listens on, as the manifest set it."""
+    name = "NIX_DAEMON_SOCKET_PATH" if server is StoreServer.NIX_DAEMON else "PYNIXD_UNIX_PATH"
+    value = environ.get(name)
+    if value:
+        return Path(value)
+    if server is StoreServer.NIX_DAEMON:
+        return DEFAULT_SOCKET
+    raise RuntimeError(f"STORE_SERVER={server.value} needs PYNIXD_UNIX_PATH: pynixd's default is not the node's socket")
+
+
+async def supervise_store_server() -> None:
+    """Supervised loop for the store server subprocess.
+
+    Launches the server, forwards nix daemon's logs, and restarts on exit.
     Raises CrashLoopError after too many rapid restarts.
     """
-    tracker = CrashLoopTracker(max_restarts=5, window=60.0, name="nix-daemon")
-    socket = os.environ.get("NIX_DAEMON_SOCKET_PATH")
+    tracker = CrashLoopTracker(max_restarts=5, window=60.0, name=STORE_SERVER.value)
     if HOST_STORE:
-        if not socket:
+        if not os.environ.get("NIX_DAEMON_SOCKET_PATH"):
             raise RuntimeError("a host-store node needs NIX_DAEMON_SOCKET_PATH: the default socket is the host's")
         await check_host_version()
+    socket = server_socket(STORE_SERVER, os.environ)
 
     while True:
-        if socket:
-            prepare_socket(Path(socket))
-        logger.info("nix_daemon_starting")
-        async with await anyio.open_process(
-            [
-                "nix",
-                "daemon",
-                "--store",
-                "local",
-                "--log-format",
-                "internal-json",
-                "--debug",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        ) as proc:
-            assert proc.stdout is not None and proc.stderr is not None
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(_pipe_nix_logs, proc.stdout)
-                tg.start_soon(_pipe_nix_logs, proc.stderr)
-            rc = await proc.wait()
+        prepare_socket(socket)
+        logger.info("store_server_starting", server=STORE_SERVER.value, socket=str(socket))
+        if STORE_SERVER is StoreServer.NIX_DAEMON:
+            async with await anyio.open_process(
+                server_command(STORE_SERVER),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ) as proc:
+                assert proc.stdout is not None and proc.stderr is not None
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(_pipe_nix_logs, proc.stdout)
+                    tg.start_soon(_pipe_nix_logs, proc.stderr)
+                rc = await proc.wait()
+        else:
+            async with await anyio.open_process(server_command(STORE_SERVER), stdout=None, stderr=None) as proc:
+                rc = await proc.wait()
 
-        logger.warning("nix_daemon_exited", returncode=rc)
+        logger.warning("store_server_exited", server=STORE_SERVER.value, returncode=rc)
         tracker.record_and_check()
-        logger.info("nix_daemon_restarting", backoff_seconds=1)
+        logger.info("store_server_restarting", backoff_seconds=1)
         await anyio.sleep(1)
 
 
@@ -149,7 +183,7 @@ async def _pipe_nix_logs(stream: ByteReceiveStream) -> None:
                 try:
                     data = json.loads(payload)
                 except json.JSONDecodeError:
-                    logger.debug("nix_daemon_log", line=line)
+                    nix_logger.debug("nix_daemon_log", line=line)
                     continue
 
                 action = data.get("action", "")
@@ -157,15 +191,15 @@ async def _pipe_nix_logs(stream: ByteReceiveStream) -> None:
                     verbosity = data.get("verbosity", 2)
                     level = _nix_level_to_structlog(verbosity)
                     msg = _ANSI_RE.sub("", data.get("msg", "")).strip()
-                    getattr(logger, level)("nix_daemon", msg=msg)
+                    getattr(nix_logger, level)("nix_daemon", msg=msg)
                 else:
                     # start / stop / result activity traces
-                    logger.debug(
+                    nix_logger.debug(
                         "nix_daemon_activity",
                         **{k: v for k, v in data.items() if k != "action"},
                         action=action,
                     )
             else:
-                logger.debug("nix_daemon_log", line=line)
+                nix_logger.debug("nix_daemon_log", line=line)
     except Exception:
         logger.exception("nix_daemon_log_error")

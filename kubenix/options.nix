@@ -13,7 +13,7 @@ let
   cfg = config.nixkube;
   defaultLoggers = {
     "nixkube".level = "INFO";
-    "nixkube.nix_daemon".level = "WARNING";
+    "nixkube.store_server.nix".level = "WARNING";
     "httpx".level = "WARNING";
   };
 in
@@ -645,7 +645,9 @@ in
                   };
               in
               {
-                nixkube-node-env = callPackage ../environments/node;
+                nixkube-node-env = final.callPackage ../environments/node {
+                  withPynixd = cfg.node.storeServer != "nix-daemon";
+                };
                 nixkube-pynixd-env = callPackage ../environments/cache;
 
               }

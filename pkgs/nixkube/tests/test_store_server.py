@@ -4,7 +4,35 @@ from pathlib import Path
 
 import pytest
 
-from src.nix_daemon import host_version_refusal, minor_version, prepare_socket
+from src.constants import StoreServer
+from src.store_server import (
+    DEFAULT_SOCKET,
+    host_version_refusal,
+    minor_version,
+    prepare_socket,
+    server_command,
+    server_socket,
+)
+
+NODE_SOCKET = "/nix/var/nix-csi/daemon-socket/socket"
+
+
+def test_nix_daemon_listens_on_nix_socket_or_its_default() -> None:
+    assert server_command(StoreServer.NIX_DAEMON)[:2] == ["nix", "daemon"]
+    assert server_socket(StoreServer.NIX_DAEMON, {}) == DEFAULT_SOCKET
+    assert server_socket(StoreServer.NIX_DAEMON, {"NIX_DAEMON_SOCKET_PATH": NODE_SOCKET}) == Path(NODE_SOCKET)
+
+
+@pytest.mark.parametrize("server", [StoreServer.PYNIXD, StoreServer.PYNIXD_DAEMONLESS])
+def test_pynixd_listens_where_the_manifest_says(server: StoreServer) -> None:
+    assert server_command(server) == ["pynixd", "daemon"]
+    assert server_socket(server, {"PYNIXD_UNIX_PATH": NODE_SOCKET}) == Path(NODE_SOCKET)
+
+
+@pytest.mark.parametrize("server", [StoreServer.PYNIXD, StoreServer.PYNIXD_DAEMONLESS])
+def test_pynixd_without_a_socket_refuses_to_start(server: StoreServer) -> None:
+    with pytest.raises(RuntimeError, match="PYNIXD_UNIX_PATH"):
+        server_socket(server, {"NIX_DAEMON_SOCKET_PATH": NODE_SOCKET})
 
 
 @pytest.mark.parametrize(

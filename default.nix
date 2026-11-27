@@ -1631,10 +1631,14 @@ let
         lib.mapAttrs
           (
             name:
-            { foreignHost, subnet }:
+            {
+              foreignHost ? false,
+              subnet,
+              nixkube,
+            }:
             ciTest.override {
               name = "nixkube-ci-${name}";
-              instance = kubenixCIGuest (ciModules.two ++ [ { nixkube.hostStore.enable = true; } ]);
+              instance = kubenixCIGuest (ciModules.two ++ [ { inherit nixkube; } ]);
               inherit foreignHost;
               lan = {
                 network = "nixkube-ci-${name}";
@@ -1646,13 +1650,33 @@ let
             # `ciTest` with host store on: the NixOS guest runs nixkube from
             # its own /nix. Issue #25.
             hoststore = {
-              foreignHost = false;
               subnet = 107;
+              nixkube.hostStore.enable = true;
             };
             # And on a node that is not NixOS, which keeps the separate store.
             hoststore-foreign = {
               foreignHost = true;
               subnet = 108;
+              nixkube.hostStore.enable = true;
+            };
+            # The node's store server (`nixkube.node.storeServer`,
+            # nixidae/nixidae#1661): pynixd over a private Nix daemon, and
+            # pynixd alone, on nixkube's own store.
+            pynixd = {
+              subnet = 110;
+              nixkube.node.storeServer = "pynixd";
+            };
+            pynixd-daemonless = {
+              subnet = 112;
+              nixkube.node.storeServer = "pynixd-daemonless";
+            };
+            # Daemonless pynixd on the host's /nix, beside the host's daemon: sg1's shape.
+            pynixd-daemonless-hoststore = {
+              subnet = 115;
+              nixkube = {
+                hostStore.enable = true;
+                node.storeServer = "pynixd-daemonless";
+              };
             };
           };
 

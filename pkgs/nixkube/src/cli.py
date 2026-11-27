@@ -31,10 +31,10 @@ from .constants import (
 )
 from .csi.server import csi_serve
 from .gc_task import gc_loop
-from .nix_daemon import supervise_nix_daemon
 from .nri.server import nri_serve
 from .retire import retire_loop
 from .startup import run_setup
+from .store_server import supervise_store_server
 from .supervision import supervised
 
 
@@ -142,8 +142,8 @@ def log_effective_app_config() -> None:
 def store_loops(*, host_store: bool) -> frozenset[str]:
     """The loops that look after the store.
 
-    A host-store node runs its own nix-daemon on its own socket
-    (`NIX_DAEMON_SOCKET_PATH`): the store is shared, the daemon is not. The
+    A host-store node runs its own store server on its own socket
+    (`NIX_DAEMON_SOCKET_PATH`): the store is shared, the server is not. The
     host's daemon cannot reach nixkube's substituters -- an in-cluster name
     and nixkube's SSH key -- so a pod whose closure the host lacked never
     started (sg1, 2026-11-19). No sweep: it deletes every unrooted path older
@@ -152,8 +152,8 @@ def store_loops(*, host_store: bool) -> frozenset[str]:
     the separate store it used before. Issue #25.
     """
     if host_store:
-        return frozenset({"nix-daemon", "retire"})
-    return frozenset({"nix-daemon", "gc"})
+        return frozenset({"store-server", "retire"})
+    return frozenset({"store-server", "gc"})
 
 
 class LoggerLevel(TypedDict, total=False):
@@ -231,8 +231,8 @@ async def async_main() -> None:
     async with anyio.create_task_group() as tg:
         loops = store_loops(host_store=HOST_STORE)
         logger.info("store_loops", host_store=HOST_STORE, loops=sorted(loops))
-        if "nix-daemon" in loops:
-            tg.start_soon(supervise_nix_daemon, name="nix-daemon")
+        if "store-server" in loops:
+            tg.start_soon(supervise_store_server, name="store-server")
         if "gc" in loops:
             tg.start_soon(gc_loop, name="gc")
         if "retire" in loops:
