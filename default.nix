@@ -1640,23 +1640,40 @@ let
           subnet = 108;
           nixkube.hostStore.enable = true;
         };
+        # sg1's whole shape: daemonless pynixd on the host's /nix, with the
+        # pynixd cache, so the node's clients name `ssh-ng://nix@pynixd`.
+        # By hand, not in ./nix/store-server-tests.nix: daemonless pynixd
+        # refuses that substituter until nixidae/nixidae#1665, and a CI job
+        # that fails by design would hold `tested` back for everyone.
+        pynixd-daemonless-hoststore-cache = {
+          subnet = 116;
+          cache = true;
+          nixkube = {
+            hostStore.enable = true;
+            node.storeServer = "pynixd-daemonless";
+          };
+        };
       };
 
     /**
       `ciTest` with one change to the deployment: `nixkube` is a nixkube module
       value, `subnet` the guest LAN (10.<subnet>.0.0/24), `foreignHost` a node
-      that is not NixOS.
+      that is not NixOS, `cache` the pynixd cache deployed (`ciTestCache`'s
+      modules rather than `ciTest`'s).
     */
     ciVariant =
       name:
       {
         foreignHost ? false,
+        cache ? false,
         subnet,
         nixkube,
       }:
       ciTest.override {
         name = "nixkube-ci-${name}";
-        instance = kubenixCIGuest (ciModules.two ++ [ { inherit nixkube; } ]);
+        instance = kubenixCIGuest (
+          (if cache then ciModules.one else ciModules.two) ++ [ { inherit nixkube; } ]
+        );
         inherit foreignHost;
         lan = {
           network = "nixkube-ci-${name}";
