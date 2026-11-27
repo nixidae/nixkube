@@ -164,12 +164,12 @@ NRI_VM_RUNTIME_HANDLERS = frozenset(h for h in os.environ.get("NRI_VM_RUNTIME_HA
 # the build. Empty where the node does not set it; a VM pod is then refused.
 NRI_VM_BUSYBOX = os.environ.get("NRI_VM_BUSYBOX", "")
 
-# How long `nix store verify --recursive --no-trust` may take.
+# How long verifying a closure may take (`nix/verify.py`).
 #
-# It is the longest nix call on the publish path when it runs at all, and the
-# only one whose cost is bytes rather than work: `--no-trust` re-hashes every
-# path. Measured on nix 2.34.8 over a closure of 2443 paths / 11.8 GiB: 8.19s
-# warm. Cold from disk is bounded by the disk, so this is generous on purpose
+# It is the longest store call on the publish path when it runs at all, and the
+# only one whose cost is bytes rather than work: it re-hashes every path.
+# Measured as `nix store verify --recursive --no-trust` on nix 2.34.8 over a
+# closure of 2443 paths / 11.8 GiB: 8.19s warm. Cold from disk is bounded by the disk, so this is generous on purpose
 # -- it exists to stop a stuck filesystem blocking NodePublishVolume for ever,
 # not to bound a slow but working node.
 NIX_VERIFY_TIMEOUT: float = _parse_float_env("NIX_VERIFY_TIMEOUT", "900")

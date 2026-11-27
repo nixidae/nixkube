@@ -130,7 +130,7 @@ async def prepare_volume(
 
     # Verify all packages and their closures before processing
     if VERIFY_STORE_PATHS:
-        await verify_store_paths(package_paths)
+        await verify_store_paths(node_store(), package_paths)
 
     # Get storepaths from all packages
     store_paths = await get_closure_paths(node_store(), package_paths)
