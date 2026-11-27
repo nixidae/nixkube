@@ -49,6 +49,7 @@ from ..nix import (
 from ..nix.closure import get_closure_paths
 from ..nri.annotations import parse_pod_exclude
 from ..presentation import Presentation
+from ..tracing import annotate, publish_span, step
 from ..volume import (
     bind_store_disk,
     bind_writable,
@@ -213,6 +214,7 @@ class NodeServicer(csi_grpc.NodeBase):
     ) -> None:
         logger = structlog.get_logger("nixkube.csi.nodepublishvolume")
         start_time = time.perf_counter()
+        started_ns = time.time_ns()
         request = await stream.recv_message()
         if request is None:
             raise GRPCError(Status.INVALID_ARGUMENT, "NodePublishVolumeRequest is None")
@@ -251,9 +253,41 @@ class NodeServicer(csi_grpc.NodeBase):
                 Status.INVALID_ARGUMENT, f"volume attribute {RUNNER_STORE_ATTRIBUTE} needs {STORE_VOLUME_ATTRIBUTE}"
             )
 
-        log = logger.bind(volume_id=request.volume_id)
+        context = request.volume_context
+        attributes = {
+            "nixkube.volume_id": request.volume_id,
+            "nixkube.node": KUBE_NODE_NAME,
+            "k8s.pod.name": context.get("csi.storage.k8s.io/pod.name", ""),
+            "k8s.namespace.name": context.get("csi.storage.k8s.io/pod.namespace", ""),
+            "k8s.pod.uid": context.get("csi.storage.k8s.io/pod.uid", ""),
+        }
+        with publish_span(context, started_ns, attributes):
+            await self._publish(
+                stream,
+                request,
+                logger.bind(volume_id=request.volume_id),
+                farm=farm,
+                store_volume=store_volume,
+                runner_root=runner_root,
+                start_time=start_time,
+            )
 
-        async with self.volume_locks[request.volume_id]:
+    async def _publish(
+        self,
+        stream: Stream[csi_pb2.NodePublishVolumeRequest, csi_pb2.NodePublishVolumeResponse],
+        request: csi_pb2.NodePublishVolumeRequest,
+        log: Any,  # structlog's `get_logger` answers `Any`
+        *,
+        farm: bool,
+        store_volume: str | None,
+        runner_root: str | None,
+        start_time: float,
+    ) -> None:
+        """`NodePublishVolume` past its argument checks, inside its span: each step a child span."""
+        lock = self.volume_locks[request.volume_id]
+        with step("volume lock"):
+            await lock.acquire()
+        try:
             gc_root = CSI_GCROOTS / request.volume_id
             volume_root = CSI_VOLUMES / request.volume_id
             extra_args = await get_build_args()
@@ -295,7 +329,8 @@ class NodeServicer(csi_grpc.NodeBase):
                 return
 
             try:
-                pod = await Pod.get(pod_name, namespace=pod_namespace)
+                with step("get pod"):
+                    pod = await Pod.get(pod_name, namespace=pod_namespace)
             except NotFoundError:
                 # Pod was deleted before we could mount — stale request from kubelet.
                 # Return success so kubelet stops retrying; it will call
@@ -327,7 +362,8 @@ class NodeServicer(csi_grpc.NodeBase):
                 log = log.bind(store_disk=str(disk.path))
 
             try:
-                await check_csi_volume_mounts(pod)
+                with step("check mounts"):
+                    await check_csi_volume_mounts(pod)
             except Exception:
                 log.warning("csi_mount_check_failed", exc_info=True)
 
@@ -351,14 +387,15 @@ class NodeServicer(csi_grpc.NodeBase):
 
                 # Use first non-None value as lock key (same priority as build_primary_package)
                 lock_key = store_path or flake_ref or nix_expr or "null"
-                async with self.volume_locks[lock_key]:
-                    primary_package = await build_primary_package(
-                        store_path,
-                        flake_ref,
-                        nix_expr,
-                        gc_root,
-                        extra_args,
-                    )
+                with step("primary package"):
+                    async with self.volume_locks[lock_key]:
+                        primary_package = await build_primary_package(
+                            store_path,
+                            flake_ref,
+                            nix_expr,
+                            gc_root,
+                            extra_args,
+                        )
             except CSIError as e:
                 e.pod = pod
                 raise
@@ -371,12 +408,13 @@ class NodeServicer(csi_grpc.NodeBase):
                 package_paths: set[Path] = set()
             else:
                 try:
-                    async with self.volume_locks[pod_uid]:
-                        package_paths = await build_pod_packages(
-                            pod,
-                            gc_root,
-                            extra_args,
-                        )
+                    with step("pod packages"):
+                        async with self.volume_locks[pod_uid]:
+                            package_paths = await build_pod_packages(
+                                pod,
+                                gc_root,
+                                extra_args,
+                            )
                 except CSIError as e:
                     e.pod = pod
                     raise
@@ -385,6 +423,7 @@ class NodeServicer(csi_grpc.NodeBase):
                 package_paths.add(primary_package)
                 log.debug("primary_package", path=str(primary_package))
 
+            annotate("nixkube.paths", len(package_paths))
             if not package_paths:
                 log.error("no_packages_to_mount")
                 raise GRPCError(
@@ -401,37 +440,42 @@ class NodeServicer(csi_grpc.NodeBase):
                     host_store=HOST_STORE,
                 )
                 log.debug("volume_presentation", presentation=str(shown))
+                annotate("nixkube.presentation", str(shown))
                 if shown is Presentation.COMPOSEFS:
-                    image = await composefs.build_image(
-                        package_paths,
-                        primary_package,
-                        gc_root / "composefs",
-                        extra_args,
-                    )
+                    with step("composefs image"):
+                        image = await composefs.build_image(
+                            package_paths,
+                            primary_package,
+                            gc_root / "composefs",
+                            extra_args,
+                        )
                     volume_root.mkdir(parents=True, exist_ok=True)
                     # The sweep cannot ask whether the volume root is a mount
                     # source: a composefs mount's source is the image. It asks
                     # whether this target is still mounted instead.
                     (volume_root / TARGET_FILE).write_text(request.target_path)
-                    await composefs.mount(image, Path(request.target_path), request.readonly, volume_root)
+                    with step("mount"):
+                        await composefs.mount(image, Path(request.target_path), request.readonly, volume_root)
                 elif shown is Presentation.FARM:
                     # Before `prepare_volume`, which writes the database under the volume's `nix`.
                     if disk is not None:
                         await anyio.to_thread.run_sync(bind_store_disk, volume_root, disk.path)
-                    prepared = await prepare_volume(
-                        volume_root,
-                        package_paths,
-                        primary_package,
-                        bind_farm=True,
-                        allow_hardlinks=not HOST_STORE and disk is None,
-                    )
+                    with step("prepare"):
+                        prepared = await prepare_volume(
+                            volume_root,
+                            package_paths,
+                            primary_package,
+                            bind_farm=True,
+                            allow_hardlinks=not HOST_STORE and disk is None,
+                        )
                     if disk is not None:
                         await anyio.to_thread.run_sync(own_store, volume_root, disk.uid, disk.gid)
                     # Past the mount budget the volume is a hardlink tree in the same place.
                     if prepared.bind_farm:
-                        bound = await anyio.to_thread.run_sync(
-                            partial(mount_farm, volume_root, prepared.paths, writable=disk is not None)
-                        )
+                        with step("bind farm"):
+                            bound = await anyio.to_thread.run_sync(
+                                partial(mount_farm, volume_root, prepared.paths, writable=disk is not None)
+                            )
                         log.debug("farm_bound", paths=bound)
                     if runner_root is not None and disk is not None:
                         root = Path(runner_root)
@@ -440,16 +484,20 @@ class NodeServicer(csi_grpc.NodeBase):
                                 f"the runner's store {runner_root} needs a bound farm that holds it", logs=""
                             )
                         # The closure of what the root refers to, as Nix's sandbox holds it: not the root itself.
-                        runner_paths = sorted((await get_closure_paths({root})) - {root})
-                        bound = await anyio.to_thread.run_sync(
-                            mount_runner_store, volume_root, runner_paths, disk.uid, disk.gid
-                        )
+                        with step("runner store"):
+                            runner_paths = sorted((await get_closure_paths({root})) - {root})
+                            bound = await anyio.to_thread.run_sync(
+                                mount_runner_store, volume_root, runner_paths, disk.uid, disk.gid
+                            )
                         log.debug("runner_store_bound", paths=bound)
                     (volume_root / TARGET_FILE).write_text(request.target_path)
-                    if disk is not None:
-                        await anyio.to_thread.run_sync(bind_writable, volume_root / "nix", Path(request.target_path))
-                    else:
-                        await mount_volume(volume_root / "nix", Path(request.target_path), readonly=True)
+                    with step("mount"):
+                        if disk is not None:
+                            await anyio.to_thread.run_sync(
+                                bind_writable, volume_root / "nix", Path(request.target_path)
+                            )
+                        else:
+                            await mount_volume(volume_root / "nix", Path(request.target_path), readonly=True)
                 elif shown is Presentation.REFUSED:
                     raise MountError(
                         "this node shares its host's store, where a volume can only be"
@@ -505,6 +553,8 @@ class NodeServicer(csi_grpc.NodeBase):
 
             # Copy all packages to cache in background
             schedule_copy_to_cache(self.tasks, package_paths)
+        finally:
+            lock.release()
 
     @csi_error_handler
     async def NodeUnpublishVolume(

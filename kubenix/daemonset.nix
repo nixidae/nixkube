@@ -368,6 +368,10 @@ in
                           NIXPKGS_ALLOW_UNFREE.value = "1";
                           USER.value = "root";
                         }
+                        // lib.optionalAttrs (cfg.tracing.endpoint != null) {
+                          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT.value = cfg.tracing.endpoint;
+                          OTEL_SERVICE_NAME.value = cfg.tracing.serviceName;
+                        }
                       );
                       volumeMounts = lib.mkNamedList {
                         csi-socket.mountPath = "/csi";

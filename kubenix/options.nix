@@ -311,6 +311,25 @@ in
       type = lib.types.bool;
       default = true;
     };
+    tracing = {
+      endpoint = lib.mkOption {
+        description = ''
+          The OTLP/HTTP traces URL each node pod sends spans to, such as
+          VictoriaTraces' `http://host:10428/insert/opentelemetry/v1/traces`.
+          Each volume publish is a span, under the trace of the pynixd build
+          that asked for the pod when its volume names one. `null` sends
+          nothing.
+        '';
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+      };
+      serviceName = lib.mkOption {
+        description = "The spans' `service.name`.";
+        type = lib.types.str;
+        default = "nixkube";
+      };
+    };
+
     metrics = {
       enable = lib.mkOption {
         description = ''

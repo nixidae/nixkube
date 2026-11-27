@@ -31,6 +31,10 @@ dependencies = [
   "structlog",
   "rich",
   "prometheus-client",
+  # Spans of each volume publish, under the pynixd build's trace (`tracing.py`).
+  "opentelemetry-api",
+  "opentelemetry-sdk",
+  "opentelemetry-exporter-otlp-proto-http",
 ]
 
 [project.scripts]

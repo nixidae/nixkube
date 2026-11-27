@@ -9,7 +9,7 @@ from typing import TypedDict
 import anyio
 import structlog
 
-from . import metrics
+from . import metrics, tracing
 from .build_pods import install_profiles
 from .cache import cache_probe_loop
 from .constants import (
@@ -217,6 +217,7 @@ async def async_main() -> None:
 
     if METRICS_ENABLED:
         metrics.serve(port=METRICS_PORT, addr=METRICS_ADDR)
+    await anyio.to_thread.run_sync(tracing.start)
 
     await run_setup()
     # Not fatal: a crash here would stop CSI and NRI on the node for a mode only
