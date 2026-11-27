@@ -8,7 +8,6 @@ import structlog
 from cachetools import TTLCache
 from kr8s.asyncio.objects import Pod
 
-from ..builders import build_builder_args, get_builder_uris
 from ..cache import check_cache_connectivity, get_substituter_args
 from ..constants import NIX_BUILD_TIMEOUT
 from ..errors import BuildError, CommandTimeoutError, SubprocessError
@@ -18,17 +17,16 @@ from ..subprocessing import try_console
 
 logger = structlog.get_logger("nixkube.nix")
 
-# Cache build args for 30s to avoid redundant k8s API calls and cache pings
-# during burst volume creation. Builder pods and cache connectivity are stable
-# during a pod's lifetime.
+# Cache build args for 30s to avoid redundant cache pings during burst volume
+# creation. Cache connectivity is stable during a pod's lifetime.
 _build_args_cache = TTLCache[str, list[str]](maxsize=1, ttl=30)
 
 
 async def get_build_args() -> list[str]:
-    """Get extra build arguments for builders and cache.
+    """Extra build arguments: the cache as a substituter, while it answers.
 
-    Result is cached for 30 seconds to avoid redundant k8s API queries
-    and cache connectivity checks during burst volume creation.
+    Result is cached for 30 seconds to avoid redundant cache connectivity
+    checks during burst volume creation.
     """
     # Check cache first
     cache_key = "build_args"
@@ -36,13 +34,6 @@ async def get_build_args() -> list[str]:
         return _build_args_cache[cache_key]
 
     extra_args = []
-
-    # Discover builder pods when builders are enabled
-    # CSI pods run with --max-jobs 0 to delegate all builds to builder pods
-    builder_uris = await get_builder_uris()
-    if builder_uris:
-        extra_args.extend(build_builder_args(builder_uris))
-        logger.info("using_builders", count=len(builder_uris))
 
     # Add cache as substituter if available
     if await check_cache_connectivity():

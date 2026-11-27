@@ -63,12 +63,7 @@ CSI_GCROOTS = NIX_ROOT / "nix/var/nix/gcroots/nix-csi"
 # Set via NIX_BUILD_TIMEOUT environment variable
 NIX_BUILD_TIMEOUT: float = _parse_float_env("NIX_BUILD_TIMEOUT", "300")
 
-# Builder configuration
-# Set via environment variables from kubenix when builders are enabled
-BUILDERS_ENABLED = os.environ.get("BUILDERS_ENABLED", "false").lower() == "true"
-
 NAMESPACE = os.environ.get("KUBE_NAMESPACE", "nixkube")
-BUILDERS_SERVICE = "nixkube-builders"
 
 # Simple string check is fine - value controlled by easykubenix (always "true" or "false")
 PYNIXD_ENABLED = os.environ.get("PYNIXD_ENABLED", "false") == "true"

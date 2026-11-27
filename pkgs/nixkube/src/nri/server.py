@@ -144,7 +144,7 @@ from .zmq import ZeroMQServer
 # After spawning the OCI hook, build task:
 #
 # 1. Realizes store paths
-#    - Calls nix build with extra args (builders, cache endpoints)
+#    - Calls nix build with extra args (cache endpoints)
 #    - Outputs at /nix/var/nixkube/containers/{container_id}/nix
 #
 # 2. Prepare the volume — prepare_volume(bind_farm=NRI_BIND_FARM)

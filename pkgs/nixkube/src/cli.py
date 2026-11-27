@@ -13,7 +13,6 @@ from . import metrics, tracing
 from .build_pods import install_profiles
 from .cache import cache_probe_loop
 from .constants import (
-    BUILDERS_ENABLED,
     ENABLE_COMPAT_DRIVER,
     HOST_MOUNT_PATH,
     HOST_STORE,
@@ -130,7 +129,6 @@ def log_effective_app_config() -> None:
         "Effective application configuration:\n"
         f"  {NIX_BUILD_TIMEOUT=}\n"
         f"  {PYNIXD_ENABLED=}\n"
-        f"  {BUILDERS_ENABLED=}\n"
         f"  {VERIFY_STORE_PATHS=}\n"
         f"  {HOST_MOUNT_PATH=}\n"
         f"  {NRI_PLUGIN_NAME=}\n"
