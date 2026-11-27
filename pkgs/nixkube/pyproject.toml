@@ -12,6 +12,9 @@ requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
   "anyio",
+  # Nix's own client, in process: the node's store calls go through it
+  # instead of the `nix` CLI. nixidae/nixidae#1661.
+  "huggorm",
   "kr8s",
   "csi",
   "nri",

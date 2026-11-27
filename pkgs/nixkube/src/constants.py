@@ -174,14 +174,6 @@ NIX_PATH_INFO_TIMEOUT: float = _parse_float_env("NIX_PATH_INFO_TIMEOUT", "120")
 # again, and it runs inside NodePublishVolume.
 NIX_DATABASE_TIMEOUT: float = _parse_float_env("NIX_DATABASE_TIMEOUT", "300")
 
-# How long `nix eval builtins.currentSystem` may take.
-#
-# **Short, because this one is synchronous.** It blocks the event loop rather
-# than one task, so a nix that never returns takes the CSI server, the NRI
-# plugin and the heartbeat with it. `--store dummy://` keeps it off the real
-# store, and the result is cached for the life of the process.
-NIX_SYSTEM_TIMEOUT: float = _parse_float_env("NIX_SYSTEM_TIMEOUT", "30")
-
 # CSI socket path for gRPC server
 CSI_SOCKET_PATH = os.environ.get("CSI_SOCKET_PATH", "/csi/csi.sock")
 

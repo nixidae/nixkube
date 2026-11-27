@@ -153,12 +153,6 @@ class BuildError(CSIError):
     reason = "Build"
 
 
-class SystemDetectionError(CSIError):
-    """Error detecting system type."""
-
-    reason = "SystemDetection"
-
-
 class CommandTimeoutError(SubprocessError):
     """Error when a subprocess command times out.
 

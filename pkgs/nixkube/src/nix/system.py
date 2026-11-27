@@ -1,47 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
-import subprocess
+from __future__ import annotations
+
 from functools import cache
 
-from ..constants import NIX_SYSTEM_TIMEOUT
-from ..errors import SystemDetectionError
+import huggorm
 
 
 @cache
 def get_current_system() -> str:
-    """Get system string evaluated by nix (cached after first call).
+    """The system this node's Nix builds for: `builtins.currentSystem`.
 
-    Synchronous, and therefore deadlined harder than the async calls around
-    it. This blocks the event loop rather than one task, so a `nix eval` that
-    never returns takes the CSI server, the NRI plugin and the heartbeat with
-    it. `--store dummy://` keeps it off the real store, and the cache means
-    only the first call pays anything at all.
+    Nix's own setting, read in process through huggorm. It opens no store and
+    runs no evaluation, so it cannot block on either.
     """
-    try:
-        result = subprocess.run(
-            [
-                "nix",
-                "eval",
-                "--raw",
-                "--impure",
-                "--store",
-                "dummy://",
-                "--expr",
-                "builtins.currentSystem",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=NIX_SYSTEM_TIMEOUT,
-        )
-        return result.stdout
-    except subprocess.TimeoutExpired as e:
-        raise SystemDetectionError(
-            f"System detection timeout after {NIX_SYSTEM_TIMEOUT}s",
-            logs=str(e),
-        ) from e
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        raise SystemDetectionError(
-            "Failed to detect system type",
-            logs=str(e),
-        ) from e
+    return huggorm.current_system()

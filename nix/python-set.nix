@@ -37,6 +37,14 @@
 let
   inherit ((import sources.nixvenv { inherit pkgs sources; }).lib) ps;
 
+  # huggorm's packages for this set's interpreter: the bindings are compiled
+  # against `python`, so they resolve only in a set over the same one.
+  huggorm =
+    (import sources.huggorm {
+      inherit pkgs sources;
+      python3 = python;
+    }).packages.huggorm;
+
   protoGenerated = pkgs.callPackage ../pkgs/proto-generated.nix { python3 = python; };
 
   # Keyed by distribution name, which is what `pyproject.toml` declares and
@@ -99,12 +107,13 @@ in
 ps.mkPythonSet {
   inherit python;
 
-  # `kr8s` and `pynixd` are nixpkgs Python packages, but this repository's own
-  # rather than the tree's, so they are lifted in as roots instead of being
-  # looked up by name.
+  # `kr8s`, `pynixd` and `huggorm` are nixpkgs Python packages, but nixidae's
+  # own rather than the tree's, so they are lifted in as roots instead of being
+  # looked up by name. huggorm brings huggorm-bindings and huggorm-generated.
   nixpkgsRoots = [
     pkgs.kr8s
     pkgs.pynixd
+    huggorm
   ]
   ++ ps.nixpkgsRootsFor {
     inherit python;
@@ -114,6 +123,7 @@ ps.mkPythonSet {
     exclude = lib.attrNames projects ++ [
       "kr8s"
       "pynixd"
+      "huggorm"
     ];
   };
 
