@@ -8,6 +8,7 @@ getting-started
 store-presentation
 preview-rendering
 build-pods
+node-store
 compatibility
 options
 ```
