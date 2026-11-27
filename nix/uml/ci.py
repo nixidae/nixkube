@@ -16,13 +16,14 @@ what it deploys comes from ghcr.io:
     nix run --file . internal.ciTest.driver -- --out ./o
 """
 
+import json
 import os
 import subprocess
 import tempfile
 
 import kr8s.asyncio
 from kr8s.asyncio.objects import DaemonSet, Event, Job, Node, PersistentVolumeClaim, Pod
-from nixkube_uml import NAMESPACE, cluster, delete, listed, pod_ready, pod_state, pod_summary, raw, rolled_out
+from nixkube_uml import NAMESPACE, cluster, delete, listed, logs, pod_ready, pod_state, pod_summary, raw, rolled_out
 from vivarium_k8s import KUBE_DNS, KUBE_PROXY, bring_up, until
 from vivarium_runner import Machine, Machines
 
@@ -118,6 +119,71 @@ async def check_store_split(api: kr8s.asyncio.Api, cp: Machine, nixos: bool) -> 
         own = "/nix/var/nix-csi/daemon-socket/socket"
         await cp.succeed(f"test -S {own} && {nix} store info --store unix://{own}")
         print(f"[test] the guest's daemon substitutes from nowhere; nixkube's serves {own}")
+
+
+def log_events(text: str) -> list[dict[str, object]]:
+    """The structured events in a container's log. nixkube and pynixd both
+    write one JSON object per line; anything else is not an event."""
+    events = []
+    for line in text.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def daemon_switches(state: dict[str, object]) -> dict[str, object]:
+    """The local store's daemon experiments in a `pynixd state` report:
+    `daemon` and `pynixd_writes`, each only when the store turned it on."""
+    experiments = state.get("experiments")
+    assert isinstance(experiments, list), f"pynixd state has no experiments section: {state}"
+    return {
+        str(e["switch"]): e["value"]
+        for e in experiments
+        if isinstance(e, dict) and e.get("store") == "local" and e.get("switch") in ("daemon", "pynixd_writes")
+    }
+
+
+async def check_store_server(api: kr8s.asyncio.Api, server: str) -> None:
+    """The server `nixkube.node.storeServer` names is the one that answers.
+
+    Two witnesses. nixkube's supervisor logs the server it started. pynixd
+    itself answers its own operation (`PynixdState`) on the node's socket,
+    which a Nix daemon refuses, and says whether a Nix daemon runs under it.
+    """
+    pods = await listed(Pod, api, namespace=NAMESPACE, label_selector={"app.kubernetes.io/component": "node"})
+    serving = [p for p in pods if pod_state(raw(p)) == "Running"]
+    assert len(serving) == 1, f"one node pod should serve the node: {pod_summary(pods)}"
+    pod = serving[0]
+    events = log_events(await logs(pod, container="nix-node"))
+    started = {str(e.get("server")) for e in events if e.get("event") == "store_server_starting"}
+    assert started == {server}, f"{pod.name} started {sorted(started) or 'no store server'}, not {server}"
+
+    if server != "nix-daemon":
+        env = {
+            e["name"]: e.get("value")
+            for c in raw(pod)["spec"]["containers"]
+            if c["name"] == "nix-node"
+            for e in c.get("env", [])
+        }
+        socket = env["PYNIXD_UNIX_PATH"]
+        done = await pod.exec(
+            ["pynixd", "state", "--section", "stores", "--section", "experiments", "--json", "--socket", socket],
+            container="nix-node",
+        )
+        state = json.loads(done.stdout.decode())
+        stores = state.get("stores")
+        local = stores.get("local") if isinstance(stores, dict) else None
+        assert isinstance(local, dict) and local.get("healthy"), (
+            f"pynixd on {socket} has no healthy local store: {stores}"
+        )
+        want = {"daemon": False, "pynixd_writes": True} if server == "pynixd-daemonless" else {}
+        switches = daemon_switches(state)
+        assert switches == want, f"pynixd on {socket} runs its local store with {switches}, not {want}"
+    print(f"[test] {server} serves the node's store, in {pod.name}")
 
 
 def node_line(node: Node) -> str:
@@ -220,6 +286,8 @@ async def test(vms: Machines) -> None:
         mounts = await listed(Event, api, namespace=NAMESPACE, field_selector={"reason": "NixVolumeMount"})
         assert mounts, "the jobs completed and the CSI driver reported no NixVolumeMount"
         print(f"[test] the CSI driver reported {len(mounts)} NixVolumeMount events")
+
+        await check_store_server(api, settings["storeServer"])
 
         # And the ones that must not finish -- see ci/test-jobs.nix.
         #

@@ -70,6 +70,23 @@ let
         })
       ];
     };
+
+  # `ciTest` on each of the node's store servers, one job each, named from
+  # ../../nix/store-server-tests.nix so a server listed there is a job here.
+  storeServerJobs = lib.mapAttrs' (
+    name: _:
+    lib.nameValuePair "test-qemu-ci-${name}" (testQemu {
+      attr = "ciStoreServer.${name}";
+      what = "the node's store on ${name}";
+    })
+  ) (import ../../nix/store-server-tests.nix);
+
+  # What a commit must pass before `tested` names it and before a release.
+  clusterTests = [
+    "test-qemu-ci"
+    "test-qemu-ci-cache"
+  ]
+  ++ lib.attrNames storeServerJobs;
 in
 # `${{ github.workflow }}` in the concurrency group below is this name, as
 # nixidae renders it.
@@ -373,9 +390,8 @@ ghalib.evalWorkflow {
         "check"
         "build-manifests"
         "test-qemu"
-        "test-qemu-ci"
-        "test-qemu-ci-cache"
-      ];
+      ]
+      ++ clusterTests;
       runs-on = "ubuntu-latest";
       "if" = "github.ref == 'refs/heads/main'";
       timeout-minutes = 30;
@@ -410,9 +426,8 @@ ghalib.evalWorkflow {
       needs = [
         "check"
         "build-manifests"
-        "test-qemu-ci"
-        "test-qemu-ci-cache"
-      ];
+      ]
+      ++ clusterTests;
       runs-on = "ubuntu-latest";
       "if" = "startsWith(github.ref, 'refs/tags/nixkube/v')";
       timeout-minutes = 30;
@@ -474,5 +489,6 @@ ghalib.evalWorkflow {
         }
       ];
     };
-  };
+  }
+  // storeServerJobs;
 }

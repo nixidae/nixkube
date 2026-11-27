@@ -59,6 +59,7 @@ let
   # than passed in, so the two cannot disagree.
   pynixd = instance.config.nixkube.pynixd.enable;
   hostStore = instance.config.nixkube.hostStore.enable;
+  storeServer = instance.config.nixkube.node.storeServer;
 in
 vivarium.mkTest {
   inherit name;
@@ -216,6 +217,7 @@ vivarium.mkTest {
       rejectedJobs
       pynixd
       hostStore
+      storeServer
       foreignHost
       ;
   };
