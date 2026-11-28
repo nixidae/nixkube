@@ -115,7 +115,9 @@ server reads it: Nix's daemon directly, pynixd through `nix config show`.
 No `trusted=1`: the server's configuration serves every client, untrusted
 ones too, so a path from pynixd needs a signature. The cluster's signing key
 is generated at runtime (`nix-key`), so the supervisor starts the server with
-`NIX_CONFIG` trusting its public half. The SSH config gives `Host pynixd` a 5 s `ConnectTimeout`: an
+`NIX_CONFIG` trusting its public half. A path pynixd substitutes keeps only
+its cache's signature, so the node also trusts every key pynixd's own
+nix.conf trusts (`kubenix/config.nix`); pynixd re-signs nothing. The SSH config gives `Host pynixd` a 5 s `ConnectTimeout`: an
 address that drops the SYN cost 135 s per connect without one. The node
 never passed `--builders`; it builds nothing itself.
 

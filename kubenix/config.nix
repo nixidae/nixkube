@@ -55,13 +55,27 @@ in
       # Not `trusted=1`: the server serves untrusted clients too, so pynixd's
       # paths need a signature; the server trusts the cluster's key at start
       # (`store_server.server_environment`).
-      node.nixConfig.settings = lib.mkMerge [
-        cfg.nixConfig.settings
-        { store = lib.mkDefault "daemon"; }
-        (lib.mkIf cfg.pynixd.enable {
-          extra-substituters = [ "ssh-ng://nix@pynixd?priority=20" ];
-        })
-      ];
+      #
+      # A path pynixd substitutes keeps only its cache's signature, so the node
+      # trusts every key pynixd does. sg1, 2026-11-28: pynixd trusts flox for
+      # the GX10s' GPU stack, and the nodes did not.
+      node.nixConfig.settings =
+        let
+          pynixd = cfg.pynixd.controller.nixConfig.settings;
+          pynixdKeys = lib.subtractLists (cfg.nixConfig.settings.trusted-public-keys or [ ]) (
+            lib.unique ((pynixd.trusted-public-keys or [ ]) ++ (pynixd.extra-trusted-public-keys or [ ]))
+          );
+        in
+        lib.mkMerge [
+          cfg.nixConfig.settings
+          { store = lib.mkDefault "daemon"; }
+          (lib.mkIf cfg.pynixd.enable {
+            extra-substituters = [ "ssh-ng://nix@pynixd?priority=20" ];
+          })
+          (lib.mkIf (cfg.pynixd.enable && pynixdKeys != [ ]) {
+            extra-trusted-public-keys = pynixdKeys;
+          })
+        ];
       pynixd.builder.nixConfig.settings = cfg.nixConfig.settings;
       pynixd.controller.nixConfig.settings = cfg.nixConfig.settings;
     };
