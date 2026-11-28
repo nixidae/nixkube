@@ -37,6 +37,7 @@ from nixkube_uml import (
     raw,
     rolled_out,
 )
+from src.event_reason import EventReason
 from vivarium_k8s import KUBE_DNS, KUBE_PROXY, bring_up, until
 from vivarium_runner import Machine, Machines
 
@@ -199,12 +200,16 @@ async def check_store_server(api: kr8s.asyncio.Api, server: str) -> None:
     print(f"[test] {server} serves the node's store, in {pod.name}")
 
 
-async def check_store_outage(api: kr8s.asyncio.Api, cp: Machine, template: Manifest) -> None:
+async def check_store_outage(
+    api: kr8s.asyncio.Api, cp: Machine, template: Manifest, nri_template: Manifest | None
+) -> None:
     """A store server that does not answer costs the calls made meanwhile, not every call after.
 
     The socket moves away while its server runs, so each connect fails for
     as long as the test wants. One huggorm store per process refused every
     call after the first failure ("previously failed", nixidae/nixidae#1670).
+    An NRI container whose build failed in the outage starts once the store
+    is back: sg1's stayed stuck until deleted (nixidae/nixidae#1673).
     """
     pods = await listed(Pod, api, namespace=NAMESPACE, label_selector={"app.kubernetes.io/component": "node"})
     [pod] = [p for p in pods if pod_state(raw(p)) == "Running"]
@@ -220,11 +225,39 @@ async def check_store_outage(api: kr8s.asyncio.Api, cp: Machine, template: Manif
         return (await pod.exec(["sh", "-c", command], container="nix-node")).stdout.decode()
 
     readyz = f"curl -s http://127.0.0.1:{env['READINESS_PORT']}/readyz"
+    nri_job = (
+        None
+        if nri_template is None
+        else Job(
+            {
+                "apiVersion": "batch/v1",
+                "kind": "Job",
+                "metadata": {"name": "nri-in-outage", "namespace": NAMESPACE},
+                # The failed build ends its pod at once, and the Job's next pod builds again.
+                "spec": {"backoffLimit": 3, "template": again(nri_template)},
+            },
+            api=api,
+        )
+    )
     await sh(f"mv {socket} {socket}.away")
     try:
         for _ in range(2):
             body = await sh(readyz)
             assert "store: " in body and "cannot connect" in body, f"with the socket away, /readyz said {body!r}"
+        if nri_job is not None:
+            await nri_job.create()
+
+            async def build_failed() -> tuple[bool, str]:
+                events = await listed(Event, api, namespace=NAMESPACE)
+                failed = [
+                    e
+                    for e in events
+                    if raw(e).get("reason") == EventReason.BUILD_FAILED
+                    and raw(e)["involvedObject"].get("name", "").startswith("nri-in-outage-")
+                ]
+                return bool(failed), await job_table(api)
+
+            await until("the NRI build in the outage to fail", build_failed, 120, cp)
     finally:
         await sh(f"mv {socket}.away {socket}")
 
@@ -250,6 +283,13 @@ async def check_store_outage(api: kr8s.asyncio.Api, cp: Machine, template: Manif
 
     await until("a publish after the outage", complete, 300, cp)
     await delete(job, cp)
+    if nri_job is not None:
+
+        async def nri_complete() -> tuple[bool, str]:
+            return "nri-in-outage" in await succeeded(api), await job_table(api)
+
+        await until("the NRI container from the outage to start", nri_complete, 300, cp)
+        await delete(nri_job, cp)
     print(f"[test] with {socket} away, /readyz named the store; back, it answered, and a publish mounted")
 
 
@@ -684,9 +724,10 @@ async def test(vms: Machines) -> None:
 
         # The driver reports each publish on the pod it served. A job can
         # complete with its store from somewhere else, and then there is
-        # no such event. `report_event` prefixes every reason with `Nix`,
-        # so the code's "VolumeMount" is NixVolumeMount on the cluster.
-        mounts = await listed(Event, api, namespace=NAMESPACE, field_selector={"reason": "NixVolumeMount"})
+        # no such event.
+        mounts = await listed(
+            Event, api, namespace=NAMESPACE, field_selector={"reason": EventReason.VOLUME_MOUNT.value}
+        )
         assert mounts, "the jobs completed and the CSI driver reported no NixVolumeMount"
         print(f"[test] the CSI driver reported {len(mounts)} NixVolumeMount events")
 
@@ -716,6 +757,11 @@ async def test(vms: Machines) -> None:
             for name in (COEXIST_JOBS if coexist else ())
         }
         outage = raw(await Job.get("path-hello", namespace=NAMESPACE, api=api))["spec"]["template"]
+        nri_outage = (
+            raw(await Job.get("nri-hello-ro", namespace=NAMESPACE, api=api))["spec"]["template"]
+            if "nri-hello-ro" in settings["deployedJobs"]
+            else None
+        )
 
         for name in settings["deployedJobs"]:
             await delete(await Job.get(name, namespace=NAMESPACE, api=api), cp)
@@ -728,7 +774,7 @@ async def test(vms: Machines) -> None:
         await until("the jobs' pods to go", pods_gone, 120, cp)
         print("[test] the jobs are gone and their pods with them")
 
-        await check_store_outage(api, cp, outage)
+        await check_store_outage(api, cp, outage, nri_outage)
 
         if coexist:
             await check_coexistence(api, cp, templates)

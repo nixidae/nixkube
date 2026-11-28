@@ -102,8 +102,10 @@ vivarium.mkTest {
   # from the host, through `<out>/access/kubeconfig`. The fork: it honours
   # that file's `tls-server-name`, which names the API server behind the
   # host's forward.
+  # nixkube's own package, for `src.event_reason`: a check names an event as the code does.
   pythonPath = [
     ./helpers
+    ../../pkgs/nixkube
   ]
   ++ map (module: "${module}/${pkgs.python3.sitePackages}") (
     pkgs.python3.pkgs.requiredPythonModules [
