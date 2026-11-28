@@ -1016,6 +1016,11 @@ let
     # Asserted against the rendered container, not the option, and against the
     # sidecar that serves the port. A probe pointing at a port nothing serves
     # would pass an option-level check and fail on a cluster.
+    #
+    # Readiness is nixkube's own `/readyz` (`readiness.py`), liveness the
+    # sidecar's `/healthz`. The sidecar answers 500 for a not-ready Probe on
+    # its only endpoint, so a node that is behind (nixidae/nixidae#1220) would
+    # restart if readiness and liveness shared it.
     nodeDriverReadiness =
       let
         instance = kubenixInstance { };
@@ -1023,12 +1028,23 @@ let
         containerNamed = name: lib.head (lib.filter (c: c.name == name) podSpec.containers);
         node = containerNamed "nix-node";
         sidecar = containerNamed "livenessprobe-nixkube";
-        port = node.readinessProbe.httpGet.port;
+        port = node.livenessProbe.httpGet.port;
+        readinessPort = node.readinessProbe.httpGet.port;
+        env = lib.listToAttrs (map (e: lib.nameValuePair e.name (e.value or null)) node.env);
+        initEnv = lib.listToAttrs (
+          map (e: lib.nameValuePair e.name (e.value or null))
+            (lib.head (lib.filter (c: c.name == "appstarter-init") podSpec.initContainers)).env
+        );
       in
-      assert node.readinessProbe.httpGet.path == "/healthz";
-      assert node.livenessProbe.httpGet.port == port;
-      # Something has to answer on that port.
+      assert node.livenessProbe.httpGet.path == "/healthz";
+      assert node.readinessProbe.httpGet.path == "/readyz";
+      assert readinessPort != port;
+      # Something has to answer on each port: the sidecar, and nixkube.
       assert lib.elem "--health-port=${toString port}" sidecar.args;
+      assert env.READINESS_PORT == toString readinessPort;
+      assert lib.any (p: p.containerPort == readinessPort) node.ports;
+      # nixkube compares against what appstarter-init fetched.
+      assert env.APPSTARTER_WANTED == initEnv.APPSTARTER_WANTED;
       # NotReady has to be reported before the restart, or it says nothing new.
       assert
         node.readinessProbe.failureThreshold * node.readinessProbe.periodSeconds

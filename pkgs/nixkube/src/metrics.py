@@ -526,9 +526,9 @@ class AppstarterCollector:
     `appstarter init` fetches the environment the deployment names, and when
     that fetch fails it seeds the store from the copy baked into the image
     instead. That is deliberate -- a node that starts behind beats a node that
-    does not start -- and it is invisible from outside: the pod is Running and
-    every probe passes either way. The two store paths in `state.json` are the
-    only thing that says which happened.
+    does not start. The pod is Running either way. nix-node's readinessProbe
+    (`readiness.py`) fails while it is behind; this series says the same for
+    every role, and the two store paths in `state.json` say which happened.
 
     **Read from the file and on the scrape, not from the environment at
     import.** `appstarter run` puts both paths in the environment of the

@@ -40,6 +40,10 @@ the substituter, and nothing inside the process knows whether a build is
 running. So `run` states the skew, and something outside decides when to take
 the new version.
 
+A node that is behind still does not report Ready: nixkube's `/readyz` fails
+while its nodeEnv differs from `APPSTARTER_WANTED`, so a DaemonSet rolling
+update stops at the first such node (nixidae/nixidae#1220). It keeps serving.
+
 ## The environment it reads
 
 | variable | mode | meaning |

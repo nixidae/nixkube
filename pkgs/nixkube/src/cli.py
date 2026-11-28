@@ -9,10 +9,11 @@ from typing import TypedDict
 import anyio
 import structlog
 
-from . import metrics, tracing
+from . import metrics, readiness, tracing
 from .build_pods import install_profiles
 from .cache import cache_probe_loop
 from .constants import (
+    APPSTARTER_WANTED,
     ENABLE_COMPAT_DRIVER,
     HOST_MOUNT_PATH,
     HOST_STORE,
@@ -26,11 +27,12 @@ from .constants import (
     NRI_PLUGIN_IDX,
     NRI_PLUGIN_NAME,
     PYNIXD_ENABLED,
+    READINESS_PORT,
     VERIFY_STORE_PATHS,
 )
 from .csi.server import csi_serve
 from .gc_task import gc_loop
-from .nix import open_node_store
+from .nix import get_current_system, open_node_store
 from .nri.server import nri_serve
 from .retire import retire_loop
 from .startup import run_setup
@@ -239,6 +241,12 @@ async def async_main() -> None:
         if "retire" in loops:
             tg.start_soon(retire_loop, name="retire")
         tg.start_soon(cache_probe_loop, name="cache-probe")
+        system = get_current_system()
+        node_env = readiness.read_node_env(APPSTARTER_WANTED, system)
+        readiness.log_node_env(node_env, system)
+        # Not supervised: it returns only when it cannot bind, and a restart
+        # loop around that would end the process the driver runs in.
+        tg.start_soon(readiness.serve, node_env, READINESS_PORT, readiness.CSI_SOCKET, name="readiness")
         # Not supervised. It has nothing to crash on, and a restart loop
         # around a sampler would report on itself.
         tg.start_soon(metrics.LoopLagMonitor().run, name="loop-lag")

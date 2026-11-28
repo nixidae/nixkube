@@ -92,6 +92,14 @@ METRICS_ENABLED = os.environ.get("METRICS_ENABLED", "true") == "true"
 METRICS_PORT = int(os.environ.get("METRICS_PORT", "9099"))
 METRICS_ADDR = os.environ.get("METRICS_ADDR", "::")
 
+# nix-node's readinessProbe reads `/readyz` here (`readiness.py`). Its own
+# port, because the metrics server can be switched off and readiness cannot.
+READINESS_PORT = _parse_int_env("READINESS_PORT", "9810")
+
+# The nodeEnv the deployment asks for: one store path, or JSON from system to
+# store path. The same value `appstarter init` fetched from.
+APPSTARTER_WANTED = os.environ.get("APPSTARTER_WANTED", "")
+
 # Verify store paths before mounting to detect corruption early
 # Set via VERIFY_STORE_PATHS environment variable
 VERIFY_STORE_PATHS = os.environ.get("VERIFY_STORE_PATHS", "false") == "true"

@@ -159,6 +159,14 @@ in
           storeLabel = lib.optionalAttrs (store != null) { "nixkube/store" = store; };
           labels' = labels // storeLabel;
           matchLabels' = matchLabels // storeLabel;
+          # One environment per enabled architecture, because one DaemonSet
+          # runs on all of them. Each reader picks its own system.
+          wantedNodeEnv = builtins.toJSON (
+            lib.mapAttrs (
+              system: sysPkgs: "${packageRef "nixkube-node-env-${system}" sysPkgs.nixkube-node-env}"
+            ) csiPkgs
+          );
+          readinessPort = 9810;
         in
         {
           metadata.labels = labels';
@@ -234,14 +242,7 @@ in
                           "init"
                         ];
                         env = lib.mkNamedList {
-                          # One environment per enabled architecture, because
-                          # one DaemonSet runs on all of them. `appstarter`
-                          # picks its own.
-                          APPSTARTER_WANTED.value = builtins.toJSON (
-                            lib.mapAttrs (
-                              system: sysPkgs: "${packageRef "nixkube-node-env-${system}" sysPkgs.nixkube-node-env}"
-                            ) csiPkgs
-                          );
+                          APPSTARTER_WANTED.value = wantedNodeEnv;
                           # Which of the image's fallbacks to take when the
                           # fetch fails. The image carries one per role and
                           # names them itself -- a fallback named here comes out
@@ -289,8 +290,13 @@ in
                       # The port `cli.py` serves `/metrics` on. Declared so
                       # that `metrics.podMonitor` can select it by name, and
                       # named so the two move together. Issue #40.
-                      ports = lib.mkIf cfg.metrics.enable (
-                        lib.mkNamedList {
+                      # `readiness` is the readinessProbe's, served by
+                      # `readiness.py` whether metrics are on or not.
+                      ports = lib.mkNamedList (
+                        {
+                          readiness.containerPort = readinessPort;
+                        }
+                        // lib.optionalAttrs cfg.metrics.enable {
                           metrics.containerPort = cfg.metrics.port;
                         }
                       );
@@ -346,20 +352,34 @@ in
                         not serve, and a builder Pod on it sat in Pending with
                         `connect: connection refused` on the socket.
 
-                        Same target as the livenessProbe, faster to fire:
-                        2 x 10s reports NotReady about 30 seconds before the
-                        5 x 10s restart. So the restart, when it comes, has a
-                        reason visible ahead of it.
+                        `/readyz` asks the driver's Probe over the same socket
+                        as the livenessProbe, faster to fire: 2 x 10s reports
+                        NotReady about 30 seconds before the 5 x 10s restart.
+                        So the restart, when it comes, has a reason visible
+                        ahead of it.
+
+                        It is also NotReady while this node runs another
+                        nodeEnv than APPSTARTER_WANTED names, because
+                        appstarter-init seeded the image's copy. The node
+                        keeps serving with it (issues #27, #55), and the
+                        RollingUpdate stops at it instead of replacing every
+                        node with one that is behind. nixidae/nixidae#1220.
+
+                        Not the sidecar's /healthz: the livenessprobe sidecar
+                        answers 500 for a not-ready Probe on its only
+                        endpoint, which the livenessProbe reads too. A node
+                        that is behind would restart for as long as its cache
+                        is down. `readiness.py` has the detail.
 
                         No Service selects these pods -- both Services select
                         component=pynixd, and this is component=node -- so
                         NotReady removes nothing from any endpoint list. It
-                        only makes the report true.
+                        makes the report true, and holds the rollout.
                       */
                       readinessProbe = {
                         httpGet = {
-                          path = "/healthz";
-                          port = 9808;
+                          path = "/readyz";
+                          port = readinessPort;
                         };
                         initialDelaySeconds = 10;
                         periodSeconds = 10;
@@ -382,6 +402,11 @@ in
                           PYNIXD_UNIX_PATH.value = serverSocket;
                         }
                         // {
+                          # What `readiness.py` compares the running nodeEnv
+                          # with. NRI reads no env here: this container mounts
+                          # /nix itself, so CreateContainer stands down.
+                          APPSTARTER_WANTED.value = wantedNodeEnv;
+                          READINESS_PORT.value = toString readinessPort;
                           STORE_SERVER.value = cfg.node.storeServer;
                           PYNIXD_ENABLED.value = lib.boolToString cfg.pynixd.enable;
                           # Also what rolls the DaemonSet when the mode changes:
