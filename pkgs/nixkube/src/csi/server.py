@@ -47,6 +47,7 @@ from ..nix import (
     get_closure_paths,
     get_current_system,
     node_store,
+    open_node_store,
 )
 from ..nri.annotations import parse_pod_exclude
 from ..presentation import Presentation
@@ -262,16 +263,19 @@ class NodeServicer(csi_grpc.NodeBase):
             "k8s.namespace.name": context.get("csi.storage.k8s.io/pod.namespace", ""),
             "k8s.pod.uid": context.get("csi.storage.k8s.io/pod.uid", ""),
         }
+        # One store for the whole publish: the connection that fetched a path
+        # is still open when the path is rooted (`nix/node_store.py`).
         with publish_span(context, started_ns, attributes):
-            await self._publish(
-                stream,
-                request,
-                logger.bind(volume_id=request.volume_id),
-                farm=farm,
-                store_volume=store_volume,
-                runner_root=runner_root,
-                start_time=start_time,
-            )
+            async with open_node_store():
+                await self._publish(
+                    stream,
+                    request,
+                    logger.bind(volume_id=request.volume_id),
+                    farm=farm,
+                    store_volume=store_volume,
+                    runner_root=runner_root,
+                    start_time=start_time,
+                )
 
     async def _publish(
         self,

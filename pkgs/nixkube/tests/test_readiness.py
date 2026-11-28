@@ -17,7 +17,6 @@ from pathlib import Path
 
 import anyio
 import anyio.abc
-import huggorm
 import pytest
 from google.protobuf.wrappers_pb2 import BoolValue
 from grpclib.server import Server, Stream
@@ -151,22 +150,18 @@ async def driver(socket_dir: Path) -> AsyncIterator[Path]:
 
 
 @pytest.fixture
-async def store(socket_dir: Path) -> AsyncIterator[huggorm.AsyncStore]:
+def store(socket_dir: Path) -> str:
     """A store that answers: a chroot store, Nix's own code and no daemon."""
-    answering = huggorm.AsyncStore(str(socket_dir / "store"))
-    try:
-        yield answering
-    finally:
-        await answering.aclose()
+    return str(socket_dir / "store")
 
 
-async def _get(env: NodeEnv, socket: Path, store: huggorm.AsyncStore, path: str = readiness.PATH) -> tuple[int, str]:
+async def _get(env: NodeEnv, socket: Path, store: str, path: str = readiness.PATH) -> tuple[int, str]:
     """One request through a real listener, as the kubelet sends it."""
     listener = await anyio.create_tcp_listener(local_host="127.0.0.1", local_port=0)
     port = listener.extra(anyio.abc.SocketAttribute.local_port)
 
     async def serve_one(stream: anyio.abc.SocketStream) -> None:
-        await readiness.handle(stream, env=env, socket=socket, store=store)
+        await readiness.handle(stream, env=env, socket=socket, store_uri=store)
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(listener.serve, serve_one, tg)
@@ -185,10 +180,10 @@ async def _get(env: NodeEnv, socket: Path, store: huggorm.AsyncStore, path: str 
 
 
 class TestServe:
-    async def test_ready(self, driver: Path, store: huggorm.AsyncStore) -> None:
+    async def test_ready(self, driver: Path, store: str) -> None:
         assert await _get(NodeEnv(WANTED, WANTED), driver, store) == (200, "ok\n")
 
-    async def test_behind_is_not_ready_while_the_driver_answers(self, driver: Path, store: huggorm.AsyncStore) -> None:
+    async def test_behind_is_not_ready_while_the_driver_answers(self, driver: Path, store: str) -> None:
         """The case of #1220: the node serves, and must not say Ready."""
         status, body = await _get(NodeEnv(WANTED, OLDER), driver, store)
 
@@ -196,14 +191,14 @@ class TestServe:
         assert body.startswith(f"behind: this node runs {OLDER}")
         assert "driver" not in body
 
-    async def test_a_missing_socket_is_not_ready(self, socket_dir: Path, store: huggorm.AsyncStore) -> None:
+    async def test_a_missing_socket_is_not_ready(self, socket_dir: Path, store: str) -> None:
         """An unlinked socket: the driver runs, and nothing reaches it."""
         status, body = await _get(NodeEnv(WANTED, WANTED), socket_dir / "absent.sock", store)
 
         assert status == 503
         assert body.startswith("driver: ")
 
-    async def test_a_not_ready_probe_is_not_ready(self, socket_dir: Path, store: huggorm.AsyncStore) -> None:
+    async def test_a_not_ready_probe_is_not_ready(self, socket_dir: Path, store: str) -> None:
         socket = socket_dir / "csi.sock"
         async with _driver(socket, NotReadyIdentity()):
             assert await _get(NodeEnv(WANTED, WANTED), socket, store) == (503, "driver: Probe answered not ready\n")
@@ -211,17 +206,23 @@ class TestServe:
     async def test_a_store_server_that_does_not_answer_is_not_ready(self, driver: Path, socket_dir: Path) -> None:
         """The node's store socket not bound yet, or its server dead: the CSI
         Probe alone answered Ready then (measured in the guest)."""
-        silent = huggorm.AsyncStore(f"unix://{socket_dir / 'no-server.sock'}")
-        try:
-            status, body = await _get(NodeEnv(WANTED, WANTED), driver, silent)
-        finally:
-            await silent.aclose()
+        silent = f"unix://{socket_dir / 'no-server.sock'}"
+        status, body = await _get(NodeEnv(WANTED, WANTED), driver, silent)
 
         assert status == 503
         assert body.startswith("store: ")
         assert "driver" not in body
 
-    async def test_another_path_is_not_found(self, driver: Path, store: huggorm.AsyncStore) -> None:
+    async def test_a_failed_probe_does_not_fail_the_next(self, driver: Path, socket_dir: Path) -> None:
+        """Each probe dials again. One shared store answered "previously
+        failed" for good after one probe ran before the server was up."""
+        silent = f"unix://{socket_dir / 'no-server.sock'}"
+        for _ in range(2):
+            _, body = await _get(NodeEnv(WANTED, WANTED), driver, silent)
+            assert "cannot connect" in body
+            assert "previously failed" not in body
+
+    async def test_another_path_is_not_found(self, driver: Path, store: str) -> None:
         status, _ = await _get(NodeEnv(WANTED, WANTED), driver, store, "/healthz")
 
         assert status == 404

@@ -48,7 +48,7 @@ from ..metrics import (
     NRI_CONTAINERS_SEEN,
     NRI_STATE_CHANGES,
 )
-from ..nix import fetch_packages, get_build_args, get_current_system
+from ..nix import fetch_packages, get_build_args, get_current_system, open_node_store
 from ..presentation import Presentation
 from ..supervision import detach
 from ..volume import prepare_volume
@@ -636,10 +636,11 @@ class NriPlugin(NriPluginBase):
                 pump.start_soon(self._pump_build_progress, container_id, vm)
                 log.debug("progress_pump_started")
                 try:
-                    if vm:
-                        await self._build_for_vm(log, container_id, store_paths, store_mounts, nix_rw)
-                    else:
-                        await self._build_and_mount(log, container_id, store_paths, store_mounts, nix_rw)
+                    async with open_node_store():
+                        if vm:
+                            await self._build_for_vm(log, container_id, store_paths, store_mounts, nix_rw)
+                        else:
+                            await self._build_and_mount(log, container_id, store_paths, store_mounts, nix_rw)
                 finally:
                     pump.cancel_scope.cancel()
 

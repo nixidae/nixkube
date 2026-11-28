@@ -37,6 +37,7 @@ from grpclib.exceptions import GRPCError, ProtocolError, StreamTerminatedError
 from csi import csi_grpc, csi_pb2
 
 from .constants import NIX_ROOT
+from .nix.node_store import node_store_uri, open_node_store
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -198,7 +199,14 @@ async def probe_store(store: AsyncStore, timeout: float = PROBE_TIMEOUT) -> str 
     return None
 
 
-async def _probes(socket: Path, store: AsyncStore) -> tuple[str | None, str | None]:
+async def _probe_fresh_store(store_uri: str) -> str | None:
+    """`probe_store` on a store of its own: a probe that fails must not
+    leave the next one a store Nix refuses ("previously failed")."""
+    async with open_node_store(store_uri) as store:
+        return await probe_store(store)
+
+
+async def _probes(socket: Path, store_uri: str) -> tuple[str | None, str | None]:
     """Both probes at once: each may take PROBE_TIMEOUT, and a request has REQUEST_TIMEOUT."""
     found: dict[str, str | None] = {}
 
@@ -207,7 +215,7 @@ async def _probes(socket: Path, store: AsyncStore) -> tuple[str | None, str | No
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(run, "driver", functools.partial(probe_driver, socket))
-        tg.start_soon(run, "store", functools.partial(probe_store, store))
+        tg.start_soon(run, "store", functools.partial(_probe_fresh_store, store_uri))
     return found["driver"], found["store"]
 
 
@@ -239,14 +247,14 @@ async def _read_head(stream: SocketStream) -> bytes:
     return head
 
 
-async def handle(stream: SocketStream, *, env: NodeEnv, socket: Path, store: AsyncStore) -> None:
+async def handle(stream: SocketStream, *, env: NodeEnv, socket: Path, store_uri: str) -> None:
     """Answer one request on `stream`, then close it."""
     async with stream:
         try:
             with anyio.fail_after(REQUEST_TIMEOUT):
                 path = request_path(await _read_head(stream))
                 if path == PATH:
-                    result = answer(env, *(await _probes(socket, store)))
+                    result = answer(env, *(await _probes(socket, store_uri)))
                 else:
                     result = Answer(404, "not found\n")
                 await stream.send(encode(result))
@@ -256,7 +264,7 @@ async def handle(stream: SocketStream, *, env: NodeEnv, socket: Path, store: Asy
             logger.debug("readiness_request_dropped", exc_info=True)
 
 
-async def serve(env: NodeEnv, port: int, store: AsyncStore, socket: Path = CSI_SOCKET) -> None:
+async def serve(env: NodeEnv, port: int, socket: Path = CSI_SOCKET, store_uri: str | None = None) -> None:
     """Serve `/readyz` on every interface until cancelled.
 
     No address: anyio then binds one dual-stack socket, or one per family on
@@ -271,4 +279,4 @@ async def serve(env: NodeEnv, port: int, store: AsyncStore, socket: Path = CSI_S
         logger.warning("readiness_server_failed", port=port, exc_info=True)
         return
     logger.info("readiness_serving", port=port, path=PATH)
-    await listener.serve(functools.partial(handle, env=env, socket=socket, store=store))
+    await listener.serve(functools.partial(handle, env=env, socket=socket, store_uri=store_uri or node_store_uri()))

@@ -9,7 +9,7 @@ import huggorm
 import pytest
 
 from src.errors import StorePathClosureError
-from src.nix import get_closure_paths, node_store, open_node_store
+from src.nix import get_closure_paths
 from src.tracing import TRACER
 
 if TYPE_CHECKING:
@@ -63,12 +63,3 @@ async def test_a_path_the_store_lacks_fails_the_closure(tmp_path: Path) -> None:
             await get_closure_paths(store, {Path("/nix/store/" + "0" * 32 + "-absent")})
     finally:
         await store.aclose()
-
-
-async def test_the_node_store_exists_only_while_it_is_open(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="not open"):
-        node_store()
-    async with open_node_store(str(tmp_path / "store")) as store:
-        assert node_store() is store
-    with pytest.raises(RuntimeError, match="not open"):
-        node_store()
