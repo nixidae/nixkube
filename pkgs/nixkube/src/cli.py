@@ -231,7 +231,7 @@ async def async_main() -> None:
 
     # Opened before the server it dials: Nix's client connects per call, and
     # every caller runs after the server is up or retries.
-    async with open_node_store(), anyio.create_task_group() as tg:
+    async with open_node_store() as store, anyio.create_task_group() as tg:
         loops = store_loops(host_store=HOST_STORE)
         logger.info("store_loops", host_store=HOST_STORE, loops=sorted(loops))
         if "store-server" in loops:
@@ -246,7 +246,7 @@ async def async_main() -> None:
         readiness.log_node_env(node_env, system)
         # Not supervised: it returns only when it cannot bind, and a restart
         # loop around that would end the process the driver runs in.
-        tg.start_soon(readiness.serve, node_env, READINESS_PORT, readiness.CSI_SOCKET, name="readiness")
+        tg.start_soon(readiness.serve, node_env, READINESS_PORT, store, readiness.CSI_SOCKET, name="readiness")
         # Not supervised. It has nothing to crash on, and a restart loop
         # around a sampler would report on itself.
         tg.start_soon(metrics.LoopLagMonitor().run, name="loop-lag")

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 import anyio
+import huggorm
 import structlog
 from grpclib.client import Channel
 from grpclib.exceptions import GRPCError, ProtocolError, StreamTerminatedError
@@ -38,7 +39,10 @@ from csi import csi_grpc, csi_pb2
 from .constants import NIX_ROOT
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from anyio.abc import SocketStream
+    from huggorm import AsyncStore
 
 logger = structlog.get_logger("nixkube.readiness")
 
@@ -130,7 +134,7 @@ class Answer:
     body: str
 
 
-def answer(env: NodeEnv, driver_error: str | None) -> Answer:
+def answer(env: NodeEnv, driver_error: str | None, store_error: str | None = None) -> Answer:
     """What `/readyz` says, with every reason it is not ready in the body.
 
     The kubelet's event says only "statuscode: 503". The body is for a
@@ -141,6 +145,8 @@ def answer(env: NodeEnv, driver_error: str | None) -> Answer:
         reasons.append(f"behind: this node runs {env.running}, and the deployment asks for {env.wanted}")
     if driver_error is not None:
         reasons.append(f"driver: {driver_error}")
+    if store_error is not None:
+        reasons.append(f"store: {store_error}")
     if reasons:
         return Answer(503, "".join(f"{reason}\n" for reason in reasons))
     return Answer(200, "ok\n")
@@ -171,6 +177,40 @@ async def probe_driver(socket: Path = CSI_SOCKET, timeout: float = PROBE_TIMEOUT
     return None
 
 
+async def probe_store(store: AsyncStore, timeout: float = PROBE_TIMEOUT) -> str | None:
+    """Whether the node's store server answers: a daemon-protocol handshake.
+
+    `RemoteStore::getVersion` takes a connection to answer, so a server that
+    has not bound its socket yet, or died, fails here. The CSI Probe alone
+    reported Ready before the store socket existed (measured in the guest).
+
+    Returns `None` when the store answers, and the reason when it does not.
+    """
+    try:
+        with anyio.fail_after(timeout):
+            version = await store.get_version()
+    except TimeoutError:
+        return f"no answer within {timeout:.0f}s"
+    except huggorm.errors.NixError as error:
+        return f"{type(error).__name__}: {error}"
+    if version is None:
+        return "the store server named no Nix version"
+    return None
+
+
+async def _probes(socket: Path, store: AsyncStore) -> tuple[str | None, str | None]:
+    """Both probes at once: each may take PROBE_TIMEOUT, and a request has REQUEST_TIMEOUT."""
+    found: dict[str, str | None] = {}
+
+    async def run(key: str, probe: Callable[[], Awaitable[str | None]]) -> None:
+        found[key] = await probe()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(run, "driver", functools.partial(probe_driver, socket))
+        tg.start_soon(run, "store", functools.partial(probe_store, store))
+    return found["driver"], found["store"]
+
+
 def request_path(head: bytes) -> str | None:
     """The path of a `GET` request line, without its query, or `None`."""
     line = head.split(b"\r\n", 1)[0].decode("latin-1")
@@ -199,14 +239,16 @@ async def _read_head(stream: SocketStream) -> bytes:
     return head
 
 
-async def handle(stream: SocketStream, *, env: NodeEnv, socket: Path) -> None:
+async def handle(stream: SocketStream, *, env: NodeEnv, socket: Path, store: AsyncStore) -> None:
     """Answer one request on `stream`, then close it."""
     async with stream:
         try:
             with anyio.fail_after(REQUEST_TIMEOUT):
                 path = request_path(await _read_head(stream))
-                found = path == PATH
-                result = answer(env, await probe_driver(socket)) if found else Answer(404, "not found\n")
+                if path == PATH:
+                    result = answer(env, *(await _probes(socket, store)))
+                else:
+                    result = Answer(404, "not found\n")
                 await stream.send(encode(result))
         # A client that goes away or stalls is its own problem, and must not
         # end the listener: one request's exception would stop readiness.
@@ -214,7 +256,7 @@ async def handle(stream: SocketStream, *, env: NodeEnv, socket: Path) -> None:
             logger.debug("readiness_request_dropped", exc_info=True)
 
 
-async def serve(env: NodeEnv, port: int, socket: Path = CSI_SOCKET) -> None:
+async def serve(env: NodeEnv, port: int, store: AsyncStore, socket: Path = CSI_SOCKET) -> None:
     """Serve `/readyz` on every interface until cancelled.
 
     No address: anyio then binds one dual-stack socket, or one per family on
@@ -229,4 +271,4 @@ async def serve(env: NodeEnv, port: int, socket: Path = CSI_SOCKET) -> None:
         logger.warning("readiness_server_failed", port=port, exc_info=True)
         return
     logger.info("readiness_serving", port=port, path=PATH)
-    await listener.serve(functools.partial(handle, env=env, socket=socket))
+    await listener.serve(functools.partial(handle, env=env, socket=socket, store=store))
