@@ -2,10 +2,12 @@
 
 from pathlib import Path
 
+import anyio
 import pytest
 
 from src import store_server
 from src.constants import DEFAULT_DAEMON_SOCKET, StoreServer
+from src.errors import BuildError
 from src.store_server import (
     HostStoreRefusedError,
     PynixdVerdict,
@@ -138,3 +140,45 @@ def test_prepare_socket_makes_the_directory_and_drops_a_stale_socket(tmp_path: P
     socket.write_text("stale")
     prepare_socket(socket)
     assert not socket.exists()
+
+
+@pytest.fixture
+def no_server_yet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store_server, "_answering", None)
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("no_server_yet")
+async def test_a_build_waits_until_the_server_answers(tmp_path: Path) -> None:
+    """sg1, 2026-11-28: NRI builds ran in the 1.5 s before the store server
+    listened, and failed with "cannot connect"."""
+    with anyio.move_on_after(0.3) as early:
+        await store_server.wait_for_store_server()
+    assert early.cancelled_caught, "a build went ahead before any server answered"
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(store_server.announce_when_answering, str(tmp_path / "store"))
+        with anyio.fail_after(5):
+            await store_server.wait_for_store_server()
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("no_server_yet")
+async def test_no_answer_within_the_deadline_is_a_build_error(tmp_path: Path) -> None:
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(store_server.announce_when_answering, f"unix://{tmp_path / 'absent.sock'}")
+        with pytest.raises(BuildError, match="did not answer"):
+            await store_server.wait_for_store_server(timeout=0.3)
+        tg.cancel_scope.cancel()
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("no_server_yet")
+async def test_a_server_that_exits_is_waited_for_again(tmp_path: Path) -> None:
+    await store_server.announce_when_answering(str(tmp_path / "store"))
+    with anyio.fail_after(1):
+        await store_server.wait_for_store_server()
+    store_server.withdraw_answering()
+    with anyio.move_on_after(0.3) as waited:
+        await store_server.wait_for_store_server()
+    assert waited.cancelled_caught, "a build went ahead while no server ran"

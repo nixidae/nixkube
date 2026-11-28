@@ -29,9 +29,12 @@ import anyio
 import huggorm
 import structlog
 
-from .constants import DEFAULT_DAEMON_SOCKET, HOST_STORE, STORE_SERVER, StoreServer
+from .constants import DEFAULT_DAEMON_SOCKET, HOST_STORE, NIX_BUILD_TIMEOUT, STORE_SERVER, StoreServer
+from .errors import BuildError
+from .nix.node_store import node_store_uri, open_node_store
 from .subprocessing import iter_lines, run_captured
 from .supervision import CrashLoopTracker
+from .tracing import step
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -45,6 +48,58 @@ nix_logger = structlog.get_logger("nixkube.store_server.nix")
 
 # ANSI escape sequence pattern for stripping terminal colour codes
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# Set while the store server answers. The CSI and NRI servers take requests
+# before the server listens: on sg1 three NRI builds failed with "cannot
+# connect" in the 1.5 s after `store_server_starting`.
+_answering: anyio.Event | None = None
+
+# How often `announce_when_answering` asks. Neither server says when it
+# listens, so a handshake is the only answer; one costs a few ms.
+ANSWER_POLL_SECONDS: Final = 0.05
+
+
+def _answering_event() -> anyio.Event:
+    global _answering  # noqa: PLW0603 -- one per process, made inside the loop on first use
+    if _answering is None:
+        _answering = anyio.Event()
+    return _answering
+
+
+async def announce_when_answering(uri: str) -> None:
+    """Set the answering event once the server on `uri` completes a handshake."""
+    while True:
+        async with open_node_store(uri) as store:
+            try:
+                with anyio.fail_after(1):
+                    await store.get_version()
+            except (huggorm.errors.NixError, TimeoutError):
+                pass
+            else:
+                _answering_event().set()
+                logger.info("store_server_answering", uri=uri)
+                return
+        await anyio.sleep(ANSWER_POLL_SECONDS)
+
+
+def withdraw_answering() -> None:
+    """The server exited. A waiter that arrives now waits for the next one.
+
+    Only a set event is replaced: a waiter already waiting on an unset one
+    is woken by the next server's announcement, which sets that same event.
+    """
+    global _answering  # noqa: PLW0603 -- see `_answering_event`
+    if _answering is not None and _answering.is_set():
+        _answering = anyio.Event()
+
+
+async def wait_for_store_server(timeout: float = NIX_BUILD_TIMEOUT) -> None:
+    """Return once the node's store server answers, or raise BuildError."""
+    try:
+        with step("store server"), anyio.fail_after(timeout):
+            await _answering_event().wait()
+    except TimeoutError as e:
+        raise BuildError(f"the node's store server did not answer within {timeout}s") from e
 
 
 # Nix verbosity: 0=error, 1=warn, 2=notice, 3=info, 4=talkative, 5=chatty, 6=debug, 7=vomit
@@ -200,20 +255,24 @@ async def supervise_store_server() -> None:
     while True:
         prepare_socket(socket)
         logger.info("store_server_starting", server=STORE_SERVER.value, socket=str(socket))
-        if STORE_SERVER is StoreServer.NIX_DAEMON:
-            async with await anyio.open_process(
-                server_command(STORE_SERVER),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            ) as proc:
-                assert proc.stdout is not None and proc.stderr is not None
-                async with anyio.create_task_group() as tg:
-                    tg.start_soon(_pipe_nix_logs, proc.stdout)
-                    tg.start_soon(_pipe_nix_logs, proc.stderr)
-                rc = await proc.wait()
-        else:
-            async with await anyio.open_process(server_command(STORE_SERVER), stdout=None, stderr=None) as proc:
-                rc = await proc.wait()
+        async with anyio.create_task_group() as watch:
+            watch.start_soon(announce_when_answering, node_store_uri(socket))
+            if STORE_SERVER is StoreServer.NIX_DAEMON:
+                async with await anyio.open_process(
+                    server_command(STORE_SERVER),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                ) as proc:
+                    assert proc.stdout is not None and proc.stderr is not None
+                    async with anyio.create_task_group() as tg:
+                        tg.start_soon(_pipe_nix_logs, proc.stdout)
+                        tg.start_soon(_pipe_nix_logs, proc.stderr)
+                    rc = await proc.wait()
+            else:
+                async with await anyio.open_process(server_command(STORE_SERVER), stdout=None, stderr=None) as proc:
+                    rc = await proc.wait()
+            watch.cancel_scope.cancel()
+        withdraw_answering()
 
         logger.warning("store_server_exited", server=STORE_SERVER.value, returncode=rc)
         tracker.record_and_check()

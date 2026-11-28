@@ -52,7 +52,13 @@ def _plugin(monkeypatch: pytest.MonkeyPatch, zmq: _Zmq, build_and_mount: Callabl
     plugin = NriPlugin.__new__(NriPlugin)
     plugin.zmq_server = zmq
     monkeypatch.setattr(plugin, "_build_and_mount", build_and_mount)
+    # The build is a stand-in: no store server runs, and none needs to answer.
+    monkeypatch.setattr("src.nri.server.wait_for_store_server", _answers)
     return plugin
+
+
+async def _answers() -> None:
+    return None
 
 
 CONTAINER = "ad22c728"

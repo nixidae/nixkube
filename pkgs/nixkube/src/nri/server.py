@@ -50,6 +50,7 @@ from ..metrics import (
 )
 from ..nix import fetch_packages, get_current_system, open_node_store
 from ..presentation import Presentation
+from ..store_server import wait_for_store_server
 from ..supervision import detach
 from ..volume import prepare_volume
 from .annotations import (
@@ -636,6 +637,7 @@ class NriPlugin(NriPluginBase):
                 pump.start_soon(self._pump_build_progress, container_id, vm)
                 log.debug("progress_pump_started")
                 try:
+                    await wait_for_store_server()
                     async with open_node_store():
                         if vm:
                             await self._build_for_vm(log, container_id, store_paths, store_mounts, nix_rw)

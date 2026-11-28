@@ -50,6 +50,7 @@ from ..nix import (
 )
 from ..nri.annotations import parse_pod_exclude
 from ..presentation import Presentation
+from ..store_server import wait_for_store_server
 from ..tracing import annotate, publish_span, step
 from ..volume import (
     bind_store_disk,
@@ -265,6 +266,7 @@ class NodeServicer(csi_grpc.NodeBase):
         # One store for the whole publish: the connection that fetched a path
         # is still open when the path is rooted (`nix/node_store.py`).
         with publish_span(context, started_ns, attributes):
+            await wait_for_store_server()
             async with open_node_store():
                 await self._publish(
                     stream,
