@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -217,6 +220,52 @@ class TestFailure:
         assert exit_info.value.code == 1
         assert waited < TIMEOUT, "the hook waited out its timeout instead"
         assert reason in capsys.readouterr().err
+
+
+def test_a_build_that_failed_before_the_hook_asked_ends_the_hook() -> None:
+    """The query socket answers "failed", and the hook exits at once with it.
+
+    vivarium, 2026-11-28 (nixidae/nixidae#1673): the hook exited from inside
+    the query while the update socket was open, and `context.term()` waited
+    for that socket for ever. runc's create hung until kubelet gave up 15
+    minutes later, and the pod stayed in ContainerCreating meanwhile.
+    """
+    directory = Path(_socket_dir())
+    query, updates = directory / "q.sock", directory / "p.sock"
+    context: zmq.Context[zmq.Socket[bytes]] = zmq.Context()
+    stop = threading.Event()
+    try:
+        rep = context.socket(zmq.REP)
+        rep.bind(f"ipc://{query}")
+        context.socket(zmq.PUB).bind(f"ipc://{updates}")
+
+        def daemon() -> None:
+            rep.setsockopt(zmq.RCVTIMEO, 100)
+            while not stop.is_set():
+                with contextlib.suppress(zmq.error.Again):
+                    rep.recv()
+                    rep.send(json.dumps({"status": "failed", "reason": "cannot connect"}).encode())
+
+        thread = threading.Thread(target=daemon)
+        thread.start()
+        try:
+            hook = subprocess.run(
+                [sys.executable, "-m", "nri_wait"],
+                input=json.dumps({"id": CONTAINER, "pid": 1, "bundle": "/"}),
+                env={**os.environ, "NRI_QUERY_SOCKET": str(query), "NRI_PUB_SOCKET": str(updates), "NRI_TIMEOUT": "30"},
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        finally:
+            stop.set()
+            thread.join()
+    finally:
+        context.destroy(linger=0)
+
+    assert hook.returncode == 1, hook.stderr
+    assert "cannot connect" in hook.stderr
 
 
 class TestSilence:

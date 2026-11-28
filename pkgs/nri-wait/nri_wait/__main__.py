@@ -69,7 +69,9 @@ def main() -> None:
         # Phase 3: Wait for completion
         wait_for_completion(sub, container_id, timeout, ask)
     finally:
-        context.term()
+        # Not `term()`: it waits for every socket, and an exit from inside a query leaves `sub` open.
+        # The hook then hung until kubelet gave up (nixidae/nixidae#1673).
+        context.destroy(linger=0)
 
 
 if __name__ == "__main__":
