@@ -63,6 +63,14 @@ CSI_GCROOTS = NIX_ROOT / "nix/var/nix/gcroots/nix-csi"
 # Set via NIX_BUILD_TIMEOUT environment variable
 NIX_BUILD_TIMEOUT: float = _parse_float_env("NIX_BUILD_TIMEOUT", "300")
 
+# huggorm runs every store call on one shared thread pool, 4 threads by
+# default, and a call queued behind a full pool waits for a free thread.
+# Builds hold a thread for minutes, so they get a cap below the pool, and
+# the threads above the cap stay free for short calls such as /readyz.
+# Measured: 4 calls stuck on a silent socket left a live call unanswered.
+NODE_STORE_THREADS: int = _parse_int_env("NODE_STORE_THREADS", "32")
+NODE_STORE_BUILDS: int = _parse_int_env("NODE_STORE_BUILDS", "24")
+
 NAMESPACE = os.environ.get("KUBE_NAMESPACE", "nixkube")
 
 # Simple string check is fine - value controlled by easykubenix (always "true" or "false")

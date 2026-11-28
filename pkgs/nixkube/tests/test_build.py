@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import os
+import socket
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import anyio
 import pytest
 from prometheus_client import REGISTRY
 
 from src.errors import BuildError
-from src.nix import build_store_path, fetch_packages, open_node_store
+from src.nix import build, build_store_path, fetch_packages, open_node_store
 from src.nix.build import out_links
 from src.tracing import TRACER
 
@@ -85,6 +88,38 @@ async def test_a_path_nothing_can_substitute_fails_the_build(tmp_path: Path, sto
 
     assert _builds("packages", "error") == before + 1
     assert not (gc_root / "build").is_symlink()
+
+
+CAP = int(os.environ.get("TEST_BUILD_CAP", "2"))
+
+
+async def test_builds_leave_the_pool_threads_for_other_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Six builds hang on a server that never answers. Under the cap they
+    hold two of huggorm's four default threads, and a store call answers.
+    `TEST_BUILD_CAP=6` lifts the cap: they hold all four, and the call
+    hangs past its cancel (nixidae/nixidae#1672)."""
+    monkeypatch.setattr(build, "_slots", anyio.CapacityLimiter(CAP))
+    unaccepted = tmp_path / "unaccepted.sock"
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(unaccepted))
+    server.listen(32)
+
+    async def publish(index: int) -> None:
+        async with open_node_store(f"unix://{unaccepted}"):
+            await fetch_packages({ABSENT}, tmp_path / f"gcroots/{index}")
+
+    try:
+        async with anyio.create_task_group() as tg:
+            for index in range(6):
+                tg.start_soon(publish, index)
+            await anyio.sleep(0.5)
+            with anyio.move_on_after(3) as scope:
+                async with open_node_store(str(tmp_path / "store")) as store:
+                    await store.get_version()
+            assert not scope.cancelled_caught, "a store call waited behind the builds"
+            tg.cancel_scope.cancel()
+    finally:
+        server.close()
 
 
 async def test_the_build_is_a_span_of_the_publish(

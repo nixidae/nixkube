@@ -116,6 +116,13 @@ show`. The SSH config gives `Host pynixd` a 5 s `ConnectTimeout`: an
 address that drops the SYN cost 135 s per connect without one. The node
 never passed `--builders`; it builds nothing itself.
 
+**Threads.** huggorm runs every store call on one shared pool, and a call
+waits there for a free thread. nixkube sizes it to `NODE_STORE_THREADS`
+(32) at start and lets at most `NODE_STORE_BUILDS` (24) builds hold a
+thread, so the rest stay free for short calls such as `/readyz`. Measured
+with the default 4: four calls stuck on a silent socket left a live call
+unanswered (nixidae/nixidae#1672).
+
 ## Open questions
 
 - **The chroot database.** `--load-db` writes a chroot store's `db.sqlite`

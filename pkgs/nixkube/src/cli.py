@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TypedDict
 
 import anyio
+import huggorm
 import structlog
 
 from . import metrics, readiness, tracing
@@ -23,6 +24,8 @@ from .constants import (
     METRICS_PORT,
     NAMESPACE,
     NIX_BUILD_TIMEOUT,
+    NODE_STORE_BUILDS,
+    NODE_STORE_THREADS,
     NRI_ENABLED,
     NRI_PLUGIN_IDX,
     NRI_PLUGIN_NAME,
@@ -270,6 +273,10 @@ async def async_main() -> None:
 
 def main() -> None:
     """Entry point for the nixkube daemon."""
+    if NODE_STORE_BUILDS >= NODE_STORE_THREADS:
+        raise SystemExit(f"NODE_STORE_BUILDS={NODE_STORE_BUILDS} must leave threads of NODE_STORE_THREADS free")
+    # Before the first store call: a running pool keeps its size.
+    huggorm.set_pool_size(NODE_STORE_THREADS)
     anyio.run(async_main, backend="asyncio")
 
 

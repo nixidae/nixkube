@@ -23,7 +23,7 @@ import anyio
 import huggorm
 import structlog
 
-from ..constants import NIX_BUILD_TIMEOUT
+from ..constants import NIX_BUILD_TIMEOUT, NODE_STORE_BUILDS
 from ..errors import BuildError, CommandTimeoutError, SubprocessError
 from ..metrics import NIX_BUILD_DURATION, NIX_BUILDS
 from ..store import extract_store_name, extract_store_paths
@@ -35,6 +35,18 @@ if TYPE_CHECKING:
     from kr8s.asyncio.objects import Pod
 
 logger = structlog.get_logger("nixkube.nix")
+
+_slots: anyio.CapacityLimiter | None = None
+
+
+def _build_slots() -> anyio.CapacityLimiter:
+    """At most `NODE_STORE_BUILDS` builds hold huggorm's pool at once
+    (`constants.NODE_STORE_THREADS`). A wait here is cancellable; a call
+    queued in the pool is not (nixidae/nixidae#1672)."""
+    global _slots  # noqa: PLW0603 -- one limiter per process, made on first use inside the loop
+    if _slots is None:
+        _slots = anyio.CapacityLimiter(NODE_STORE_BUILDS)
+    return _slots
 
 
 def out_links(out_link: Path, count: int) -> list[Path]:
@@ -59,10 +71,11 @@ async def realise_store_paths(
         with step("store build"), anyio.fail_after(timeout):
             annotate("nixkube.build.kind", kind)
             annotate("nixkube.build.paths", len(rooted))
-            targets = [await store.parse_derived_path(str(path)) for path, _ in rooted]
-            await store.build_paths(targets)
-            for path, link in rooted:
-                await store.add_perm_root(await store.parse_store_path(str(path)), str(link))
+            async with _build_slots():
+                targets = [await store.parse_derived_path(str(path)) for path, _ in rooted]
+                await store.build_paths(targets)
+                for path, link in rooted:
+                    await store.add_perm_root(await store.parse_store_path(str(path)), str(link))
     except TimeoutError as e:
         NIX_BUILDS.labels(kind=kind, result="timeout").inc()
         raise BuildError(f"{error_msg}: timeout after {timeout}s") from e
