@@ -32,6 +32,7 @@ from ..constants import (
     NAMESPACE,
 )
 from ..errors import CSIError, MountError
+from ..event_reason import EventReason
 from ..events import report_event
 from ..kube_docs import Volume, pod_doc
 from ..metrics import (
@@ -116,7 +117,7 @@ async def check_csi_volume_mounts(pod: Pod) -> None:
             if farm and vm.get("subPath"):
                 await report_event(
                     pod,
-                    reason="FarmSubPath",
+                    reason=EventReason.FARM_SUB_PATH,
                     note=(
                         f"Volume '{vol_name}' in container '{container['name']}' asks for a farm and is mounted"
                         f" with subPath '{vm['subPath']}'. A subPath bind drops the farm's mounts: mount it at"
@@ -127,7 +128,7 @@ async def check_csi_volume_mounts(pod: Pod) -> None:
             elif not farm and not vm.get("subPath"):
                 await report_event(
                     pod,
-                    reason="MissingSubPath",
+                    reason=EventReason.MISSING_SUB_PATH,
                     note=(
                         f"Volume '{vol_name}' in container '{container['name']}' "
                         f"mounted at '{vm['mountPath']}' is missing subPath='nix'. "
@@ -139,7 +140,7 @@ async def check_csi_volume_mounts(pod: Pod) -> None:
         if not any(vm["mountPath"] == "/nix" for _, vm in vol_mounts):
             await report_event(
                 pod,
-                reason="MissingNixMount",
+                reason=EventReason.MISSING_NIX_MOUNT,
                 note=(
                     f"Volume '{vol_name}' has no mount at '/nix' in any container. "
                     f"Nix store paths will not be accessible."
@@ -181,7 +182,7 @@ def csi_error_handler[S, Req, Resp, T](
                 # Unexpected exception: emit event (pod will be fetched if needed)
                 await report_event(
                     None,
-                    reason="InternalError",
+                    reason=EventReason.INTERNAL_ERROR,
                     note=f"{func.__name__} failed: {type(e).__name__}",
                     logs=str(e),
                     event_type="Warning",
@@ -377,7 +378,7 @@ class NodeServicer(csi_grpc.NodeBase):
                 try:
                     await report_event(
                         pod,
-                        reason="DeprecatedDriverName",
+                        reason=EventReason.DEPRECATED_DRIVER_NAME,
                         note="Using deprecated nix.csi.store driver. Please migrate to nixkube driver.",
                         event_type="Warning",
                     )
@@ -531,7 +532,7 @@ class NodeServicer(csi_grpc.NodeBase):
                     partial(
                         report_event,
                         pod,
-                        reason="VolumeMount",
+                        reason=EventReason.VOLUME_MOUNT,
                         note=f"Mounted Nix volume with {len(package_paths)} store paths in {elapsed:.2f}s",
                         event_type="Normal",
                     ),
@@ -626,7 +627,7 @@ class NodeServicer(csi_grpc.NodeBase):
                     )
                     await report_event(
                         controller_pod,
-                        reason="VolumeCleanupFailed",
+                        reason=EventReason.VOLUME_CLEANUP_FAILED,
                         note=f"Failed to cleanup stale entries for volume {request.volume_id}",
                         event_type="Warning",
                     )

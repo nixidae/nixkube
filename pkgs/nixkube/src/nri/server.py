@@ -40,6 +40,7 @@ from ..constants import (
 )
 from ..cri import get_cri_socket, list_container_ids
 from ..csi import composefs
+from ..event_reason import EventReason
 from ..events import report_event
 from ..metrics import (
     NRI_BUILD_DURATION,
@@ -253,7 +254,7 @@ def nri_error_handler[S: _Handles, Req, Resp, T](
                 partial(
                     report_event,
                     None,
-                    reason="InternalError",
+                    reason=EventReason.INTERNAL_ERROR,
                     note=f"{func.__name__} failed: {type(e).__name__}",
                     logs=str(e),
                     event_type="Warning",
@@ -661,7 +662,7 @@ class NriPlugin(NriPluginBase):
             # Report successful build
             await report_event(
                 pod,
-                reason="BuildSucceeded",
+                reason=EventReason.BUILD_SUCCEEDED,
                 note=f"Successfully built {len(store_paths)} store path(s)",
                 event_type="Normal",
             )
@@ -684,7 +685,7 @@ class NriPlugin(NriPluginBase):
             # Report failed build
             await report_event(
                 pod,
-                reason="BuildFailed",
+                reason=EventReason.BUILD_FAILED,
                 note=f"Failed to build store paths for container {container_name}",
                 logs=reason,
                 event_type="Warning",
@@ -894,7 +895,7 @@ async def nri_serve() -> None:
         logger.critical("kernel_ro_unsupported")
         await report_event(
             None,
-            reason="KernelIncompatible",
+            reason=EventReason.KERNEL_INCOMPATIBLE,
             note="NRI plugin failed: kernel does not support open_tree/move_mount (requires Linux 5.2+)",
             event_type="Warning",
         )
@@ -907,7 +908,7 @@ async def nri_serve() -> None:
             logger.critical("kernel_mount_setattr_unsupported", host_store=True)
             await report_event(
                 None,
-                reason="KernelIncompatible",
+                reason=EventReason.KERNEL_INCOMPATIBLE,
                 note="NRI plugin failed: a host-store node needs the bind farm, and the kernel cannot make it read-only (mount_setattr, requires Linux 5.12+)",
                 event_type="Warning",
             )
@@ -916,7 +917,7 @@ async def nri_serve() -> None:
             logger.warning("kernel_mount_setattr_unsupported", note="NRI serves hardlink trees, not the bind farm")
             await report_event(
                 None,
-                reason="KernelLimited",
+                reason=EventReason.KERNEL_LIMITED,
                 note="NRI plugin serves hardlink trees, not the bind farm: kernel cannot make the farm read-only (mount_setattr, requires Linux 5.12+)",
                 event_type="Warning",
             )
@@ -929,7 +930,7 @@ async def nri_serve() -> None:
         )
         await report_event(
             None,
-            reason="KernelLimited",
+            reason=EventReason.KERNEL_LIMITED,
             note="NRI plugin running in RO-only mode: kernel does not support new mount API for overlayfs (fsopen/fsconfig/fsmount, requires Linux 6.5+)",
             event_type="Warning",
         )

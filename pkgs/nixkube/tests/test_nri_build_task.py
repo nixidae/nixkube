@@ -16,6 +16,7 @@ import pytest
 from cachetools import TTLCache
 from kr8s.asyncio.objects import Pod
 
+from src.event_reason import EventReason
 from src.nri.builds import BuildRegistry
 from src.nri.server import NriPlugin
 from src.nri.zmq import ZeroMQServer
@@ -111,7 +112,7 @@ async def test_a_failed_build_does_not_stay_pending(monkeypatch: pytest.MonkeyPa
     await plugin._spawn_build_task(CONTAINER, "app", POD, PATHS)
 
     assert CONTAINER not in zmq.pending_builds
-    assert reported == ["BuildFailed"], "a failed build must say so on the pod"
+    assert reported == [EventReason.BUILD_FAILED], "a failed build must say so on the pod"
     # And to the hook, which otherwise waits out its timeout and says nothing.
     reason = "no substituter that can build it"
     assert zmq.build_status[CONTAINER] == {

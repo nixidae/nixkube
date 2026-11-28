@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.csi.server import check_csi_volume_mounts
+from src.event_reason import EventReason
 from src.kube_docs import Container, Volume, VolumeMount
 
 
@@ -96,7 +97,7 @@ class TestCheckCsiVolumeMounts:
         with patch("src.csi.server.report_event", new_callable=AsyncMock) as mock_event:
             await check_csi_volume_mounts(pod)
             reasons = [c.kwargs["reason"] for c in mock_event.call_args_list]
-            assert "MissingSubPath" in reasons
+            assert EventReason.MISSING_SUB_PATH in reasons
 
     @pytest.mark.asyncio
     async def test_missing_nix_mount_emits_warning(self) -> None:
@@ -110,7 +111,7 @@ class TestCheckCsiVolumeMounts:
         with patch("src.csi.server.report_event", new_callable=AsyncMock) as mock_event:
             await check_csi_volume_mounts(pod)
             reasons = [c.kwargs["reason"] for c in mock_event.call_args_list]
-            assert "MissingNixMount" in reasons
+            assert EventReason.MISSING_NIX_MOUNT in reasons
 
     @pytest.mark.asyncio
     async def test_no_mounts_at_all_emits_missing_nix_mount(self) -> None:
@@ -124,8 +125,8 @@ class TestCheckCsiVolumeMounts:
         with patch("src.csi.server.report_event", new_callable=AsyncMock) as mock_event:
             await check_csi_volume_mounts(pod)
             reasons = [c.kwargs["reason"] for c in mock_event.call_args_list]
-            assert "MissingNixMount" in reasons
-            assert "MissingSubPath" not in reasons
+            assert EventReason.MISSING_NIX_MOUNT in reasons
+            assert EventReason.MISSING_SUB_PATH not in reasons
 
     @pytest.mark.asyncio
     async def test_both_warnings_when_missing_subpath_and_not_at_nix(self) -> None:
@@ -139,8 +140,8 @@ class TestCheckCsiVolumeMounts:
         with patch("src.csi.server.report_event", new_callable=AsyncMock) as mock_event:
             await check_csi_volume_mounts(pod)
             reasons = [c.kwargs["reason"] for c in mock_event.call_args_list]
-            assert "MissingSubPath" in reasons
-            assert "MissingNixMount" in reasons
+            assert EventReason.MISSING_SUB_PATH in reasons
+            assert EventReason.MISSING_NIX_MOUNT in reasons
 
     @pytest.mark.asyncio
     async def test_compat_driver_name_also_checked(self) -> None:
@@ -155,8 +156,8 @@ class TestCheckCsiVolumeMounts:
             await check_csi_volume_mounts(pod)
             reasons = [c.kwargs["reason"] for c in mock_event.call_args_list]
             # Mount at /nix but no subPath → MissingSubPath; mount IS at /nix → no MissingNixMount
-            assert "MissingSubPath" in reasons
-            assert "MissingNixMount" not in reasons
+            assert EventReason.MISSING_SUB_PATH in reasons
+            assert EventReason.MISSING_NIX_MOUNT not in reasons
 
     @pytest.mark.asyncio
     async def test_init_container_mount_checked(self) -> None:
@@ -171,7 +172,7 @@ class TestCheckCsiVolumeMounts:
         with patch("src.csi.server.report_event", new_callable=AsyncMock) as mock_event:
             await check_csi_volume_mounts(pod)
             reasons = [c.kwargs["reason"] for c in mock_event.call_args_list]
-            assert "MissingSubPath" in reasons
+            assert EventReason.MISSING_SUB_PATH in reasons
 
     @pytest.mark.asyncio
     async def test_init_container_nix_mount_satisfies_missing_nix_check(self) -> None:
@@ -201,7 +202,9 @@ class TestCheckCsiVolumeMounts:
         )
         with patch("src.csi.server.report_event", new_callable=AsyncMock) as mock_event:
             await check_csi_volume_mounts(pod)
-            missing_subpath_calls = [c for c in mock_event.call_args_list if c.kwargs["reason"] == "MissingSubPath"]
+            missing_subpath_calls = [
+                c for c in mock_event.call_args_list if c.kwargs["reason"] == EventReason.MISSING_SUB_PATH
+            ]
             assert len(missing_subpath_calls) == 1
             assert "bad" in missing_subpath_calls[0].kwargs["note"]
 
@@ -227,8 +230,8 @@ class TestCheckCsiVolumeMounts:
             await check_csi_volume_mounts(pod)
             reasons = [c.kwargs["reason"] for c in mock_event.call_args_list]
             # vol-a is fine, vol-b is missing subPath and missing /nix
-            assert reasons.count("MissingSubPath") == 1
-            assert reasons.count("MissingNixMount") == 1
+            assert reasons.count(EventReason.MISSING_SUB_PATH) == 1
+            assert reasons.count(EventReason.MISSING_NIX_MOUNT) == 1
 
     @pytest.mark.asyncio
     async def test_a_farm_at_nix_with_no_subpath_emits_nothing(self) -> None:
@@ -249,7 +252,7 @@ class TestCheckCsiVolumeMounts:
         with patch("src.csi.server.report_event", new_callable=AsyncMock) as mock_event:
             await check_csi_volume_mounts(pod)
             reasons = [c.kwargs["reason"] for c in mock_event.call_args_list]
-            assert reasons == ["FarmSubPath"]
+            assert reasons == [EventReason.FARM_SUB_PATH]
 
     @pytest.mark.asyncio
     async def test_events_are_warnings(self) -> None:

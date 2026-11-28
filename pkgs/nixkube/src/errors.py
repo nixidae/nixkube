@@ -5,6 +5,8 @@ from grpclib import GRPCError
 from grpclib.const import Status
 from kr8s.asyncio.objects import Pod
 
+from .event_reason import EventReason
+
 
 class SubprocessError(Exception):
     """Exception raised when a subprocess command fails.
@@ -63,7 +65,7 @@ class CSIError(GRPCError):
     maps to Kubernetes event reason codes.
     """
 
-    reason: str = "InternalError"
+    reason: EventReason = EventReason.INTERNAL_ERROR
     status: Status = Status.INTERNAL
 
     def __init__(
@@ -89,68 +91,68 @@ class CSIError(GRPCError):
 class StorePathClosureError(CSIError):
     """Error retrieving store path closure with 'nix path-info --recursive'."""
 
-    reason = "StorePathClosure"
+    reason = EventReason.STORE_PATH_CLOSURE
 
 
 class VerifyStorePathsError(CSIError):
     """Error verifying store path integrity with 'nix store verify --recursive'."""
 
-    reason = "VerifyStorePaths"
+    reason = EventReason.VERIFY_STORE_PATHS
 
 
 class HardlinkClosureError(CSIError):
     """Error hardlinking store paths to volume root."""
 
-    reason = "HardlinkClosure"
+    reason = EventReason.HARDLINK_CLOSURE
 
 
 class InitDatabaseError(CSIError):
     """Error initializing Nix database in volume."""
 
-    reason = "InitDatabase"
+    reason = EventReason.INIT_DATABASE
 
 
 class InstallGCRootError(CSIError):
     """Error installing garbage collection root."""
 
-    reason = "GCRootInstallation"
+    reason = EventReason.GC_ROOT_INSTALLATION
 
 
 class InstallResultLinkError(CSIError):
     """Error installing /nix/var/result symlink in volume."""
 
-    reason = "ResultLinkInstallation"
+    reason = EventReason.RESULT_LINK_INSTALLATION
 
 
 class MountError(CSIError):
     """Error mounting volume to target path."""
 
-    reason = "VolumeMount"
+    reason = EventReason.VOLUME_MOUNT_FAILED
 
 
 class UnmountError(CSIError):
     """Error unmounting volume from target path."""
 
-    reason = "VolumeUnmount"
+    reason = EventReason.VOLUME_UNMOUNT
 
 
 class CleanupStaleEntriesError(CSIError):
     """Error cleaning up stale volume entries."""
 
-    reason = "CleanupStaleEntries"
+    reason = EventReason.CLEANUP_STALE_ENTRIES
 
 
 class FailedVolumeCleanupError(CSIError):
     """Error cleaning up resources after a failed volume operation."""
 
-    reason = "FailedVolumeCleanup"
+    reason = EventReason.FAILED_VOLUME_CLEANUP
 
 
 # Build operation errors
 class BuildError(CSIError):
     """Error building a package (store path, flake, or expression)."""
 
-    reason = "Build"
+    reason = EventReason.BUILD
 
 
 class CommandTimeoutError(SubprocessError):

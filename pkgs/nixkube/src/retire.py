@@ -37,6 +37,7 @@ import anyio.to_thread
 import structlog
 
 from .constants import HOST_MOUNT_PATH, HOST_PROC_PATH, HOST_ROOT
+from .event_reason import EventReason
 from .events import report_event
 from .metrics import OLD_STORE_BYTES
 from .mountinfo import unescape
@@ -208,7 +209,7 @@ async def retire_loop() -> None:
             logger.info("old_store_retired", path=host_path)
             await report_event(
                 None,
-                "OldStoreRetired",
+                EventReason.OLD_STORE_RETIRED,
                 note=f"{host_path} held the separate store; nothing mounts from it now",
             )
             return

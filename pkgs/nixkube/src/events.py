@@ -9,6 +9,7 @@ from kr8s import NotFoundError
 from kr8s.asyncio.objects import Pod, new_class
 
 from .constants import KUBE_POD_NAME, NAMESPACE
+from .event_reason import EventReason
 from .kube_docs import EventSeries, event_doc
 
 logger = structlog.get_logger("nixkube.events")
@@ -123,7 +124,7 @@ def _extract_build_logs(exception: Exception) -> str:
 
 async def report_event(
     pod: Pod | None,
-    reason: str,
+    reason: EventReason,
     note: str | None = None,
     event_type: str = "Normal",
     action: str = "Nix",
@@ -137,8 +138,7 @@ async def report_event(
 
     Args:
         pod: Pod object with name, namespace, and uid (if None, uses get_nixkube_pod())
-        reason: Short, UpperCamelCase reason code without "Nix" prefix (will be added)
-                e.g., "PodStoreBuildFailed" → "NixPodStoreBuildFailed"
+        reason: The event's reason, as the cluster shows it
         note: Human-readable description (will be combined with logs)
         event_type: "Normal" or "Warning" (default: "Normal")
         action: Machine-readable action taken (default: "Nix")
@@ -156,10 +156,6 @@ async def report_event(
         logs = _extract_build_logs(logs)
 
     message = note or ""
-
-    # Ensure reason is prefixed with "Nix" if not already
-    if not reason.startswith("Nix"):
-        reason = f"Nix{reason}"
 
     logger.debug("report_event", reason=reason, pod=pod.metadata.name)
     try:
