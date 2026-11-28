@@ -20,10 +20,23 @@ import json
 import os
 import subprocess
 import tempfile
+from datetime import UTC, datetime
 
 import kr8s.asyncio
 from kr8s.asyncio.objects import DaemonSet, Event, Job, Node, PersistentVolumeClaim, Pod
-from nixkube_uml import NAMESPACE, cluster, delete, listed, logs, pod_ready, pod_state, pod_summary, raw, rolled_out
+from nixkube_uml import (
+    NAMESPACE,
+    Manifest,
+    cluster,
+    delete,
+    listed,
+    logs,
+    pod_ready,
+    pod_state,
+    pod_summary,
+    raw,
+    rolled_out,
+)
 from vivarium_k8s import KUBE_DNS, KUBE_PROXY, bring_up, until
 from vivarium_runner import Machine, Machines
 
@@ -186,6 +199,99 @@ async def check_store_server(api: kr8s.asyncio.Api, server: str) -> None:
     print(f"[test] {server} serves the node's store, in {pod.name}")
 
 
+# A nodeEnv no substituter has, so `appstarter init` seeds the image's copy.
+UNFETCHABLE = "/nix/store/" + "0" * 32 + "-nixkube-node-env-unfetchable"
+
+# The livenessProbe's initialDelaySeconds + failureThreshold x periodSeconds in
+# kubenix/daemonset.nix, and a period more: a restart would have come by then.
+LIVENESS_WINDOW = 30 + 5 * 10 + 10
+
+NODE_PODS = {"app.kubernetes.io/component": "node"}
+
+
+def wanted_patch(ds: Manifest) -> list[Manifest]:
+    """JSON patch ops that point every `APPSTARTER_WANTED` at `UNFETCHABLE`."""
+    spec = ds["spec"]["template"]["spec"]
+    return [
+        {"op": "replace", "path": f"/spec/template/spec/{kind}/{i}/env/{j}/value", "value": UNFETCHABLE}
+        for kind in ("initContainers", "containers")
+        for i, container in enumerate(spec.get(kind, []))
+        for j, env in enumerate(container.get("env", []))
+        if env["name"] == "APPSTARTER_WANTED"
+    ]
+
+
+def container_status(pod: Manifest, name: str) -> Manifest:
+    statuses = pod.get("status", {}).get("containerStatuses", [])
+    return next((s for s in statuses if s["name"] == name), {})
+
+
+def running_seconds(status: Manifest) -> float:
+    started = status.get("state", {}).get("running", {}).get("startedAt")
+    if not started:
+        return 0.0
+    return (datetime.now(UTC) - datetime.fromisoformat(started)).total_seconds()
+
+
+def asks_unfetchable(pod: Manifest) -> bool:
+    return any(
+        e.get("value") == UNFETCHABLE
+        for c in pod["spec"]["containers"]
+        if c["name"] == "nix-node"
+        for e in c.get("env", [])
+    )
+
+
+async def check_behind(api: kr8s.asyncio.Api, cp: Machine) -> None:
+    """A node that cannot fetch its nodeEnv serves the image's, and is not Ready.
+
+    nixidae/nixidae#1220: such a node reported Ready, so the RollingUpdate
+    replaced every node with one that was behind. It must keep running
+    (issues #27, #55) and must not restart: liveness stays on the sidecar's
+    /healthz, and only readiness reads nixkube's /readyz.
+    """
+    daemonsets = await listed(DaemonSet, api, namespace=NAMESPACE, label_selector=NODE_PODS)
+    for ds in daemonsets:
+        ops = wanted_patch(raw(ds))
+        assert len(ops) == 2, f"{ds.name}: APPSTARTER_WANTED on appstarter-init and nix-node, found {ops}"
+        await ds.patch(ops, type="json")
+    print(f"[test] the node DaemonSet asks for {UNFETCHABLE}")
+
+    async def behind_pod() -> tuple[bool, Pod | str]:
+        pods = [
+            p for p in await listed(Pod, api, namespace=NAMESPACE, label_selector=NODE_PODS) if asks_unfetchable(raw(p))
+        ]
+        for pod in pods:
+            if not running_seconds(container_status(raw(pod), "nix-node")):
+                continue
+            events = log_events(await logs(pod, container="nix-node"))
+            if any(e.get("event") == "node_env_behind" and e.get("wanted") == UNFETCHABLE for e in events):
+                return True, pod
+        return False, pod_summary(pods) if pods else "(no pod with the new spec yet)"
+
+    pod = await until("a node pod that says it is behind", behind_pod, 300, cp)
+    assert isinstance(pod, Pod), pod
+    print(f"[test] {pod.name} logged node_env_behind")
+
+    async def window_passed() -> tuple[bool, str]:
+        await pod.refresh()
+        status = container_status(raw(pod), "nix-node")
+        seconds, restarts = running_seconds(status), status.get("restartCount", 0)
+        return seconds > LIVENESS_WINDOW or restarts > 0, f"{restarts} restarts"
+
+    await until("the liveness window", window_passed, 300, cp)
+    status = container_status(raw(pod), "nix-node")
+    assert status.get("restartCount") == 0, f"{pod.name} restarted while behind: {status}"
+    assert status.get("ready") is False, f"{pod.name} is behind and reports Ready: {status}"
+    assert pod_state(raw(pod)) == "Running", f"{pod.name} stopped serving: {pod_summary([pod])}"
+
+    for ds in daemonsets:
+        await ds.refresh()
+    held = [ds.name for ds in daemonsets if not rolled_out(raw(ds))]
+    assert held, f"the rollout finished onto a node that is behind: {[raw(d).get('status') for d in daemonsets]}"
+    print(f"[test] {pod.name} runs, is not Ready, did not restart; {', '.join(held)} held its rollout")
+
+
 def node_line(node: Node) -> str:
     conditions = raw(node).get("status", {}).get("conditions", [])
     ready = any(c["type"] == "Ready" and c["status"] == "True" for c in conditions)
@@ -325,3 +431,6 @@ async def test(vms: Machines) -> None:
             "[test] node disk\n"
             + (await cp.succeed("df -h /; du -sh /var/lib/vivarium-storage 2>/dev/null || true")).stdout
         )
+
+        # Last: it leaves the node on a nodeEnv the deployment did not ask for.
+        await check_behind(api, cp)
