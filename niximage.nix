@@ -38,7 +38,11 @@ rec {
       # Naming these in the pod spec instead would not work. A pod spec comes
       # out of the same evaluation as `APPSTARTER_WANTED`, so the fallback
       # would be the identical path.
-      nodeEnv = sysPkgs.callPackage ./environments/node { };
+      # With pynixd, so a node that falls back can still run whichever store
+      # server its deployment names (`nixkube.node.storeServer`); without it a
+      # daemonless node's fallback failed its start. 716.7 to 842.7 MiB
+      # (2026-11-28, x86_64).
+      nodeEnv = sysPkgs.callPackage ./environments/node { withPynixd = true; };
       cacheEnv = sysPkgs.callPackage ./environments/cache { inherit dinix; };
 
       runtimeInputs = [
