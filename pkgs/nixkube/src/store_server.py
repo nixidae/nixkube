@@ -9,10 +9,10 @@ exit, with crash-loop detection via CrashLoopTracker.
 
 On a host-store node the server serves the host's /nix on a socket of its own,
 `NIX_DAEMON_SOCKET_PATH`, which every nix call in the pod reads too. Before it
-starts, `check_host_version` refuses a Nix newer than the host daemon's: a
-newer Nix can migrate the store's database, and the host's Nix then cannot
-read it. Issue #25. pynixd's own schema is not checked yet
-(nixidae/nixidae#1528).
+starts, `check_host_version` asks the host daemon its Nix version and refuses
+a server whose writes the host's Nix cannot read: a newer nix-daemon migrates
+the database forward (issue #25), and pynixd states its own rule
+(`pynixd shares-store`, nixidae/nixidae#1528).
 """
 
 from __future__ import annotations
@@ -21,10 +21,12 @@ import json
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 import anyio
+import huggorm
 import structlog
 
 from .constants import DEFAULT_DAEMON_SOCKET, HOST_STORE, STORE_SERVER, StoreServer
@@ -62,7 +64,7 @@ HOST_DAEMON: Final = f"unix://{DEFAULT_DAEMON_SOCKET}"
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)")
 
 
-class NewerThanHostError(RuntimeError):
+class HostStoreRefusedError(RuntimeError):
     pass
 
 
@@ -73,7 +75,7 @@ def minor_version(text: str) -> tuple[int, int] | None:
 
 
 def host_version_refusal(ours: str, host: str) -> str | None:
-    """Why nixkube's Nix must not open the host's store, or None. Nix
+    """Why nixkube's nix-daemon must not open the host's store, or None. Nix
     migrates the database only forward, so only a newer Nix of ours can
     leave it unreadable for the host."""
     mine, theirs = minor_version(ours), minor_version(host)
@@ -82,19 +84,73 @@ def host_version_refusal(ours: str, host: str) -> str | None:
     return f"nixkube's Nix ({ours.strip()}) is newer than the host daemon's ({host.strip()})"
 
 
-async def check_host_version() -> None:
-    """Refuse to start nixkube's daemon on the host's store with a newer Nix.
-    A host with no daemon at the default socket gives nothing to compare."""
-    ours = (await run_captured("nix", "--version", timeout=30)).stdout
-    info = await run_captured("nix", "store", "info", "--json", "--store", HOST_DAEMON, timeout=30)
-    if info.returncode != 0:
-        logger.warning("host_daemon_version_unknown", store=HOST_DAEMON, error=info.stderr.strip())
+async def host_daemon_version(uri: str = HOST_DAEMON) -> str | None:
+    """The host daemon's Nix version from its handshake, or None when no
+    daemon answers at `uri`. The one call the node makes to the host's daemon."""
+    store = huggorm.AsyncStore(uri)
+    try:
+        return await store.get_version()
+    except huggorm.errors.NixError as e:
+        logger.warning("host_daemon_version_unknown", store=uri, error=str(e))
+        return None
+    finally:
+        await store.aclose()
+
+
+@dataclass(frozen=True, slots=True)
+class PynixdVerdict:
+    """The answer of `pynixd shares-store`. pynixd states the rule; nixkube keeps no copy of it."""
+
+    pynixd_nix: str
+    refusal: str | None
+
+
+def parse_pynixd_verdict(stdout: str) -> PynixdVerdict:
+    answer = json.loads(stdout)
+    return PynixdVerdict(pynixd_nix=str(answer["pynixd_nix"]), refusal=answer["refusal"])
+
+
+async def pynixd_verdict(host: str) -> PynixdVerdict:
+    """Whether the node's pynixd may write the database that the host's Nix of
+    version `host` opens. Exit 1 is a refusal, with its answer on stdout."""
+    result = await run_captured("pynixd", "shares-store", host, timeout=60)
+    if result.returncode not in (0, 1) or not result.stdout.strip():
+        raise RuntimeError(f"`pynixd shares-store {host}` failed with {result.returncode}: {result.stderr.strip()}")
+    return parse_pynixd_verdict(result.stdout)
+
+
+async def check_host_version(server: StoreServer = STORE_SERVER) -> None:
+    """Refuse to start `server` on the host's store when the host's Nix cannot
+    read what the server writes. A host with no daemon at the default socket
+    gives nothing to compare.
+
+    nix-daemon: no Nix newer than the host's. pynixd: pynixd's own rule. A
+    pynixd with a nix-daemon under it takes both, because that daemon
+    migrates the database too. The server's own version comes from its
+    binary: huggorm's `nix_version` names the Nix that huggorm links, which
+    need not be the one that serves."""
+    host = await host_daemon_version()
+    if host is None:
         return
-    host = str(json.loads(info.stdout).get("version", ""))
-    logger.info("host_daemon_version", ours=ours.strip(), host=host)
-    refusal = host_version_refusal(ours, host)
-    if refusal is not None:
-        raise NewerThanHostError(refusal)
+    refusals: list[str] = []
+    if server is StoreServer.NIX_DAEMON:
+        # `nix (Nix) 2.35.2`: the last word is `nixVersion`, what a handshake sends.
+        printed = (await run_captured("nix", "--version", timeout=30)).stdout.split()
+        ours = printed[-1] if printed else ""
+    else:
+        verdict = await pynixd_verdict(host)
+        ours = verdict.pynixd_nix
+        if verdict.refusal is not None:
+            refusals.append(verdict.refusal)
+    if server is not StoreServer.PYNIXD_DAEMONLESS:
+        refusal = host_version_refusal(ours, host)
+        if refusal is not None:
+            refusals.append(refusal)
+    logger.info("host_daemon_version", server=server.value, ours=ours, host=host, refused=bool(refusals))
+    if refusals:
+        raise HostStoreRefusedError(
+            f"{server.value} with Nix {ours} refuses the host daemon's Nix {host}: {'; '.join(refusals)}"
+        )
 
 
 def prepare_socket(path: Path) -> None:

@@ -72,10 +72,17 @@ sg1 the host's pynixd, which collects garbage. Each writer takes Nix's locks
 (`daemonless.md`, "Locks Nix honours"). Two facts limit the daemonless server
 there:
 
-- **Schema migration.** `check_host_version` refuses a Nix newer than the
-  host's, because a newer Nix migrates the database forward. pynixd also
-  migrates (`create_store.py`, nixidae/nixidae#1528). The node must refuse a
-  pynixd whose schema is newer than the host Nix's, as it does for Nix.
+- **Schema migration.** `check_host_version` asks the host's daemon for its
+  Nix version through huggorm (`Store::getVersion`), the one call the node
+  makes to that daemon. A nix-daemon server must not be newer than the
+  host's Nix, because a newer Nix migrates the database forward. A pynixd
+  server asks `pynixd shares-store <version>`, which applies
+  `shared_database_refusal` (`pynixd_store/create_store.py`): both Nix
+  versions in `SHARED_DATABASE_NIX` (2.34 to 2.36), and on the same side of
+  2.35, where the realisations table, the self-reference hash and Nix's
+  migrations change. pynixd's own `Pynixd*` tables need no rule: Nix reads
+  its tables by name. A pynixd with a nix-daemon under it takes both rules.
+  A refusal stops the node before its server starts.
 - **The big lock.** pynixd holds the global lock shared for the store's
   lifetime (nixidae/nixidae#1528). A host Nix upgrade that migrates then
   waits until the node's pynixd restarts.
@@ -88,7 +95,7 @@ from the least risk to the most.
 | module | today | huggorm |
 | --- | --- | --- |
 | `nix/system.py` | `nix eval builtins.currentSystem` | `huggorm.current_system()` |
-| `nix_daemon.py` | `nix store info` (host version) | `Store::getVersion`: **gap**, nixidae/nixidae#1662 |
+| `store_server.py` | `nix store info` (host version) | `get_version`: done, nixidae/nixidae#1662 |
 | `nix/closure.py` | `nix path-info --recursive` | `compute_fs_closure` |
 | `nix/verify.py` | `nix store verify --no-trust` | `nar_from_path` hashed against `query_path_info` |
 | `nix/gc.py` | `nix build --out-link` of valid paths | `add_perm_root` |
