@@ -102,6 +102,18 @@ def test_the_same_closure_writes_the_same_dump(store: Path) -> None:
     assert dump(store) == dump(store)
 
 
+def test_a_file_primary_puts_nothing_at_the_root(store: Path) -> None:
+    """sg1, 2026-11-28: a volume of a pynixd-build-inputs path, a text file,
+    wrote it as a file with an empty path, and mkcomposefs refused the dump
+    with "Invalid empty path"."""
+    (store / "ddd-inputs").write_text("the build's inputs\n")
+    lines = dump(store, primary="ddd-inputs")
+    assert all(fields[0] for fields in lines), "a line with an empty path"
+    paths = {fields[0] for fields in lines}
+    assert {"/nix/store/bbb-app", "/nix/var/result"} <= paths
+    assert by_path(lines)["/"][2].startswith("40")
+
+
 def test_a_primary_with_a_nix_of_its_own_is_refused(store: Path) -> None:
     (store / "bbb-app" / "nix").mkdir()
     with pytest.raises(ValueError, match=r"twice|/nix of its own"):

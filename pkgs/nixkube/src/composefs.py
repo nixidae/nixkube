@@ -117,7 +117,8 @@ def volume(
     /nix/var/nix/db; it must be in the store, like everything else."""
     dump = Dump(out, store)
     dump.directory("/")
-    if primary is not None:
+    # A file has no tree for the root: pynixd's build inputs are a text file. Its line would have an empty path.
+    if primary is not None and primary.resolve().is_dir():
         dump.deref("", primary)
     if "/nix" in dump.seen:
         raise ValueError(f"{primary} has a /nix of its own, and the store goes there")
