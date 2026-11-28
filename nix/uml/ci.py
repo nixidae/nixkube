@@ -199,6 +199,60 @@ async def check_store_server(api: kr8s.asyncio.Api, server: str) -> None:
     print(f"[test] {server} serves the node's store, in {pod.name}")
 
 
+async def check_store_outage(api: kr8s.asyncio.Api, cp: Machine, template: Manifest) -> None:
+    """A store server that does not answer costs the calls made meanwhile, not every call after.
+
+    The socket moves away while its server runs, so each connect fails for
+    as long as the test wants. One huggorm store per process refused every
+    call after the first failure ("previously failed", nixidae/nixidae#1670).
+    """
+    pods = await listed(Pod, api, namespace=NAMESPACE, label_selector={"app.kubernetes.io/component": "node"})
+    [pod] = [p for p in pods if pod_state(raw(p)) == "Running"]
+    env = {
+        e["name"]: e.get("value")
+        for c in raw(pod)["spec"]["containers"]
+        if c["name"] == "nix-node"
+        for e in c.get("env", [])
+    }
+    socket = env.get("PYNIXD_UNIX_PATH") or env.get("NIX_DAEMON_SOCKET_PATH") or "/nix/var/nix/daemon-socket/socket"
+
+    async def sh(command: str) -> str:
+        return (await pod.exec(["sh", "-c", command], container="nix-node")).stdout.decode()
+
+    readyz = f"curl -s http://127.0.0.1:{env['READINESS_PORT']}/readyz"
+    await sh(f"mv {socket} {socket}.away")
+    try:
+        for _ in range(2):
+            body = await sh(readyz)
+            assert "store: " in body and "cannot connect" in body, f"with the socket away, /readyz said {body!r}"
+    finally:
+        await sh(f"mv {socket}.away {socket}")
+
+    async def store_answers() -> tuple[bool, str]:
+        body = await sh(readyz)
+        return "store: " not in body, body
+
+    await until("/readyz to find the store again", store_answers, 60, cp)
+
+    job = Job(
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {"name": "after-outage", "namespace": NAMESPACE},
+            "spec": {"backoffLimit": 0, "template": again(template)},
+        },
+        api=api,
+    )
+    await job.create()
+
+    async def complete() -> tuple[bool, str]:
+        return "after-outage" in await succeeded(api), await job_table(api)
+
+    await until("a publish after the outage", complete, 300, cp)
+    await delete(job, cp)
+    print(f"[test] with {socket} away, /readyz named the store; back, it answered, and a publish mounted")
+
+
 # A nodeEnv no substituter has, so `appstarter init` seeds the image's copy.
 UNFETCHABLE = "/nix/store/" + "0" * 32 + "-nixkube-node-env-unfetchable"
 
@@ -661,6 +715,7 @@ async def test(vms: Machines) -> None:
             name: raw(await Job.get(name, namespace=NAMESPACE, api=api))["spec"]["template"]
             for name in (COEXIST_JOBS if coexist else ())
         }
+        outage = raw(await Job.get("path-hello", namespace=NAMESPACE, api=api))["spec"]["template"]
 
         for name in settings["deployedJobs"]:
             await delete(await Job.get(name, namespace=NAMESPACE, api=api), cp)
@@ -672,6 +727,8 @@ async def test(vms: Machines) -> None:
 
         await until("the jobs' pods to go", pods_gone, 120, cp)
         print("[test] the jobs are gone and their pods with them")
+
+        await check_store_outage(api, cp, outage)
 
         if coexist:
             await check_coexistence(api, cp, templates)
