@@ -26,9 +26,12 @@ in
             GlobalKnownHostsFile /etc/ssh/ssh_known_hosts /etc/ssh-dynauth/ssh_known_hosts
             WarnWeakCrypto no-pq-kex
 
+            # The node's daemon substitutes from pynixd on every miss. An
+            # address that drops the SYN cost 135 s per connect unbounded.
             Host pynixd
                 User nix
                 Port 22
+                ConnectTimeout 5
                 IdentityFile /etc/ssh-key/id_ed25519
                 IdentitiesOnly yes
                 StrictHostKeyChecking yes

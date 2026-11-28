@@ -1,46 +1,79 @@
 # SPDX-License-Identifier: Apache-2.0
 
+"""Realise a volume's packages in the node's store, and root them.
+
+Store paths go through huggorm to the node's store server: `build_paths`
+substitutes them, then `add_perm_root` links each, as `nix build
+--out-link` did. A path is an opaque target, so a `.drv` in a pod spec is
+fetched as a file, which is also what the volume's closure mounts.
+
+`flakeRef` and `nixExpr` still evaluate in the `nix` CLI
+(`docs/node-store.md`, the client table). For both, the server's nix.conf
+names the substituters: a huggorm client sends none of its own.
+"""
+
+from __future__ import annotations
+
 import tempfile
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import anyio
+import huggorm
 import structlog
-from cachetools import TTLCache
-from kr8s.asyncio.objects import Pod
 
-from ..cache import check_cache_connectivity, get_substituter_args
 from ..constants import NIX_BUILD_TIMEOUT
 from ..errors import BuildError, CommandTimeoutError, SubprocessError
 from ..metrics import NIX_BUILD_DURATION, NIX_BUILDS
 from ..store import extract_store_name, extract_store_paths
 from ..subprocessing import try_console
+from ..tracing import annotate, step
+from .node_store import node_store
+
+if TYPE_CHECKING:
+    from kr8s.asyncio.objects import Pod
 
 logger = structlog.get_logger("nixkube.nix")
 
-# Cache build args for 30s to avoid redundant cache pings during burst volume
-# creation. Cache connectivity is stable during a pod's lifetime.
-_build_args_cache = TTLCache[str, list[str]](maxsize=1, ttl=30)
+
+def out_links(out_link: Path, count: int) -> list[Path]:
+    """`out_link`, then `out_link-1`, `out_link-2` and on: `nix build`'s names."""
+    return [out_link if index == 0 else out_link.with_name(f"{out_link.name}-{index}") for index in range(count)]
 
 
-async def get_build_args() -> list[str]:
-    """Extra build arguments: the cache as a substituter, while it answers.
+async def realise_store_paths(
+    rooted: list[tuple[Path, Path]],
+    *,
+    kind: str,
+    error_msg: str,
+    timeout: float = NIX_BUILD_TIMEOUT,
+) -> None:
+    """Make each path valid in the node's store and root it at its link.
 
-    Result is cached for 30 seconds to avoid redundant cache connectivity
-    checks during burst volume creation.
+    `kind` is a metric label: one of a fixed few words, never a path.
     """
-    # Check cache first
-    cache_key = "build_args"
-    if cache_key in _build_args_cache:
-        return _build_args_cache[cache_key]
-
-    extra_args = []
-
-    # Add cache as substituter if available
-    if await check_cache_connectivity():
-        extra_args.extend(get_substituter_args())
-
-    _build_args_cache[cache_key] = extra_args
-    return extra_args
+    store = node_store()
+    started = time.monotonic()
+    try:
+        with step("store build"), anyio.fail_after(timeout):
+            annotate("nixkube.build.kind", kind)
+            annotate("nixkube.build.paths", len(rooted))
+            targets = [await store.parse_derived_path(str(path)) for path, _ in rooted]
+            await store.build_paths(targets)
+            for path, link in rooted:
+                await store.add_perm_root(await store.parse_store_path(str(path)), str(link))
+    except TimeoutError as e:
+        NIX_BUILDS.labels(kind=kind, result="timeout").inc()
+        raise BuildError(f"{error_msg}: timeout after {timeout}s") from e
+    except huggorm.errors.NixError as e:
+        NIX_BUILDS.labels(kind=kind, result="error").inc()
+        # In the message, not `logs`: NRI reports `str()` of the error alone.
+        raise BuildError(f"{error_msg}: {e}") from e
+    else:
+        NIX_BUILDS.labels(kind=kind, result="ok").inc()
+    finally:
+        NIX_BUILD_DURATION.labels(kind=kind).observe(time.monotonic() - started)
 
 
 async def _run_nix_build(
@@ -74,29 +107,26 @@ async def _run_nix_build(
 async def build_store_path(
     store_path: str,
     gc_root: Path,
-    extra_args: list[str],
     timeout: float = NIX_BUILD_TIMEOUT,
 ) -> Path:
-    """Build/fetch a store path and create a gc root."""
-    name = extract_store_name(store_path)
-    return await _run_nix_build(
-        [*extra_args, "--print-out-paths", "--out-link", gc_root / name, store_path],
-        timeout=timeout,
-        timeout_msg=f"Build timeout for {store_path} after {timeout}s",
-        error_msg=f"Failed to build store path {store_path}",
+    """Fetch a store path and root it at `gc_root/<name>`."""
+    await realise_store_paths(
+        [(Path(store_path), gc_root / extract_store_name(store_path))],
         kind="store_path",
+        error_msg=f"Failed to build store path {store_path}",
+        timeout=timeout,
     )
+    return Path(store_path)
 
 
 async def build_flake_ref(
     flake_ref: str,
     gc_root: Path,
-    extra_args: list[str],
     timeout: float = NIX_BUILD_TIMEOUT,
 ) -> Path:
     """Build a flake reference and create a gc root."""
     return await _run_nix_build(
-        [*extra_args, "--print-out-paths", "--out-link", gc_root / "flake", flake_ref],
+        ["--print-out-paths", "--out-link", gc_root / "flake", flake_ref],
         timeout=timeout,
         timeout_msg=f"Build timeout for flake {flake_ref} after {timeout}s",
         error_msg=f"Failed to build flake {flake_ref}",
@@ -107,7 +137,6 @@ async def build_flake_ref(
 async def build_nix_expr(
     nix_expr: str,
     gc_root: Path,
-    extra_args: list[str],
     timeout: float = NIX_BUILD_TIMEOUT,
 ) -> Path:
     """Build a Nix expression and create a gc root."""
@@ -115,14 +144,7 @@ async def build_nix_expr(
         tmp.write(nix_expr)
         tmp.flush()
         return await _run_nix_build(
-            [
-                *extra_args,
-                "--print-out-paths",
-                "--out-link",
-                gc_root / "expr",
-                "--file",
-                tmp.name,
-            ],
+            ["--print-out-paths", "--out-link", gc_root / "expr", "--file", tmp.name],
             timeout=timeout,
             timeout_msg=f"Build timeout for Nix expression after {timeout}s",
             error_msg="Failed to build Nix expression",
@@ -130,58 +152,25 @@ async def build_nix_expr(
         )
 
 
-async def fetch_packages(
-    package_paths: set[Path],
-    gc_root: Path,
-    extra_args: list[str] | None = None,
-) -> None:
-    """Realize store paths with a single nix build call and pin them via gc root."""
+async def fetch_packages(package_paths: set[Path], gc_root: Path) -> None:
+    """Fetch store paths into the node's store, rooted at `gc_root/build`,
+    `build-1` and on. Sorted, so a volume's links do not depend on set order."""
     if not package_paths:
         return
-
-    gc_root.mkdir(parents=True, exist_ok=True)
-
-    args: list[str | Path] = ["nix", "build"]
-    args.extend(extra_args or [])
-    args.extend(["--out-link", gc_root / "build"])
-    args.extend(package_paths)
-
-    started = time.monotonic()
-    try:
-        await try_console(*args, timeout=NIX_BUILD_TIMEOUT)
-    except SubprocessError as e:
-        NIX_BUILDS.labels(kind="packages", result="error").inc()
-        logger.error(
-            "fetch_packages_failed",
-            returncode=e.returncode,
-            command=e.command,
-            logs=e.combined,
-        )
-        raise
-    except Exception:
-        NIX_BUILDS.labels(kind="packages", result="error").inc()
-        logger.exception("fetch_packages_failed")
-        raise
-    else:
-        NIX_BUILDS.labels(kind="packages", result="ok").inc()
-    finally:
-        NIX_BUILD_DURATION.labels(kind="packages").observe(time.monotonic() - started)
-
-    logger.debug("fetched_packages", count=len(package_paths))
+    await anyio.Path(gc_root).mkdir(parents=True, exist_ok=True)
+    paths = sorted(package_paths)
+    await realise_store_paths(
+        list(zip(paths, out_links(gc_root / "build", len(paths)), strict=True)),
+        kind="packages",
+        error_msg=f"Failed to fetch {len(paths)} packages",
+    )
+    logger.debug("fetched_packages", count=len(paths))
 
 
-async def build_pod_packages(
-    pod: Pod,
-    gc_root: Path,
-    extra_args: list[str],
-) -> set[Path]:
+async def build_pod_packages(pod: Pod, gc_root: Path) -> set[Path]:
     """Extract and fetch packages referenced in the pod spec."""
     pod_store_paths = extract_store_paths(pod.raw)
-
-    if not pod_store_paths:
-        return set()
-
-    await fetch_packages(pod_store_paths, gc_root, extra_args)
+    await fetch_packages(pod_store_paths, gc_root)
     return pod_store_paths
 
 
@@ -190,7 +179,6 @@ async def build_primary_package(
     flake_ref: str | None,
     nix_expr: str | None,
     gc_root: Path,
-    extra_args: list[str],
 ) -> Path | None:
     """
     Build the primary package from various sources.
@@ -204,29 +192,14 @@ async def build_primary_package(
     """
     if store_path is not None:
         logger.debug("building_store_path", store_path=store_path)
-        return await build_store_path(
-            store_path,
-            gc_root,
-            extra_args,
-            timeout=NIX_BUILD_TIMEOUT,
-        )
+        return await build_store_path(store_path, gc_root)
 
     if flake_ref is not None:
         logger.debug("building_flake_ref", flake_ref=flake_ref)
-        return await build_flake_ref(
-            flake_ref,
-            gc_root,
-            extra_args,
-            timeout=NIX_BUILD_TIMEOUT,
-        )
+        return await build_flake_ref(flake_ref, gc_root)
 
     if nix_expr is not None:
         logger.debug("building_nix_expr", nix_expr=nix_expr)
-        return await build_nix_expr(
-            nix_expr,
-            gc_root,
-            extra_args,
-            timeout=NIX_BUILD_TIMEOUT,
-        )
+        return await build_nix_expr(nix_expr, gc_root)
 
     return None

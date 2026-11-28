@@ -109,7 +109,7 @@ def expression(roots: set[Path], primary: Path | None, tools: Tools) -> str:
     return "\n".join(lines) + "\n"
 
 
-async def build_image(roots: set[Path], primary: Path | None, out_link: Path, extra_args: list[str]) -> Path:
+async def build_image(roots: set[Path], primary: Path | None, out_link: Path) -> Path:
     """The volume's image, substituted or built, rooted at `out_link`."""
     return await _run_nix_build(
         [
@@ -119,7 +119,6 @@ async def build_image(roots: set[Path], primary: Path | None, out_link: Path, ex
             "--out-link",
             out_link,
             "--print-out-paths",
-            *extra_args,
         ],
         timeout=NIX_BUILD_TIMEOUT,
         timeout_msg=f"composefs image timeout after {NIX_BUILD_TIMEOUT}s",

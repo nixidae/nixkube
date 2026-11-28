@@ -258,14 +258,8 @@ GC_COPY_TIMEOUT_SECONDS: int = _parse_int_env("GC_COPY_TIMEOUT_SECONDS", "1800")
 GC_PATH_INFO_TIMEOUT_SECONDS: int = _parse_int_env("GC_PATH_INFO_TIMEOUT_SECONDS", "300")
 GC_DELETE_TIMEOUT_SECONDS: int = _parse_int_env("GC_DELETE_TIMEOUT_SECONDS", "1800")
 
-# How long to wait for pynixd to answer a ping before treating it as absent.
-#
-# **Short on purpose.** Every `NodePublishVolume` asks this before it builds,
-# so the wait is paid per mount, and the only thing the answer decides is
-# whether to pass `--extra-substituters`. A pynixd that needs more than a few
-# seconds to say hello is not one a mount should wait on: the node builds or
-# substitutes from elsewhere instead, which is slower for that path and
-# faster than the alternative. An in-cluster SSH ping answers in well under a
+# How long `cache_probe_loop` waits for pynixd to answer a ping before
+# `CACHE_REACHABLE` reads 0. An in-cluster SSH ping answers in well under a
 # second when pynixd is there at all.
 CACHE_PING_TIMEOUT_SECONDS: float = _parse_float_env("CACHE_PING_TIMEOUT_SECONDS", "5")
 

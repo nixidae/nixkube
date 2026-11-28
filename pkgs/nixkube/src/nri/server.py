@@ -48,7 +48,7 @@ from ..metrics import (
     NRI_CONTAINERS_SEEN,
     NRI_STATE_CHANGES,
 )
-from ..nix import fetch_packages, get_build_args, get_current_system, open_node_store
+from ..nix import fetch_packages, get_current_system, open_node_store
 from ..presentation import Presentation
 from ..supervision import detach
 from ..volume import prepare_volume
@@ -712,13 +712,9 @@ class NriPlugin(NriPluginBase):
         Split from `_spawn_build_task` so the progress pump's task group wraps
         exactly this and nothing else.
         """
-        # Get extra build args for builders and cache
-        extra_args = await get_build_args()
-
-        # Realize storepaths
         volume_path = NRI_CONTAINERS / container_id
         log.debug("fetch_packages_starting", count=len(store_paths))
-        await fetch_packages(store_paths, volume_path, extra_args)
+        await fetch_packages(store_paths, volume_path)
         log.debug("fetch_packages_done")
 
         shown = presentation.nri(
@@ -733,7 +729,7 @@ class NriPlugin(NriPluginBase):
         image = None
         if shown is Presentation.COMPOSEFS:
             # The image references its closure, so this out-link roots both.
-            built = await composefs.build_image(store_paths, None, volume_path / "composefs", extra_args)
+            built = await composefs.build_image(store_paths, None, volume_path / "composefs")
             image = built / composefs.IMAGE
         else:
             # A farm binds the closure in the mount worker and leaves nothing
@@ -823,9 +819,8 @@ class NriPlugin(NriPluginBase):
                 " node shares its host's store, where a hardlink out of it fails"
                 " with EXDEV. Issue #25."
             )
-        extra_args = await get_build_args()
         volume_path = NRI_CONTAINERS / container_id
-        await fetch_packages(store_paths, volume_path, extra_args)
+        await fetch_packages(store_paths, volume_path)
         await prepare_volume(volume_path, store_paths, None, bind_farm=False)
         log.info("vm_tree_filled")
 

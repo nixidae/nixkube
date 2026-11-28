@@ -43,7 +43,6 @@ from ..metrics import (
 from ..nix import (
     build_pod_packages,
     build_primary_package,
-    get_build_args,
     get_closure_paths,
     get_current_system,
     node_store,
@@ -295,7 +294,6 @@ class NodeServicer(csi_grpc.NodeBase):
         try:
             gc_root = CSI_GCROOTS / request.volume_id
             volume_root = CSI_VOLUMES / request.volume_id
-            extra_args = await get_build_args()
 
             # Fetch pod for event reporting and package extraction
             pod_name = request.volume_context["csi.storage.k8s.io/pod.name"]
@@ -399,7 +397,6 @@ class NodeServicer(csi_grpc.NodeBase):
                             flake_ref,
                             nix_expr,
                             gc_root,
-                            extra_args,
                         )
             except CSIError as e:
                 e.pod = pod
@@ -415,11 +412,7 @@ class NodeServicer(csi_grpc.NodeBase):
                 try:
                     with step("pod packages"):
                         async with self.volume_locks[pod_uid]:
-                            package_paths = await build_pod_packages(
-                                pod,
-                                gc_root,
-                                extra_args,
-                            )
+                            package_paths = await build_pod_packages(pod, gc_root)
                 except CSIError as e:
                     e.pod = pod
                     raise
@@ -452,7 +445,6 @@ class NodeServicer(csi_grpc.NodeBase):
                             package_paths,
                             primary_package,
                             gc_root / "composefs",
-                            extra_args,
                         )
                     volume_root.mkdir(parents=True, exist_ok=True)
                     # The sweep cannot ask whether the volume root is a mount

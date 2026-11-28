@@ -107,8 +107,8 @@ async def test_timeout_raised() -> None:
 async def test_the_caller_survives_a_timeout() -> None:
     """The deadline is a cancel scope, and a scope left half-exited keeps the
     caller in a cancelling state: the next `await` raises rather than runs.
-    `get_build_args` calls `run_captured` and then goes on to build, so a
-    caller that cannot continue past a timed-out cache ping is the failure.
+    `cache_probe_loop` calls `run_captured` and then sleeps, so a caller
+    that cannot continue past a timed-out cache ping is the failure.
     The assertion above cannot see it -- both paths raise the same error."""
     with pytest.raises(CommandTimeoutError):
         await run_captured("sleep", "10", timeout=0.1)

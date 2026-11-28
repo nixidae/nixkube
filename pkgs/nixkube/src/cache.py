@@ -51,24 +51,13 @@ def _record(reachable: bool) -> None:
 
 
 async def check_cache_connectivity() -> bool:
-    """Whether pynixd can serve as a substituter right now.
+    """Whether pynixd answers as a store right now, for `CACHE_REACHABLE`.
 
-    **Only success is success, and failure is not fatal.** The one caller is
-    `get_build_args`, and the only thing this decides is whether to pass
-    `--extra-substituters`. So every way of not getting a clean answer -- the
-    ping timed out, the name did not resolve, `nix` exited non-zero, the
-    output was not the JSON it promised -- is the same answer: no.
-
-    The alternative is what this used to do. `CommandTimeoutError` escaped,
-    and because every `NodePublishVolume` calls this, a pynixd that did not
-    answer stopped the node mounting any volume at all. Measured in the UML
-    test, which runs no CoreDNS: `ssh-ng://nix@pynixd` never resolved, the
-    ping ran to its timeout on every mount, and each workload sat in
-    ContainerCreating until the test gave up. The visible symptom was
-    `NixInternalError: CommandTimeoutError`, which names neither pynixd nor
-    the cache.
-
-    Saying no costs that mount its substituter. It does not cost the mount.
+    **Only success is success, and failure is not fatal.** Every way of not
+    getting a clean answer -- the ping timed out, the name did not resolve,
+    `nix` exited non-zero, the output was not the JSON it promised -- is the
+    same answer: no. Nothing on a mount path waits on it: the node's store
+    server names pynixd as a substituter in its own nix.conf.
     """
     if not PYNIXD_ENABLED:
         # Not reported as unreachable: there is nothing to reach. The series
@@ -130,12 +119,11 @@ def probe_delay(failures: int) -> float:
 async def cache_probe_loop() -> None:
     """Keep `CACHE_REACHABLE` current, whether or not the node builds.
 
-    A mount pings once and does not retry, so one ping that fails during a
-    pynixd restart used to hold the gauge at 0 until the node built again.
-    Measured on nixlab2 (#72): the ping failed 11 s before pynixd was Ready,
-    the node built next 10 h later, and the unreachable alert fired for the
-    whole 10 h. This loop pings at startup, retries a failure with backoff,
-    and pings on a schedule after that.
+    It pings at startup, retries a failure with backoff, and pings on a
+    schedule after that. A gauge set only by builds stays at 0 after one
+    ping during a pynixd restart: on nixlab2 (#72) the ping failed 11 s
+    before pynixd was Ready, the node built next 10 h later, and the
+    unreachable alert fired for the whole 10 h.
     """
     if not PYNIXD_ENABLED:
         return
@@ -143,14 +131,6 @@ async def cache_probe_loop() -> None:
     while True:
         failures = 0 if await check_cache_connectivity() else failures + 1
         await anyio.sleep(probe_delay(failures))
-
-
-def get_substituter_args() -> list[str]:
-    """Get nix command arguments for using the cache as a substituter."""
-    return [
-        "--extra-substituters",
-        "ssh-ng://nix@pynixd?trusted=1&priority=20",
-    ]
 
 
 async def copy_to_cache(package_paths: set[Path] | None) -> None:

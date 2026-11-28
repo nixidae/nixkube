@@ -99,7 +99,7 @@ from the least risk to the most.
 | `nix/closure.py` | `nix path-info --recursive` | `compute_fs_closure` |
 | `nix/verify.py` | `nix store verify --no-trust` | `nar_from_path` hashed against `query_path_info` |
 | `nix/gc.py` | `nix build --out-link` of valid paths | `add_perm_root` |
-| `nix/build.py` (store paths) | `nix build` with `--builders`, `--extra-substituters` | `build_paths_with_results` |
+| `nix/build.py` (store paths) | `nix build --out-link` with `--extra-substituters` | `build_paths`, then `add_perm_root` |
 | `cache.py` | `nix copy --to`, `nix path-info` | `copy_closure` to the cache store |
 | `nix/database.py` | `nix-store --dump-db \| --load-db` | `make_validity_registration`, then `LocalStore::registerValidPaths`: **gap**, nixidae/nixidae#1663 |
 | `nix/build.py` (`flakeRef`, `nixExpr`) | `nix build` | evaluation in a worker, then `build_paths_with_results` |
@@ -107,14 +107,17 @@ from the least risk to the most.
 Out of scope: `nixos_switch.py` and `nixos_rollout.py`. They switch the host's
 system profile, and run on the host's Nix.
 
+**Substituters live in the server.** A Nix client sends its settings when it
+opens a connection, and huggorm's settings are global to a process, so the
+node sends none per call. The node's nix.conf names
+`ssh-ng://nix@pynixd?trusted=1&priority=20` when the pynixd cache is on, and
+every server reads it: Nix's daemon directly, pynixd through `nix config
+show`. The SSH config gives `Host pynixd` a 5 s `ConnectTimeout`: an
+address that drops the SYN cost 135 s per connect without one. The node
+never passed `--builders`; it builds nothing itself.
+
 ## Open questions
 
-- **Settings for each call.** The CLI passes `--builders` and
-  `--extra-substituters` per command, and the builder list changes while the
-  node runs. A Nix client sends its settings when it opens a connection, and
-  huggorm's settings are global to a process. A worker per set of settings
-  answers this; its start costs 26 ms with `Multiprocessing()`. With a
-  pynixd server, the server's own configuration can hold both instead.
 - **The chroot database.** `--load-db` writes a chroot store's `db.sqlite`
   for paths that are already on disk. huggorm binds no call that registers
   without a copy. Two routes: bind `registerValidPaths` in huggorm, or call
