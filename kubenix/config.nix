@@ -52,11 +52,14 @@ in
       # The node's store server substitutes from pynixd itself: a huggorm
       # client sends no per-call substituters, as `nix build
       # --extra-substituters` did. `ssh_config` bounds the connect.
+      # Not `trusted=1`: the server serves untrusted clients too, so pynixd's
+      # paths need a signature; the server trusts the cluster's key at start
+      # (`store_server.server_environment`).
       node.nixConfig.settings = lib.mkMerge [
         cfg.nixConfig.settings
         { store = lib.mkDefault "daemon"; }
         (lib.mkIf cfg.pynixd.enable {
-          extra-substituters = [ "ssh-ng://nix@pynixd?trusted=1&priority=20" ];
+          extra-substituters = [ "ssh-ng://nix@pynixd?priority=20" ];
         })
       ];
       pynixd.builder.nixConfig.settings = cfg.nixConfig.settings;

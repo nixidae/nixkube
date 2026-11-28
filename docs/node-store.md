@@ -110,9 +110,12 @@ system profile, and run on the host's Nix.
 **Substituters live in the server.** A Nix client sends its settings when it
 opens a connection, and huggorm's settings are global to a process, so the
 node sends none per call. The node's nix.conf names
-`ssh-ng://nix@pynixd?trusted=1&priority=20` when the pynixd cache is on, and
-every server reads it: Nix's daemon directly, pynixd through `nix config
-show`. The SSH config gives `Host pynixd` a 5 s `ConnectTimeout`: an
+`ssh-ng://nix@pynixd?priority=20` when the pynixd cache is on, and every
+server reads it: Nix's daemon directly, pynixd through `nix config show`.
+No `trusted=1`: the server's configuration serves every client, untrusted
+ones too, so a path from pynixd needs a signature. The cluster's signing key
+is generated at runtime (`nix-key`), so the supervisor starts the server with
+`NIX_CONFIG` trusting its public half. The SSH config gives `Host pynixd` a 5 s `ConnectTimeout`: an
 address that drops the SYN cost 135 s per connect without one. The node
 never passed `--builders`; it builds nothing itself.
 

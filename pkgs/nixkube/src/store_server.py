@@ -228,6 +228,26 @@ def server_command(server: StoreServer) -> list[str]:
     return ["pynixd", "daemon"]
 
 
+# The cluster's signing key, which the init Job generates at runtime: a
+# rendered nix.conf cannot name it. Nodes sign what they push to pynixd with
+# it, so a path another node built carries this signature and no other.
+CLUSTER_PUBLIC_KEY: Final = Path("/etc/nix-key/nix_ed25519.pub")
+
+
+def server_environment(environ: Mapping[str, str], cluster_key: str | None) -> dict[str, str]:
+    """The server's environment: this process's, trusting `cluster_key` too.
+
+    The node's substituters check signatures (no `trusted=1`), because the
+    server's configuration serves every client, untrusted ones included.
+    `NIX_CONFIG` reaches Nix's daemon and the `nix config show` pynixd reads.
+    """
+    env = dict(environ)
+    if cluster_key:
+        line = f"extra-trusted-public-keys = {cluster_key.strip()}"
+        env["NIX_CONFIG"] = f"{env['NIX_CONFIG']}\n{line}" if env.get("NIX_CONFIG") else line
+    return env
+
+
 def server_socket(server: StoreServer, environ: Mapping[str, str]) -> Path:
     """The socket `server` listens on, as the manifest set it."""
     name = "NIX_DAEMON_SOCKET_PATH" if server is StoreServer.NIX_DAEMON else "PYNIXD_UNIX_PATH"
@@ -251,6 +271,10 @@ async def supervise_store_server() -> None:
             raise RuntimeError("a host-store node needs NIX_DAEMON_SOCKET_PATH: the default socket is the host's")
         await check_host_version()
     socket = server_socket(STORE_SERVER, os.environ)
+    cluster_key = CLUSTER_PUBLIC_KEY.read_text() if CLUSTER_PUBLIC_KEY.exists() else None
+    if cluster_key is None:
+        logger.warning("cluster_key_missing", path=str(CLUSTER_PUBLIC_KEY))
+    env = server_environment(os.environ, cluster_key)
 
     while True:
         prepare_socket(socket)
@@ -262,6 +286,7 @@ async def supervise_store_server() -> None:
                     server_command(STORE_SERVER),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
+                    env=env,
                 ) as proc:
                     assert proc.stdout is not None and proc.stderr is not None
                     async with anyio.create_task_group() as tg:
@@ -269,7 +294,9 @@ async def supervise_store_server() -> None:
                         tg.start_soon(_pipe_nix_logs, proc.stderr)
                     rc = await proc.wait()
             else:
-                async with await anyio.open_process(server_command(STORE_SERVER), stdout=None, stderr=None) as proc:
+                async with await anyio.open_process(
+                    server_command(STORE_SERVER), stdout=None, stderr=None, env=env
+                ) as proc:
                     rc = await proc.wait()
             watch.cancel_scope.cancel()
         withdraw_answering()

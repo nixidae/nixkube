@@ -182,3 +182,11 @@ async def test_a_server_that_exits_is_waited_for_again(tmp_path: Path) -> None:
     with anyio.move_on_after(0.3) as waited:
         await store_server.wait_for_store_server()
     assert waited.cancelled_caught, "a build went ahead while no server ran"
+
+
+def test_the_server_trusts_the_cluster_key_beside_any_nix_config() -> None:
+    key = "nix-cache-1:abc=\n"
+    assert store_server.server_environment({}, key)["NIX_CONFIG"] == "extra-trusted-public-keys = nix-cache-1:abc="
+    both = store_server.server_environment({"NIX_CONFIG": "max-jobs = 0"}, key)["NIX_CONFIG"]
+    assert both == "max-jobs = 0\nextra-trusted-public-keys = nix-cache-1:abc="
+    assert "NIX_CONFIG" not in store_server.server_environment({"HOME": "/x"}, None)
