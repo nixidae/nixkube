@@ -292,6 +292,249 @@ async def check_behind(api: kr8s.asyncio.Api, cp: Machine) -> None:
     print(f"[test] {pod.name} runs, is not Ready, did not restart; {', '.join(held)} held its rollout")
 
 
+NODE_SOCKET = "/nix/var/nix-csi/daemon-socket/socket"
+COEXIST = "/tmp/coexist"
+NIX = "nix --extra-experimental-features nix-command"
+
+# No lock either writer takes lasts past one SQLite transaction or one path's
+# `.lock`. A write that waits this long waits on a lock held for the life of a
+# process: the big lock, or `gc.lock`.
+WRITE_BOUND = 10.0
+
+COEXIST_JOBS = ("path-hello", "env-ssl")
+
+
+async def timed(cp: Machine, command: str) -> tuple[str, float]:
+    """*command*'s stdout and its wall time in the guest, refused past `WRITE_BOUND`."""
+    done = await cp.succeed(
+        f"start=$(date +%s%N); out=$(timeout {WRITE_BOUND * 3:.0f} {command}); end=$(date +%s%N);"
+        ' echo "$out"; echo $(( (end - start) / 1000000 ))'
+    )
+    *out, millis = done.stdout.strip().splitlines()
+    seconds = int(millis) / 1000
+    assert seconds < WRITE_BOUND, f"`{command}` took {seconds:.1f} s, past the {WRITE_BOUND:.0f} s bound"
+    return "\n".join(out).strip(), seconds
+
+
+async def garbage(cp: Machine, name: str) -> str:
+    """A new path the host's daemon adds and nothing roots."""
+    content = os.urandom(8).hex()
+    path, _ = await timed(cp, f'{NIX} eval --store daemon --raw --expr \'builtins.toFile "{name}" "{content}"\'')
+    dead = (await cp.succeed(f"nix-store --store daemon --gc --print-dead | grep -c -F {path} || true")).stdout
+    assert dead.strip() == "1", f"{path} is not garbage to the host's collector before the test holds it"
+    return path
+
+
+async def hold(cp: Machine, unit: str, path: str) -> None:
+    """A client session on the node's socket that holds *path* as a temporary root until `release`.
+
+    `builtins.toFile` of the same name and content is an `AddToStore` of a valid
+    path, which the server roots for the session (`local-store.cc:1264`). The
+    session stays open while `builtins.exec` waits on a FIFO.
+    """
+    name = path.split("-", 1)[1]
+    content = (await cp.succeed(f"cat {path}")).stdout
+    nix = (await cp.succeed("command -v nix")).stdout.strip()
+    await cp.succeed(f"mkfifo {COEXIST}/{unit}.release")
+    await cp.succeed(
+        f"cat > {COEXIST}/{unit}.nix <<'EOF'\n"
+        f'builtins.seq (builtins.toFile "{name}" "{content}")'
+        f' (builtins.exec ["/bin/sh" "-c" "read x < {COEXIST}/{unit}.release; echo null"])\n'
+        "EOF"
+    )
+    await cp.succeed(
+        f"systemd-run --unit={unit} --collect --property=StandardOutput=file:{COEXIST}/{unit}.log"
+        f" --property=StandardError=file:{COEXIST}/{unit}.log"
+        f" {nix} --extra-experimental-features nix-command eval --store unix://{NODE_SOCKET} --impure"
+        f" --option allow-unsafe-native-code-during-evaluation true --file {COEXIST}/{unit}.nix"
+    )
+    # The roots file of the node's server, not the socket's answer: a server writes the file after the
+    # collector took the root (`gc.cc:139`), so a root in a file is a root the collector has.
+    # A file whose lock nobody holds is stale: the daemon worker that added the path left it.
+    await cp.wait_until_succeeds(
+        f'for f in /nix/var/nix/temproots/*; do grep -q -a -F {path} "$f" && ! flock -n "$f" true && exit 0; done; exit 1',
+        timeout=30,
+        poll=0.2,
+    )
+
+
+async def release(cp: Machine, unit: str) -> None:
+    await cp.succeed(f"timeout 10 sh -c 'echo go > {COEXIST}/{unit}.release'")
+    await cp.wait_until_fails(f"systemctl is-active --quiet {unit}", timeout=30)
+    log = (await cp.succeed(f"cat {COEXIST}/{unit}.log")).stdout
+    assert log.strip() == "null", f"the session that held a root ended with:\n{log}"
+
+
+async def valid_to_both(cp: Machine, path: str, valid: bool) -> None:
+    """Whether the host's daemon and the node's server each call *path* valid, asked at once."""
+    for store in ("daemon", f"unix://{NODE_SOCKET}"):
+        rc = (await cp.execute(f"{NIX} path-info --store {store} {path} >/dev/null 2>&1")).returncode
+        assert (rc == 0) == valid, f"{store} calls {path} {'invalid' if valid else 'valid'}"
+        rc = (await cp.execute(f"nix-store --store {store} --check-validity {path}")).returncode
+        assert (rc == 0) == valid, f"{store} --check-validity calls {path} {'invalid' if valid else 'valid'}"
+    on_disk = (await cp.execute(f"test -e {path}")).returncode == 0
+    assert on_disk == valid, f"{path} {'is not' if valid else 'is still'} on disk"
+
+
+async def check_writers(cp: Machine) -> None:
+    """Each store writer writes while the other runs, and each sees the other's path at once."""
+    content = os.urandom(8).hex()
+    await cp.succeed(f"echo {content} > {COEXIST}/by-node")
+    node_path, node_s = await timed(cp, f"nix-store --store unix://{NODE_SOCKET} --add {COEXIST}/by-node")
+    await valid_to_both(cp, node_path, valid=True)
+    print(f"[test] the node's server added {node_path} in {node_s:.2f} s; the host's daemon holds it at once")
+
+    content = os.urandom(8).hex()
+    await cp.succeed(f"echo {content} > {COEXIST}/by-host")
+    # Asked of the node before the host adds it: an answer it kept would now be wrong.
+    expected = (await cp.succeed(f"{NIX} store add --dry-run --store daemon {COEXIST}/by-host")).stdout.strip()
+    await cp.fail(f"nix-store --store unix://{NODE_SOCKET} --check-validity {expected}")
+    host_path, host_s = await timed(cp, f"nix-store --store daemon --add {COEXIST}/by-host")
+    assert host_path == expected, f"the host added {host_path}, and add-file named {expected}"
+    await valid_to_both(cp, host_path, valid=True)
+    print(f"[test] the host's daemon added {host_path} in {host_s:.2f} s; the node's server holds it at once")
+
+
+async def check_root_file(cp: Machine) -> None:
+    """A root the node's server wrote before a collection starts: the host's collector keeps the path."""
+    path = await garbage(cp, "coexist-file")
+    await hold(cp, "coexist-hold-file", path)
+    await cp.succeed(f"nix-store --store daemon --gc > {COEXIST}/gc-file.log 2>&1")
+    await valid_to_both(cp, path, valid=True)
+    refused = await cp.fail(f"nix-store --store daemon --delete {path}")
+    assert "still alive" in refused.stderr, refused.stderr
+    print(f"[test] the host's collector kept {path}, held in the node server's roots file")
+
+    await release(cp, "coexist-hold-file")
+    await cp.succeed(f"nix-store --store daemon --delete {path}")
+    await valid_to_both(cp, path, valid=False)
+    print(f"[test] released, the host's collector deleted {path}, and neither store calls it valid")
+
+
+async def check_root_socket(cp: Machine) -> None:
+    """A root the node's server sends while the host's collector runs, after it read the roots files.
+
+    The collector waits at Nix's own synchronisation point for this,
+    `_NIX_TEST_GC_SYNC_2` (`gc.cc:537`), in a `--store local` process: the
+    variable reaches no daemon. Waiting there it holds `gc.lock`, so the node's
+    server cannot take it shared and must use `gc-socket/socket` (`gc.cc:107`).
+    """
+    path = await garbage(cp, "coexist-socket")
+    nix_store = (await cp.succeed("command -v nix-store")).stdout.strip()
+    await cp.succeed(f"mkfifo {COEXIST}/gc-sync {COEXIST}/gc-sync.release")
+    await cp.succeed(
+        f"systemd-run --unit=coexist-gc --collect --setenv=_NIX_TEST_GC_SYNC_2={COEXIST}/gc-sync"
+        f" --property=StandardOutput=file:{COEXIST}/gc-socket.log --property=StandardError=file:{COEXIST}/gc-socket.log"
+        f" {nix_store} --store local --gc --debug"
+    )
+    # The open of a FIFO's write end returns once the collector opened its read end. Shell builtins
+    # only: a transient unit's PATH holds nothing on NixOS.
+    await cp.succeed(
+        "systemd-run --unit=coexist-gc-sync --collect /bin/sh -c"
+        f" 'exec 3>{COEXIST}/gc-sync; : > {COEXIST}/gc-waits; read x < {COEXIST}/gc-sync.release'"
+    )
+    await cp.wait_until_succeeds(f"test -e {COEXIST}/gc-waits", timeout=60, poll=0.2)
+    await cp.fail("flock --nonblock --shared /nix/var/nix/gc.lock true")
+    await hold(cp, "coexist-hold-socket", path)
+    await cp.succeed(f"timeout 10 sh -c 'echo go > {COEXIST}/gc-sync.release'")
+    await cp.wait_until_fails("systemctl is-active --quiet coexist-gc", timeout=300)
+    gc_log = (await cp.succeed(f"cat {COEXIST}/gc-socket.log")).stdout
+    assert f"got new GC root '{path}'" in gc_log, f"the collector got no root for {path} over its socket"
+    assert f"deleting '{path}'" not in gc_log, f"the collector deleted {path}, which the node's server held"
+    await valid_to_both(cp, path, valid=True)
+    print(f"[test] the host's collector took {path} over its socket from the node's server, and kept it")
+
+    await release(cp, "coexist-hold-socket")
+    await cp.succeed(f"nix-store --store daemon --delete {path}")
+    await valid_to_both(cp, path, valid=False)
+    print(f"[test] released, the host's collector deleted {path}")
+
+
+def again(template: Manifest) -> Manifest:
+    """A Job's pod template without the labels its controller gave it, for a Job of another name."""
+    template = json.loads(json.dumps(template))
+    labels = template.get("metadata", {}).get("labels", {})
+    for key in [k for k in labels if "controller-uid" in k or k.endswith("job-name")]:
+        del labels[key]
+    return template
+
+
+async def check_publish_under_gc(api: kr8s.asyncio.Api, cp: Machine, templates: dict[str, Manifest]) -> None:
+    """Pods whose closures the host lacks start while the host's collector runs again and again.
+
+    Each publish substitutes through the node's server, and each collection
+    runs beside it. A path the publish needs and holds no root for is a path
+    a collection deletes: the publish then fails, and the kubelet reports
+    FailedMount before it tries again.
+    """
+    hello = next(
+        str(value)
+        for volume in templates["path-hello"]["spec"]["volumes"]
+        for value in volume.get("csi", {}).get("volumeAttributes", {}).values()
+        if str(value).startswith("/nix/store/")
+    )
+    # A volume's GC root goes when the driver unpublishes it, seconds after its pod: measured, the first
+    # collection after the pods went kept `hello`.
+    await cp.wait_until_succeeds(
+        f"nix-store --store daemon --gc >> {COEXIST}/gc-before.log 2>&1;"
+        f" ! nix-store --store daemon --check-validity {hello} 2>/dev/null",
+        timeout=120,
+        poll=5,
+    )
+    print(f"[test] the host's collector deleted {hello}, so the pods' closures come from substitution")
+
+    nix_store = (await cp.succeed("command -v nix-store")).stdout.strip()
+    await cp.succeed(
+        f"systemd-run --unit=coexist-gc-loop --collect /bin/sh -c"
+        f" 'while [ ! -e {COEXIST}/stop ]; do echo run; {nix_store} --store daemon --gc 2>&1; done"
+        f" > {COEXIST}/gc-loop.log 2>&1'"
+    )
+    names = [f"coexist-{name}" for name in templates]
+    for name, template in templates.items():
+        job = Job(
+            {
+                "apiVersion": "batch/v1",
+                "kind": "Job",
+                "metadata": {"name": f"coexist-{name}", "namespace": NAMESPACE},
+                "spec": {"backoffLimit": 0, "template": again(template)},
+            },
+            api=api,
+        )
+        await job.create()
+
+    async def complete() -> tuple[bool, str]:
+        done = await succeeded(api)
+        return all(n in done for n in names), await job_table(api)
+
+    try:
+        await until("the jobs to complete under collection", complete, 300, cp)
+    finally:
+        await cp.succeed(f"touch {COEXIST}/stop")
+        await cp.wait_until_fails("systemctl is-active --quiet coexist-gc-loop", timeout=300)
+    runs = (await cp.succeed(f"grep -c '^run$' {COEXIST}/gc-loop.log")).stdout.strip()
+    pods = [p for n in names for p in await listed(Pod, api, namespace=NAMESPACE, label_selector={"job-name": n})]
+    ours = {p.name for p in pods}
+    failed = [
+        f"{raw(e)['involvedObject']['name']}: {raw(e).get('message')}"
+        for e in await listed(Event, api, namespace=NAMESPACE, field_selector={"reason": "FailedMount"})
+        if raw(e)["involvedObject"]["name"] in ours
+    ]
+    assert not failed, "a publish failed while the host collected garbage:\n" + "\n".join(failed)
+    assert int(runs) > 1, f"the host's collector ran {runs} times while the pods started"
+    print(f"[test] {', '.join(names)} completed while the host's collector ran {runs} times, with no FailedMount")
+    for name in names:
+        await delete(await Job.get(name, namespace=NAMESPACE, api=api), cp)
+
+
+async def check_coexistence(api: kr8s.asyncio.Api, cp: Machine, templates: dict[str, Manifest]) -> None:
+    """The node's store server and the host's daemon share /nix: locks and temporary roots, both ways."""
+    await cp.succeed(f"rm -rf {COEXIST} && mkdir -p {COEXIST}")
+    await check_writers(cp)
+    await check_root_file(cp)
+    await check_root_socket(cp)
+    await check_publish_under_gc(api, cp, templates)
+
+
 def node_line(node: Node) -> str:
     conditions = raw(node).get("status", {}).get("conditions", [])
     ready = any(c["type"] == "Ready" and c["status"] == "True" for c in conditions)
@@ -412,6 +655,13 @@ async def test(vms: Machines) -> None:
         )
         print(f"[test] {', '.join(rejected)} were all refused")
 
+        # Two writers on one /nix: the node's server and the NixOS host's daemon.
+        coexist = settings["hostStore"] and not settings["foreignHost"]
+        templates = {
+            name: raw(await Job.get(name, namespace=NAMESPACE, api=api))["spec"]["template"]
+            for name in (COEXIST_JOBS if coexist else ())
+        }
+
         for name in settings["deployedJobs"]:
             await delete(await Job.get(name, namespace=NAMESPACE, api=api), cp)
         selector = f"job-name in ({','.join(settings['deployedJobs'])})"
@@ -422,6 +672,9 @@ async def test(vms: Machines) -> None:
 
         await until("the jobs' pods to go", pods_gone, 120, cp)
         print("[test] the jobs are gone and their pods with them")
+
+        if coexist:
+            await check_coexistence(api, cp, templates)
 
         # What `vivarium.diskSize` has to cover, measured rather than
         # guessed: the images this node pulled, every store path the jobs
